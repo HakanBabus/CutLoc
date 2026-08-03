@@ -22,6 +22,6 @@
     "verify": "npm run build && npm test"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.4"
   }
 }
