@@ -10,7 +10,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@fastify/multipart": "^9.2.1",
+    "@fastify/multipart": "^10.1.0",
     "@fastify/static": "^10.1.2",
     "@cutloc/shared": "*",
     "fastify": "^5.5.0",
