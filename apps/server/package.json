@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "^9.2.1",
-    "@fastify/static": "^8.2.0",
+    "@fastify/static": "^10.1.2",
     "@cutloc/shared": "*",
     "fastify": "^5.5.0",
     "ffmpeg-static": "^5.2.0",
