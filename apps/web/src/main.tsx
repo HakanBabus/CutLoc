@@ -267,7 +267,7 @@ function mergeImportedProject(local: Project, server: Project): Project {
 function Glyph({ children }: { children: string }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 
 function ConfirmDialog({ title, message, confirmLabel, onConfirm, onClose }: { title: string; message: string; confirmLabel: string; onConfirm: () => void; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title"><div className="modal-head"><div><p className="eyebrow">Onay</p><h2 id="confirm-dialog-title">{title}</h2></div><button onClick={onClose} aria-label="Kapat">×</button></div><p>{message}</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>Vazgeç</button><button className="primary-button danger-button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title"><div className="modal-head"><div><p className="eyebrow">Onay işlemi</p><h2 id="confirm-dialog-title">{title}</h2></div><button onClick={onClose} aria-label="Kapat">×</button></div><p>{message}</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>Vazgeç</button><button className="primary-button danger-button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
 }
 
 type ContextMenuItem = {
@@ -299,9 +299,10 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Co
       top: Math.max(gutter, Math.min(y, window.innerHeight - rect.height - gutter)),
     });
   }, [x, y, items.length]);
+  const portalTarget = document.querySelector('.i18n-root') ?? document.body;
   return createPortal(<div ref={menuRef} className="context-menu" role="menu" style={{ left: position.left, top: position.top }} onPointerDown={(event) => event.stopPropagation()}>
     {items.map((item, index) => <button key={`${item.label}-${index}`} className={item.danger ? 'danger' : ''} disabled={item.disabled} role="menuitem" onClick={() => { onClose(); item.onSelect(); }}><span className="context-menu-icon">{item.icon ?? '•'}</span><span>{item.label}</span>{item.shortcut && <kbd>{item.shortcut}</kbd>}</button>)}
-  </div>, document.body);
+  </div>, portalTarget);
 }
 
 function App() {
@@ -439,7 +440,7 @@ function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
 function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRestoreTrash, onPurgeTrash, onSettings }: { projects: Project[]; trash: TrashEntry[]; loading: boolean; onCreate: () => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onRestoreTrash: (trashId: string) => void; onPurgeTrash: (trashId: string) => void; onSettings: () => void }) {
   const language = useEditor((state) => state.settings?.language ?? 'en');
   const isEnglish = language === 'en';
-  return <main className="dashboard">
+  return <main key={language} className="dashboard">
     <header className="dashboard-header">
       <div className="brand"><div className="brand-mark"><span /></div><div><strong>CUTLOC</strong><small>Yerel video editörü</small></div></div>
       <div className="header-actions"><span className="offline-pill"><i /> Yerel mod</span><ThemeSwitcher /><button className="icon-button" title="Ayarlar" onClick={onSettings}><Glyph>⚙</Glyph></button></div>
@@ -454,7 +455,7 @@ function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRes
       {projects[0] ? <button className="command-card" onClick={() => onOpen(projects[0].id)}><span className="command-icon">▶</span><span><strong>Düzenlemeye devam et</strong><small>{projects[0].name} · {formatTime(projects[0].duration)}</small></span><b>↗</b></button> : <div className="command-card command-muted"><span className="command-icon">⌁</span><span><strong>Yerel çalışma alanı</strong><small>Dosyaların cihazından çıkmaz</small></span></div>}
     </section>
     <section className="projects-section">
-      <div className="section-heading"><div><p className="eyebrow">Çalışma alanın</p><h2>Taslakların</h2></div><span className="project-count">{projects.length} {isEnglish ? 'projects' : 'proje'}</span></div>
+      <div className="section-heading"><div><p className="eyebrow">Çalışma alanın</p><h2>Taslakların</h2></div><span className="project-count">{`${projects.length} ${isEnglish ? 'projects' : 'proje'}`}</span></div>
       <div className="dashboard-insights"><span><b>{projects.reduce((total, item) => total + item.assets.length, 0)}</b> {isEnglish ? 'media assets' : 'medya varlığı'}</span><span><b>{projects.filter((item) => item.duration > 0).length}</b> {isEnglish ? 'active timelines' : 'aktif timeline'}</span><span><b>Ctrl / ⌘ Z</b> {isEnglish ? 'to undo' : 'ile geri al'}</span></div>
       {loading ? <div className="empty-state"><div className="spinner" /> Projeler yükleniyor…</div> : projects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">✦</div><h3>İlk hikâyeni başlat</h3><p>Bir proje oluştur ve medya dosyalarını sürükleyerek timeline’a ekle.</p><button className="secondary-button" onClick={onCreate}>Yeni proje</button></div> : <div className="project-grid">{projects.map((item) => <ProjectCard key={item.id} project={item} onOpen={() => onOpen(item.id)} onDelete={() => onDelete(item.id)} />)}</div>}
     </section>
@@ -465,8 +466,8 @@ function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRes
 
 function TrashSection({ entries, onRestore, onPurge }: { entries: TrashEntry[]; onRestore: (trashId: string) => void; onPurge: (trashId: string) => void }) {
   const language = useEditor((state) => state.settings?.language ?? 'en');
-  return <section className="trash-section" aria-label="Çöp kutusu">
-    <div className="section-heading"><div><p className="eyebrow">Kurtarma alanı</p><h2>Çöp kutusu</h2></div><span className="project-count">{entries.length} {language === 'en' ? 'items' : 'kayıt'}</span></div>
+  return <section key={language} className="trash-section" aria-label="Çöp kutusu">
+    <div className="section-heading"><div><p className="eyebrow">Kurtarma alanı</p><h2>Çöp kutusu</h2></div><span className="project-count">{`${entries.length} ${language === 'en' ? 'items' : 'kayıt'}`}</span></div>
     {entries.length === 0 ? <div className="trash-empty">Silinen projeler burada tutulur; istersen geri yükleyebilir veya kalıcı olarak temizleyebilirsin.</div> : <div className="trash-grid">{entries.map((entry) => <article className="trash-card" key={entry.trashId}><div className="trash-card-main"><strong>{entry.name}</strong><small>{new Date(entry.deletedAt).toLocaleString(language === 'tr' ? 'tr-TR' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })} · {entry.assetCount} {language === 'en' ? 'media' : 'medya'}</small></div><div className="trash-card-actions"><button className="secondary-button" onClick={() => onRestore(entry.trashId)}>Geri yükle</button><button className="danger-button" onClick={() => onPurge(entry.trashId)}>Kalıcı sil</button></div></article>)}</div>}
   </section>;
 }
@@ -1259,9 +1260,10 @@ function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransi
 }
 
 function ProjectBackupPanel({ backups, onRestore }: { backups: BackupSummary[]; onRestore: (fileName: string) => void }) {
+  const language = useEditor((state) => state.settings?.language ?? 'en');
   return <section className="project-backup-panel">
     <div className="project-backup-heading"><div><strong>Geri yükleme noktaları</strong><small>Son kayıtların güvenli kopyaları</small></div><span>{backups.length}</span></div>
-    {backups.length === 0 ? <p className="project-backup-empty">Henüz yedek oluşturulmadı. Proje kaydedildikçe burada görünür.</p> : <div className="project-backup-list">{backups.slice(0, 5).map((backup) => <div className="project-backup-item" key={backup.fileName}><div><strong>{new Date(backup.createdAt).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })}</strong><small>{Math.max(1, Math.round(backup.size / 1024))} KB</small></div><button type="button" onClick={() => onRestore(backup.fileName)}>Geri yükle</button></div>)}</div>}
+    {backups.length === 0 ? <p className="project-backup-empty">Henüz yedek oluşturulmadı. Proje kaydedildikçe burada görünür.</p> : <div className="project-backup-list">{backups.slice(0, 5).map((backup) => <div className="project-backup-item" key={backup.fileName}><div><strong>{new Date(backup.createdAt).toLocaleString(language === 'tr' ? 'tr-TR' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}</strong><small>{Math.max(1, Math.round(backup.size / 1024))} KB</small></div><button type="button" onClick={() => onRestore(backup.fileName)}>Geri yükle</button></div>)}</div>}
   </section>;
 }
 
@@ -1269,6 +1271,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
   const panel = useEditor((state) => state.panel);
   const project = useEditor((state) => state.project)!;
   const currentTime = useEditor((state) => state.currentTime);
+  const language = useEditor((state) => state.settings?.language ?? 'en');
   const selectedClipIds = useEditor((state) => state.selectedClipIds);
   const mutateProject = useEditor((state) => state.mutateProject);
   const setSelected = useEditor((state) => state.setSelected);
@@ -1359,7 +1362,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
     mutateProject((draft) => { draft.assets = draft.assets.filter((item) => item.id !== asset.id); for (const track of draft.tracks) track.clips = track.clips.filter((clip) => clip.assetId !== asset.id); draft.duration = projectDuration(draft); });
     closeMenu();
   };
-  const showInfo = (asset: Asset) => { setNotice(`${asset.name} · ${asset.mimeType} · ${asset.duration ? formatTime(asset.duration) : 'süre yok'} · ${asset.size.toLocaleString('tr-TR')} bayt`); closeMenu(); };
+  const showInfo = (asset: Asset) => { setNotice(`${asset.name} · ${asset.mimeType} · ${asset.duration ? formatTime(asset.duration) : 'süre yok'} · ${asset.size.toLocaleString(language === 'tr' ? 'tr-TR' : 'en-US')} bayt`); closeMenu(); };
   const title = panelTitle(panel);
   const panelMenuItems: ContextMenuItem[] = [
     { label: 'Dosya içe aktar', icon: '+', onSelect: () => fileRef.current?.click() },
@@ -1409,12 +1412,12 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
       {mediaSection !== 'project' && <p className="media-source-copy">{mediaSection === 'stock' ? 'Hazır arka planları ve yüzeyleri seç, tek tıkla boş bir alana ekle.' : 'Basit vurguları ve metin şekillerini hızlıca timeline’a ekle.'}</p>}
       <input ref={fileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(file); event.target.value = ''; }} />
       {mediaSection === 'project' && <>
-        <div className="media-library-summary"><div><span className="media-section-kicker">PROJE MEDYASI</span><strong>{project.assets.length} dosya</strong></div><button type="button" className="media-import-button" onClick={() => fileRef.current?.click()} aria-label="Medya ekle" title="Medya ekle">＋</button></div>
+        <div className="media-library-summary"><div><span className="media-section-kicker">PROJE MEDYASI</span><strong>{`${project.assets.length} dosya`}</strong></div><button type="button" className="media-import-button" onClick={() => fileRef.current?.click()} aria-label="Medya ekle" title="Medya ekle">＋</button></div>
         <div className="media-controls">
           <div className="media-search-field"><span aria-hidden="true">⌕</span><input className="media-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Medya ara…" aria-label="Medya ara" />{search && <button type="button" className="media-search-clear" aria-label="Aramayı temizle" onClick={() => setSearch('')}>×</button>}</div>
           <div className="media-controls-row"><select className="media-filter-select" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} aria-label="Medya filtresi"><option value="all">Tüm medya</option><option value="video">Video</option><option value="audio">Ses</option><option value="image">Görsel</option><option value="unused">Kullanılmayan</option></select><select className="media-sort-select" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} aria-label="Medya sıralama"><option value="date">Son eklenen</option><option value="name">Ada göre</option><option value="duration">Süreye göre</option></select><div className="media-view-toggle"><button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} title="Liste görünümü" aria-label="Liste görünümü">☰</button><button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} title="Kart görünümü" aria-label="Kart görünümü">▦</button></div></div>
         </div>
-        <div className="media-list-heading"><span>{visibleAssets.length} sonuç</span><span>{view === 'list' ? 'Liste' : 'Kart'}</span></div>
+        <div className="media-list-heading"><span>{`${visibleAssets.length} sonuç`}</span><span>{view === 'list' ? 'Liste' : 'Kart'}</span></div>
         <div className={`asset-list ${view === 'grid' ? 'asset-grid-view' : ''} ${isDropActive ? 'is-drop-active' : ''}`} role="region" aria-label="Medya dosyalarını bırakma alanı" onDragEnter={handleMediaDragEnter} onDragOver={handleMediaDragOver} onDragLeave={handleMediaDragLeave} onDrop={handleMediaDrop}>{visibleAssets.length === 0 ? <div className="panel-empty"><span>⊘</span><p>Medya bulunamadı</p><small>Arama veya filtreyi değiştir</small></div> : visibleAssets.map((asset) => <AssetCardPro key={asset.id} projectId={project.id} asset={asset} usage={usageCount(asset.id)} view={view} onAdd={() => addAsset(asset)} onOpenMenu={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, asset }); }} />)}{isDropActive && <div className="media-drop-overlay" aria-live="polite"><span>＋</span><strong>Dosyaları buraya bırak</strong><small>Video, ses veya görsel</small></div>}</div>
       </>}
       {mediaSection === 'stock' && <StockMediaShelf busyId={stockBusyId} onAdd={(stock) => void addStock(stock)} />}
@@ -1444,9 +1447,10 @@ function AssetCardPro({ projectId, asset, usage, view, onAdd, onOpenMenu }: { pr
   const [previewFailed, setPreviewFailed] = useState(false);
   const icon = asset.type === 'video' ? '▶' : asset.type === 'audio' ? '♫' : '▧';
   const meta = asset.duration ? formatTime(asset.duration) : asset.mimeType.split('/')[1]?.toUpperCase() || 'MEDIA';
+  const assetDetails = `${asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.type}${usage > 0 ? ` · ${usage} kullanım` : ' · Kullanılmadı'}`;
   const mediaUrl = `/api/projects/${projectId}/media/${asset.id}`;
   const preview = !previewFailed && asset.type === 'image' ? <img src={mediaUrl} alt="" onError={() => setPreviewFailed(true)} /> : !previewFailed && asset.type === 'video' ? <video src={mediaUrl} poster={asset.thumbnailPath ? `${mediaUrl}?thumbnail=1` : undefined} muted preload="metadata" onError={() => setPreviewFailed(true)} /> : null;
-  return <div className={`asset-item pro ${view === 'grid' ? 'grid-card' : ''}`} draggable onPointerDown={(event) => { if (!(event.target as HTMLElement).closest('button')) useEditor.getState().setAssetDragId(asset.id); }} onPointerUp={() => useEditor.getState().setAssetDragId(null)} onPointerCancel={() => useEditor.getState().setAssetDragId(null)} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('application/x-cutloc-asset', JSON.stringify({ assetId: asset.id })); useEditor.getState().setAssetDragId(asset.id); }} onDragEnd={() => useEditor.getState().setAssetDragId(null)} onDoubleClick={onAdd} onContextMenu={(event) => { event.preventDefault(); onOpenMenu(event as unknown as React.MouseEvent<HTMLButtonElement>); }}><div className={`asset-thumb ${asset.type} ${preview ? 'has-preview' : ''}`}><span className="asset-thumb-fallback">{icon}</span>{preview}<small>{meta}</small></div><div className="asset-info"><strong title={asset.name}>{asset.name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.type} {usage > 0 ? `· ${usage} kullanım` : '· Kullanılmadı'}</small></div><button className="asset-add-button" onClick={(event) => { event.stopPropagation(); onAdd(); }} aria-label={`${asset.name} timeline'a ekle`}>＋ <span>Ekle</span></button><button className="asset-dots" aria-label={`${asset.name} menüsü`} onClick={onOpenMenu}>•••</button></div>;
+  return <div className={`asset-item pro ${view === 'grid' ? 'grid-card' : ''}`} draggable onPointerDown={(event) => { if (!(event.target as HTMLElement).closest('button')) useEditor.getState().setAssetDragId(asset.id); }} onPointerUp={() => useEditor.getState().setAssetDragId(null)} onPointerCancel={() => useEditor.getState().setAssetDragId(null)} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('application/x-cutloc-asset', JSON.stringify({ assetId: asset.id })); useEditor.getState().setAssetDragId(asset.id); }} onDragEnd={() => useEditor.getState().setAssetDragId(null)} onDoubleClick={onAdd} onContextMenu={(event) => { event.preventDefault(); onOpenMenu(event as unknown as React.MouseEvent<HTMLButtonElement>); }}><div className={`asset-thumb ${asset.type} ${preview ? 'has-preview' : ''}`}><span className="asset-thumb-fallback">{icon}</span>{preview}<small>{meta}</small></div><div className="asset-info"><strong title={asset.name}>{asset.name}</strong><small>{assetDetails}</small></div><button className="asset-add-button" onClick={(event) => { event.stopPropagation(); onAdd(); }} aria-label={`${asset.name} timeline'a ekle`}>＋ <span>Ekle</span></button><button className="asset-dots" aria-label={`${asset.name} menüsü`} onClick={onOpenMenu}>•••</button></div>;
 }
 
 const TEXT_FONT_OPTIONS = [
@@ -1886,7 +1890,7 @@ function Inspector({ project }: { project: Project }) {
 
   return <aside className="inspector inspector-pro">
     {selectedClipIds.length > 1 && <div className="multi-selection-hint">{selectedClipIds.length} klip seçili · ortak ayarlar birlikte uygulanır.</div>}
-    <div className="inspector-heading"><div><p className="eyebrow">Inspector</p><h2>{typeLabel} klibi</h2></div><button onClick={() => setSelected(null, null)} aria-label="Seçimi kaldır">×</button></div>
+    <div className="inspector-heading"><div><p className="eyebrow">Inspector</p><h2>{`${typeLabel} klibi`}</h2></div><button onClick={() => setSelected(null, null)} aria-label="Seçimi kaldır">×</button></div>
     <div className="selected-file"><div className={`mini-thumb ${selected.type}`}>{selected.type === 'video' ? '▶' : selected.type === 'audio' ? '♫' : selected.type === 'image' ? '▧' : 'T'}</div><div><strong>{selected.name}</strong><small>{formatTime(selected.duration)} · {selected.speed}×{selectedAsset ? ` · ${selectedAsset.mimeType}` : ''}</small></div></div>
     <div className="inspector-tool-tabs" role="tablist" aria-label="Inspector araçları">
       {(selected.type === 'text' || selected.type === 'subtitle' ? [['primary', 'Yerleşim'], ['motion', 'Animasyon'], ['adjust', 'Yazı stili']] : [['primary', 'Yerleşim'], ['audio', 'Ses ve kırpma'], ['speed', 'Hız'], ['motion', 'Animasyon'], ['adjust', 'Görünüm']]).map(([key, label]) => <button key={key} role="tab" aria-selected={activeInspectorTab === key} className={activeInspectorTab === key ? 'active' : ''} onClick={() => { setActiveInspectorTab(key as typeof activeInspectorTab); setActiveGroup(key === 'motion' ? 'motion' : key === 'primary' ? 'layout' : 'audio'); }}><span>{label}</span></button>)}
