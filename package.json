@@ -1,0 +1,27 @@
+{
+  "name": "cutloc-editor",
+  "private": true,
+  "version": "0.0.1",
+  "description": "CutLoc local-first video editor",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:server\"",
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:server": "npm --workspace apps/server run dev",
+    "build": "npm run build:shared && npm run build:web && npm run build:server",
+    "build:shared": "npm --workspace packages/shared run build",
+    "build:web": "npm --workspace apps/web run build",
+    "build:server": "npm --workspace apps/server run build",
+    "start": "npm run build && npm --workspace apps/server run start",
+    "test": "npm --workspace packages/shared run test && npm --workspace apps/server run test",
+    "test:shared": "npm --workspace packages/shared run test",
+    "test:server": "npm --workspace apps/server run test",
+    "verify": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
