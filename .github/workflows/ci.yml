@@ -1,4 +1,4 @@
-name: Local Cut CI
+name: CutLoc CI
 
 on:
   push:
