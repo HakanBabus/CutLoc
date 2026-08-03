@@ -1,7 +1,7 @@
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logo" />
   <h1>CutLoc</h1>
-  <p><strong>A local video editor, private creative work.</strong></p>
+  <p><strong>A private video editor for creative work.</strong></p>
 
   [![Experimental](https://img.shields.io/badge/status-experimental-f3b61f)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
