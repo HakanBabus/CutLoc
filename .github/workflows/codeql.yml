@@ -1,11 +1,9 @@
 name: CodeQL
 
+# Temporarily manual-only while this private repository has code scanning disabled.
+# Restore the push, pull_request, and schedule triggers when the repository is public.
 on:
-  push:
-    branches: [master, main]
-  pull_request:
-  schedule:
-    - cron: '30 4 * * 1'
+  workflow_dispatch:
 
 permissions:
   actions: read
