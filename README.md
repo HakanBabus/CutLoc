@@ -6,7 +6,7 @@
   [![Experimental](https://img.shields.io/badge/status-experimental-f3b61f)](#project-status)
   [![Version](https://img.shields.io/badge/version-0.0.2-7c8cff)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
-  [![CodeQL](https://github.com/HakanBabus/cutloc/actions/workflows/codeql.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/codeql.yml)
+  [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
@@ -208,7 +208,7 @@ You can change the location with `DATA_DIR` in a local `.env` file. Never commit
 - Do not commit API keys, personal media, local projects, or exported files.
 - Treat media from unknown sources carefully; FFmpeg processes complex native formats and the current experimental build does not provide a full process sandbox.
 - AI settings are disabled by default and do not represent an active hosted provider workflow in this release.
-- GitHub Actions run build, test, dependency-audit, and CodeQL checks for repository changes; CodeQL also runs on a weekly schedule.
+- GitHub Actions run build, test, and dependency-audit checks; GitHub's Default setup manages CodeQL scanning.
 
 ## Contributing
 
