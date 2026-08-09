@@ -33,7 +33,7 @@ import './product-refresh.css';
 import { UiLanguageBoundary } from './i18n';
 
 type Theme = 'dark' | 'gray' | 'light';
-type Panel = 'media' | 'text' | 'captions' | 'project' | 'stickers' | 'transitions' | 'effects' | 'color' | 'animation' | 'help';
+type Panel = 'media' | 'text' | 'captions' | 'project' | 'transitions' | 'effects' | 'color' | 'animation' | 'help';
 type TrashEntry = { trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; duration: number; assetCount: number };
 type HistoryState = { past: Project[]; future: Project[] };
 type HistoryMutationOptions = { historyGroup?: string };
@@ -867,7 +867,7 @@ function panelTitle(panel: Panel) {
   const labels: Record<Panel, string> = {
     media: 'Medya', text: 'Metin', captions: 'Altyazılar',
     project: 'Proje', transitions: 'Geçişler', effects: 'Efektler', color: 'Renk',
-    stickers: 'Şekiller', animation: 'Animasyon', help: 'Yardım',
+    animation: 'Animasyon', help: 'Yardım',
   };
   return labels[panel];
 }
@@ -937,7 +937,7 @@ function ToolRail({ onOpenSettings }: { onOpenSettings: () => void }) {
   const panel = useEditor((state) => state.panel); const setPanel = useEditor((state) => state.setPanel);
   const tools: Array<[Panel, string, string]> = [
     ['media', '▧', 'Medya'], ['text', 'T', 'Metin'],
-    ['captions', '≡', 'Altyazı'], ['project', '◉', 'Proje'],
+    ['animation', '✧', 'Animasyon'], ['captions', '≡', 'Altyazı'], ['project', '◉', 'Proje'],
   ];
   return <aside className="tool-rail" aria-label="Proje araçları"><div className="rail-caption">PROJE</div><div className="rail-scroll">{tools.map(([key, icon, label]) => <button key={key} className={panel === key ? 'active' : ''} onClick={() => setPanel(key)}><span>{icon}</span><small>{label}</small></button>)}</div><div className="rail-spacer" /><button className="rail-ai rail-coming-soon" disabled title="AI sohbet testler tamamlandıktan sonra açılacak"><span>✦</span><small>AI Sohbet</small><i>Yakında</i></button><button className="rail-ai" onClick={() => setPanel('help')}><span>?</span><small>Yardım</small></button><button onClick={onOpenSettings}><span>⚙</span><small>Ayar</small></button></aside>;
 }
@@ -1069,8 +1069,10 @@ function createTextClip(preset: TextPreset, start: number): Clip {
     speed: 1,
     transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
     filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
-    transitionIn: { type: 'fade', duration: 0.25 },
-    transitionOut: { type: 'fade', duration: 0.25 },
+    // Text appears immediately by default.  Fade is an explicit creative choice
+    // in the Animation studio, never a hidden side effect of inserting text.
+    transitionIn: { type: 'none', duration: 0 },
+    transitionOut: { type: 'none', duration: 0 },
     volume: 1,
     keyframes: [],
     textStyle,
@@ -1174,7 +1176,85 @@ function AssetItemEnhanced({ asset, menuOpen, onToggleMenu, onAddToTimeline, onS
 }
 
 type TransitionPreset = 'none' | 'fade' | 'dissolve' | 'slide' | 'wipe' | 'zoom';
+type AnimationApplyMode = 'in' | 'out' | 'both';
+type TransitionDirection = 'left' | 'right' | 'up' | 'down' | 'center';
+type TransitionEasing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+type AnimationCategory = 'Tümü' | 'Kesme' | 'Yumuşak' | 'Hareket' | 'Odak';
+type AnimationPreset = {
+  id: string;
+  label: string;
+  description: string;
+  type: TransitionPreset;
+  category: Exclude<AnimationCategory, 'Tümü'>;
+  motionDirection: TransitionDirection;
+  directionLabel: string;
+  duration: number;
+};
+
+const ANIMATION_PRESETS: AnimationPreset[] = [
+  { id: 'none', label: 'Yok', description: 'Anında görünür', type: 'none', category: 'Kesme', motionDirection: 'center', directionLabel: 'Kes', duration: 0 },
+  { id: 'fade', label: 'Soluklaşma', description: 'Yumuşakça görünür', type: 'fade', category: 'Yumuşak', motionDirection: 'center', directionLabel: 'Şeffaf → net', duration: 0.35 },
+  { id: 'dissolve', label: 'Çözülme', description: 'Sakin ve organik', type: 'dissolve', category: 'Yumuşak', motionDirection: 'center', directionLabel: 'Yumuşak doku', duration: 0.45 },
+  { id: 'slide-left', label: 'Soldan kaydır', description: 'Soldan akarak gelir', type: 'slide', category: 'Hareket', motionDirection: 'left', directionLabel: 'Sol → merkez', duration: 0.4 },
+  { id: 'slide-right', label: 'Sağdan kaydır', description: 'Sağdan akarak gelir', type: 'slide', category: 'Hareket', motionDirection: 'right', directionLabel: 'Sağ → merkez', duration: 0.4 },
+  { id: 'slide-up', label: 'Aşağıdan yükselt', description: 'Aşağıdan yukarı taşır', type: 'slide', category: 'Hareket', motionDirection: 'down', directionLabel: 'Alt → merkez', duration: 0.4 },
+  { id: 'slide-down', label: 'Yukarıdan indir', description: 'Yukarıdan aşağı taşır', type: 'slide', category: 'Hareket', motionDirection: 'up', directionLabel: 'Üst → merkez', duration: 0.4 },
+  { id: 'wipe', label: 'Sürme', description: 'Perde gibi açılır', type: 'wipe', category: 'Hareket', motionDirection: 'left', directionLabel: 'Perde → açık', duration: 0.4 },
+  { id: 'zoom', label: 'Yakınlaş', description: 'Odaklanarak büyür', type: 'zoom', category: 'Odak', motionDirection: 'center', directionLabel: 'Küçük → büyük', duration: 0.45 },
+];
 type BackupSummary = { fileName: string; createdAt: string; size: number };
+
+type HelpTopicId = 'start' | 'media' | 'preview' | 'motion' | 'timeline' | 'export';
+type HelpTopic = {
+  id: HelpTopicId;
+  icon: string;
+  label: string;
+  title: string;
+  summary: string;
+  steps: string[];
+  actionLabel: string;
+  actionPanel?: Panel;
+  actionNotice?: string;
+};
+
+const HELP_TOPICS: HelpTopic[] = [
+  {
+    id: 'start', icon: '✦', label: 'İlk adım', title: 'İlk videonu üç hamlede hazırla',
+    summary: 'Dosyanı içe aktar, timeline’a yerleştir ve önizlemede sonucu kontrol et.',
+    steps: ['Medya panelinden video, ses veya görsel ekle.', 'Karttaki Ekle düğmesiyle klibi timeline’a yerleştir.', 'Oynat düğmesine basıp playhead’i kontrol et.'],
+    actionLabel: 'Medya panelini aç', actionPanel: 'media',
+  },
+  {
+    id: 'media', icon: '▧', label: 'Medya', title: 'Kütüphaneyi düzenli tut',
+    summary: 'Proje medyası, stok içerik ve şekiller aynı Media alanında; aradığını tek yerde bul.',
+    steps: ['Medya sekmesinde arama ve filtreyi kullan.', 'Şekiller için Media içindeki Şekiller sekmesine geç.', 'Bir kartı çift tıklayarak ya da Ekle düğmesiyle timeline’a gönder.'],
+    actionLabel: 'Media alanını aç', actionPanel: 'media',
+  },
+  {
+    id: 'preview', icon: '⌖', label: 'Önizleme', title: 'Canvas’ta doğrudan seç ve taşı',
+    summary: 'Metne veya görsele tıklayınca nesne seçilir; aynı klip timeline ve Inspector’da da açılır.',
+    steps: ['Canvas üzerindeki metin ya da medya alanına tıkla.', 'Seçim çerçevesinden nesneyi sürükle veya köşe tutamacıyla ölçekle.', 'Yakınlaştırmayı kullanırken kaydırma alanında canvas’ın istediğin bölgesine ilerle.'],
+    actionLabel: 'Metin alanını aç', actionPanel: 'text',
+  },
+  {
+    id: 'motion', icon: '↝', label: 'Animasyon', title: 'Girişi ve çıkışı ayrı ayrı tasarla',
+    summary: 'Hazır hareket kartını seç, sonra yön, yumuşatma, yoğunluk ve süreyi birlikte ayarla.',
+    steps: ['Timeline’da bir klip seçip Animasyon panelini aç.', 'Giriş + çıkış, yalnız giriş veya yalnız çıkış kapsamını seç.', 'Gelişmiş hareket bölümünde yönü ve easing’i düzenle.'],
+    actionLabel: 'Hareket stüdyosunu aç', actionPanel: 'animation',
+  },
+  {
+    id: 'timeline', icon: '⌁', label: 'Timeline', title: 'Kes, böl, hizala',
+    summary: 'Playhead’i taşı, klibi böl ve snap ile kenarlara temizce hizala.',
+    steps: ['Klibi seçip playhead’i kesmek istediğin noktaya taşı.', 'B kısayoluyla klibi böl veya timeline menüsünü aç.', 'Snap’i açarak playhead ve klip kenarlarını birbirine yaklaştır.'],
+    actionLabel: 'Timeline araçlarını gör', actionPanel: 'project',
+  },
+  {
+    id: 'export', icon: '↗', label: 'Dışa aktar', title: 'Export öncesi son kontrol',
+    summary: 'Canvas oranını, aralığı ve kaliteyi kontrol et; sonra videonu dışa aktar.',
+    steps: ['Canvas oranını hedef platforma göre seç.', 'In/Out aralığını gerekiyorsa I ve O ile belirle.', 'Export penceresinde kaliteyi seçip ön kontrolü çalıştır.'],
+    actionLabel: 'Proje araçlarını aç', actionPanel: 'project',
+  },
+];
 
 function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransition, onOpenSettings }: { panel: Panel; onAddText: (preset: TextPreset) => void; onImport: (file: File) => void; onApplyEffect: (preset: 'film' | 'retro' | 'glow' | 'blur' | 'chroma' | 'noise') => void; onApplyTransition?: (preset: TransitionPreset) => void; onOpenSettings: () => void }) {
   const subtitleFileRef = useRef<HTMLInputElement>(null);
@@ -1182,9 +1262,12 @@ function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransi
   const currentSettings = useEditor((state) => state.settings);
   const mutateProject = useEditor((state) => state.mutateProject);
   const setNotice = useEditor((state) => state.setNotice);
+  const setPanel = useEditor((state) => state.setPanel);
   const [backups, setBackups] = useState<BackupSummary[]>([]);
   const [textSearch, setTextSearch] = useState('');
   const [textCategory, setTextCategory] = useState<'Tümü' | TextPreset['category']>('Tümü');
+  const [helpTopicId, setHelpTopicId] = useState<HelpTopicId>('start');
+  const [helpSearch, setHelpSearch] = useState('');
   const filteredTextPresets = TEXT_PRESETS.filter((preset) => {
     const query = textSearch.trim().toLocaleLowerCase('tr-TR');
     return (!query || `${preset.label} ${preset.description} ${preset.text}`.toLocaleLowerCase('tr-TR').includes(query)) && (textCategory === 'Tümü' || preset.category === textCategory);
@@ -1211,12 +1294,24 @@ function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransi
       setNotice(error instanceof Error ? `Yedek geri yüklenemedi: ${error.message}` : 'Yedek geri yüklenemedi.');
     }
   };
-  if (panel === 'help') return <div className="quick-panel help-panel">
-    <div className="text-library-head"><div><strong>Yardım merkezi</strong><small>Kurgu akışını hızlandıran kısa yollar ve temel ipuçları.</small></div><span>?</span></div>
-    <div className="help-shortcuts"><div><kbd>{shortcutValue(currentSettings, 'togglePlayback')}</kbd><span>Oynat / duraklat</span></div><div><kbd>{shortcutValue(currentSettings, 'undo')}</kbd><span>Geri al</span></div><div><kbd>{shortcutValue(currentSettings, 'redo')}</kbd><span>İleri al</span></div><div><kbd>{shortcutValue(currentSettings, 'split')}</kbd><span>Seçili klibi böl</span></div><div><kbd>{shortcutValue(currentSettings, 'setIn')}</kbd><span>In noktası</span></div><div><kbd>{shortcutValue(currentSettings, 'setOut')}</kbd><span>Out noktası</span></div></div>
-    <div className="help-actions"><button className="feature-card" onClick={() => setNotice('Bir klibi timeline’da seçin; Inspector değerleri ve geçişler sağ panelde açılır.')}><strong>Inspector’ı kullan</strong><small>Klip seçin, değerleri artı/eksi adımlarıyla değiştirin.</small></button><button className="feature-card" onClick={() => setNotice('Snap açıkken playhead marker ve klip kenarlarına otomatik yaklaşır.')}><strong>Snap ve marker</strong><small>Timeline çubuğundaki ⌁ düğmesiyle yakalamayı açıp kapatın.</small></button></div>
-    <p className="panel-note">Export öncesi timeline’da en az bir medya veya metin klibi olduğundan emin olun.</p>
-  </div>;
+  if (panel === 'help') {
+    const query = helpSearch.trim().toLocaleLowerCase('tr-TR');
+    const matchingTopics = HELP_TOPICS.filter((topic) => !query || `${topic.label} ${topic.title} ${topic.summary} ${topic.steps.join(' ')}`.toLocaleLowerCase('tr-TR').includes(query));
+    const activeTopic = matchingTopics.find((topic) => topic.id === helpTopicId) ?? matchingTopics[0];
+    const openHelpAction = (topic: HelpTopic) => {
+      if (topic.actionPanel) setPanel(topic.actionPanel);
+      if (topic.actionNotice) setNotice(topic.actionNotice);
+    };
+    return <div className="quick-panel help-panel">
+      <div className="help-hero"><div><p className="eyebrow">Yardım merkezi</p><h3>Kurguya yardım eden küçük rehber</h3><small>İhtiyacın olan aracı bul, ne işe yaradığını gör ve doğrudan ilgili panele geç.</small></div><span className="help-hero-mark">?</span></div>
+      <label className="help-search-field"><span>⌕</span><input value={helpSearch} onChange={(event) => setHelpSearch(event.target.value)} placeholder="Yardımda ara…" aria-label="Yardımda ara" /></label>
+      <div className="help-topic-tabs" role="tablist" aria-label="Yardım konuları">{matchingTopics.map((topic) => <button key={topic.id} type="button" role="tab" aria-selected={activeTopic?.id === topic.id} className={activeTopic?.id === topic.id ? 'active' : ''} onClick={() => setHelpTopicId(topic.id)}><span>{topic.icon}</span>{topic.label}</button>)}</div>
+      {activeTopic ? <article className="help-topic-card"><div className="help-topic-heading"><span className="help-topic-icon">{activeTopic.icon}</span><div><p className="eyebrow">{activeTopic.label}</p><h4>{activeTopic.title}</h4><p>{activeTopic.summary}</p></div></div><ol className="help-steps">{activeTopic.steps.map((step, index) => <li key={step}><b>{index + 1}</b><span>{step}</span></li>)}</ol><button type="button" className="help-open-action" onClick={() => openHelpAction(activeTopic)}>{activeTopic.actionLabel}<span>→</span></button></article> : <div className="help-empty"><strong>Aramana uygun konu yok</strong><small>Başka bir kelime dene veya tüm konuları görmek için aramayı temizle.</small></div>}
+      <section className="help-section"><div className="help-section-heading"><div><strong>Kısayollar</strong><small>Kurgu akışını klavyeden hızlandır.</small></div><button type="button" onClick={onOpenSettings}>Ayarları aç</button></div><div className="help-shortcut-grid">{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => <div className="help-shortcut" key={action}><kbd>{shortcutValue(currentSettings, action)}</kbd><span><strong>{SHORTCUT_LABELS[action].label}</strong><small>{SHORTCUT_LABELS[action].description}</small></span></div>)}</div></section>
+      <section className="help-section"><div className="help-section-heading"><div><strong>Hızlı ipuçları</strong><small>Bir sonraki hamleni seç.</small></div></div><div className="help-tip-grid"><button type="button" className="help-tip-card" onClick={() => { setNotice('Canvas üzerindeki metin veya medyaya tıklayın; seçim timeline ve Inspector’da da eşleşir.'); setPanel('text'); }}><span>⌖</span><strong>Canvas’tan seç</strong><small>Metne tıklayınca doğru klip açılır.</small></button><button type="button" className="help-tip-card" onClick={() => setPanel('animation')}><span>↝</span><strong>Hareket ekle</strong><small>Giriş, çıkış ve easing’i birlikte ayarla.</small></button><button type="button" className="help-tip-card" onClick={() => setPanel('media')}><span>▧</span><strong>Şekil ekle</strong><small>Media içindeki Şekiller sekmesini kullan.</small></button></div></section>
+      <p className="panel-note">Export öncesi timeline’da en az bir medya veya metin klibi olduğundan emin olun.</p>
+    </div>;
+  }
   if (panel === 'project') return <div className="quick-panel project-tools-panel">
     <ProjectBackupPanel backups={backups} onRestore={restoreBackup} />
     <div className="text-library-head"><div><strong>Proje araçları</strong><small>Canvas, arka plan ve genel çalışma tercihleri.</small></div><span>⌘</span></div>
@@ -1230,33 +1325,163 @@ function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransi
     <button className="import-zone compact" onClick={() => subtitleFileRef.current?.click()}><span className="import-icon">＋</span><strong>SRT / VTT içe aktar</strong><small>Zaman kodları otomatik korunur</small></button>
     <div className="feature-card-grid"><button className="feature-card" onClick={() => setNotice('Otomatik altyazı için yerel Whisper bağlantısı bir sonraki render motoru paketinde etkinleştirilecek.')}><span className="feature-card-icon">✦</span><strong>Otomatik altyazı</strong><small>Yerel ve onaylı ses analizi</small></button><button className="feature-card" onClick={exportSubtitles}><span className="feature-card-icon">↓</span><strong>SRT dışa aktar</strong><small>Timeline altyazılarını indir</small></button></div>
   </div>;
-  if (panel === 'transitions') return <div className="quick-panel">
-    <div className="text-library-head"><div><strong>Geçişler</strong><small>Timeline’da seçili klibin giriş ve çıkış davranışını değiştirin.</small></div><span>6</span></div>
-    <div className="feature-card-grid transition-grid">{(['fade', 'dissolve', 'slide', 'wipe', 'zoom', 'none'] as TransitionPreset[]).map((preset) => <button key={preset} className="feature-card" onClick={() => onApplyTransition?.(preset)}><span className="feature-card-icon">{preset === 'none' ? '×' : preset === 'slide' ? '↝' : preset === 'wipe' ? '◫' : preset === 'zoom' ? '⌕' : '◌'}</span><strong>{preset === 'none' ? 'Yok' : preset[0].toLocaleUpperCase('tr-TR') + preset.slice(1)}</strong><small>0.4 saniye</small></button>)}</div>
-    <p className="panel-note">Geçişler seçili klibe çıkış geçişi olarak uygulanır; komşu klip doğrulaması render parity aşamasında genişletilecek.</p>
-  </div>;
+  if (panel === 'transitions' || panel === 'animation') return <AnimationStudio />;
   if (panel === 'color') return <div className="quick-panel">
     <div className="text-library-head"><div><strong>Renk ve filtre</strong><small>Hazır görünümlerle başlayın, Inspector’da ince ayar yapın.</small></div><span>6</span></div>
     <div className="effect-grid"><button onClick={() => onApplyEffect('film')}>◌<small>Film</small></button><button onClick={() => onApplyEffect('retro')}>◍<small>Retro</small></button><button onClick={() => onApplyEffect('glow')}>◈<small>Glow</small></button><button onClick={() => onApplyEffect('blur')}>◇<small>Yumuşat</small></button><button onClick={() => onApplyEffect('noise')}>◒<small>Mono</small></button><button onClick={() => onApplyEffect('chroma')}>⌁<small>Chroma</small></button></div>
     <p className="panel-note">Seçili klip yoksa önce timeline’dan bir klip seçin.</p>
   </div>;
-  if (panel === 'stickers') return <div className="quick-panel">
-    <div className="text-library-head"><div><strong>Şekiller ve çıkartmalar</strong><small>Canvas’a hızlı vurgu öğeleri ekleyin.</small></div><span>8</span></div>
-    <div className="feature-card-grid"><button className="feature-card" onClick={() => onAddText({ ...TEXT_PRESETS[0], id: 'shape-' + Date.now(), label: 'Daire vurgu', text: '●', fontSize: 120, color: '#b7f36a', background: 'transparent' })}><span className="feature-card-icon">●</span><strong>Daire</strong><small>Vurgu şekli</small></button><button className="feature-card" onClick={() => onAddText({ ...TEXT_PRESETS[0], id: 'shape-' + Date.now(), label: 'Yıldız vurgu', text: '✦', fontSize: 120, color: '#f18df0', background: 'transparent' })}><span className="feature-card-icon">✦</span><strong>Yıldız</strong><small>Parlak vurgu</small></button><button className="feature-card" onClick={() => onAddText({ ...TEXT_PRESETS[0], id: 'shape-' + Date.now(), label: 'Ok', text: '→', fontSize: 120, color: '#9ce8ff', background: 'transparent' })}><span className="feature-card-icon">→</span><strong>Ok</strong><small>Yön göstergesi</small></button></div>
-  </div>;
-  if (panel === 'animation') return <div className="quick-panel">
-    <div className="text-library-head"><div><strong>Animasyon</strong><small>Playhead’i taşıyıp seçili özellik için keyframe ekleyin.</small></div><span>⌁</span></div>
-    <div className="feature-card-grid"><button className="feature-card" onClick={() => setNotice('Keyframe eklemek için Inspector’daki Animasyon keyframe’leri bölümünü kullanın.')}><span className="feature-card-icon">◇</span><strong>Keyframe</strong><small>Konum, ölçek, dönüş ve opaklık</small></button><button className="feature-card" onClick={() => setNotice('Speed curve düzenleyicisi Inspector’a ekleniyor.')}><span className="feature-card-icon">⌁</span><strong>Hız eğrisi</strong><small>Yumuşak hız rampası</small></button></div>
-  </div>;
-  if (panel === 'text') return <div className="quick-panel text-library">
-    <div className="text-library-head"><div><strong>Metin kütüphanesi</strong><small>Bir stil seç, sonra Inspector'dan içeriği değiştir.</small></div><span>{filteredTextPresets.length}</span></div>
-    <div className="text-library-hero"><span className="text-library-hero-mark">Aa</span><div><strong>Temiz metin, güçlü hiyerarşi</strong><small>Başlık, altyazı ve bilgi kartlarını önizleyerek ekle.</small></div></div>
-    <input className="media-search text-search" value={textSearch} onChange={(event) => setTextSearch(event.target.value)} placeholder="Stil veya metin ara…" aria-label="Metin stili ara" />
-    <div className="text-category-chips">{(['Tümü', 'Başlık', 'Sosyal', 'Altyazı', 'Kart', 'Vurgu'] as const).map((category) => <button key={category} className={textCategory === category ? 'active' : ''} onClick={() => setTextCategory(category)}>{category}</button>)}</div>
-    <div className="text-preset-grid">{filteredTextPresets.map((preset) => <button key={preset.id} className="text-preset-card" onClick={() => onAddText(preset)}><span className="text-preset-sample" style={{ fontFamily: preset.fontFamily, fontSize: `${Math.max(18, preset.fontSize / 2.75)}px`, fontWeight: preset.fontWeight, fontStyle: preset.fontStyle, color: preset.color, background: preset.background, textAlign: preset.align, lineHeight: 1.05, WebkitTextStroke: `${Math.min(1.5, preset.strokeWidth / 2)}px ${preset.stroke}` }}>{preset.text}</span><span className="text-preset-meta"><strong>{preset.label}</strong><small>{preset.category} · {preset.description}</small></span><i aria-hidden="true">＋</i></button>)}</div>
-    <p className="text-library-tip">Karta tıkla → timeline’a ekle → sağdaki Inspector’da metni ve animasyonu düzenle.</p>
-  </div>;
+  if (panel === 'text') {
+    const quickStarts = ['clean-title', 'lower-third', 'quote'].map((id) => TEXT_PRESETS.find((preset) => preset.id === id) ?? TEXT_PRESETS[0]);
+    return <div className="quick-panel text-library text-studio">
+      <div className="text-studio-heading"><div><p className="eyebrow">Metin stüdyosu</p><h3>Hikâyene bir katman ekle</h3><small>Önizle, ekle ve sonra sağdaki Inspector’da kendi cümlene dönüştür.</small></div><span className="text-studio-mark">Aa</span></div>
+      <button className="text-primary-action" onClick={() => onAddText(TEXT_PRESETS[0])}><span>＋</span><div><strong>Boş metin ekle</strong><small>Her şeyi sen yaz, stilini sonra seç</small></div><b>↗</b></button>
+      <div className="text-section-label"><span>Hızlı başlangıç</span><small>Tek tıkla yerleştir</small></div>
+      <div className="text-quick-starts">{quickStarts.map((preset) => <button key={preset.id} className={`text-quick-card text-quick-${preset.id}`} onClick={() => onAddText(preset)}><span style={{ fontFamily: preset.fontFamily, fontWeight: preset.fontWeight, fontStyle: preset.fontStyle }}>{preset.text}</span><strong>{preset.label}</strong><small>{preset.description}</small><i>＋</i></button>)}</div>
+      <div className="text-library-head text-library-section-head"><div><strong>Stil kitaplığı</strong><small>İçeriği sonra Inspector’da düzenleyebilirsin.</small></div><span>{filteredTextPresets.length}</span></div>
+      <input className="media-search text-search" value={textSearch} onChange={(event) => setTextSearch(event.target.value)} placeholder="Stil veya metin ara…" aria-label="Metin stili ara" />
+      <div className="text-category-chips">{(['Tümü', 'Başlık', 'Sosyal', 'Altyazı', 'Kart', 'Vurgu'] as const).map((category) => <button key={category} className={textCategory === category ? 'active' : ''} onClick={() => setTextCategory(category)}>{category}</button>)}</div>
+      <div className="text-preset-grid">{filteredTextPresets.map((preset) => <button key={preset.id} className="text-preset-card" onClick={() => onAddText(preset)}><span className="text-preset-sample" style={{ fontFamily: preset.fontFamily, fontSize: `${Math.max(18, preset.fontSize / 2.75)}px`, fontWeight: preset.fontWeight, fontStyle: preset.fontStyle, color: preset.color, background: preset.background, textAlign: preset.align, lineHeight: 1.05, WebkitTextStroke: `${Math.min(1.5, preset.strokeWidth / 2)}px ${preset.stroke}` }}>{preset.text}</span><span className="text-preset-meta"><strong>{preset.label}</strong><small>{preset.category} · {preset.description}</small></span><i aria-hidden="true">＋</i></button>)}</div>
+      <div className="text-studio-tip"><span>✦</span><p><strong>İpucu</strong><small>Metni ekledikten sonra Inspector’daki Animasyon sekmesinden Fade, Kaydır veya Yakınlaş seçebilirsin. Yeni metinler varsayılan olarak animasyonsuz gelir.</small></p></div>
+    </div>;
+  }
   return <div className="quick-panel"><button className="experimental-card" onClick={onOpenSettings}><span>✦</span><div><strong>Experimental AI</strong><small>Kurgu yardımcısı ayarlardan açılır</small></div><span className="toggle off" /></button><div className="effect-grid"><button onClick={() => onApplyEffect('film')}>◌<small>Film</small></button><button onClick={() => onApplyEffect('retro')}>◍<small>Retro</small></button><button onClick={() => onApplyEffect('glow')}>◈<small>Glow</small></button><button onClick={() => onApplyEffect('blur')}>◇<small>Blur</small></button><button onClick={() => onApplyEffect('chroma')}>⌁<small>Chroma</small></button><button onClick={() => onApplyEffect('noise')}>◒<small>Noise</small></button></div><p className="panel-note">Bir klip seçip preset’e tıkla.</p></div>;
+}
+
+function AnimationStudio() {
+  const project = useEditor((state) => state.project);
+  const selectedClipId = useEditor((state) => state.selectedClipId);
+  const selectedClipIds = useEditor((state) => state.selectedClipIds);
+  const mutateProject = useEditor((state) => state.mutateProject);
+  const setNotice = useEditor((state) => state.setNotice);
+  const [mode, setMode] = useState<AnimationApplyMode>('both');
+  const [category, setCategory] = useState<AnimationCategory>('Tümü');
+  const [inDuration, setInDuration] = useState(0.4);
+  const [outDuration, setOutDuration] = useState(0.4);
+  const [linkDurations, setLinkDurations] = useState(true);
+  const [easing, setEasing] = useState<TransitionEasing>('ease-in-out');
+  const [direction, setDirection] = useState<TransitionDirection>('left');
+  const [intensity, setIntensity] = useState(1);
+  const [activePresetId, setActivePresetId] = useState('fade');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const selected = project?.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
+  const visiblePresets = category === 'Tümü' ? ANIMATION_PRESETS : ANIMATION_PRESETS.filter((preset) => preset.category === category);
+  const selectedIds = selectedClipIds.length ? selectedClipIds : selected ? [selected.id] : [];
+
+  useEffect(() => {
+    if (!selected) return;
+    const incoming = selected.transitionIn ?? { type: 'none', duration: 0 };
+    const outgoing = selected.transitionOut ?? { type: 'none', duration: 0 };
+    setInDuration(incoming.duration ?? 0);
+    setOutDuration(outgoing.duration ?? 0);
+    setEasing((incoming.easing ?? outgoing.easing ?? 'ease-in-out') as TransitionEasing);
+    setDirection((incoming.direction ?? outgoing.direction ?? 'left') as TransitionDirection);
+    setIntensity(clamp(incoming.intensity ?? outgoing.intensity ?? 1, 0.1, 2));
+    const current = ANIMATION_PRESETS.find((preset) => preset.type === (incoming.type ?? 'none') && (preset.type !== 'slide' || preset.motionDirection === (incoming.direction ?? 'left')));
+    if (current) setActivePresetId(current.id);
+  }, [
+    selected?.id,
+    selected?.transitionIn?.type,
+    selected?.transitionIn?.duration,
+    selected?.transitionIn?.direction,
+    selected?.transitionIn?.easing,
+    selected?.transitionIn?.intensity,
+    selected?.transitionOut?.type,
+    selected?.transitionOut?.duration,
+    selected?.transitionOut?.direction,
+    selected?.transitionOut?.easing,
+    selected?.transitionOut?.intensity,
+  ]);
+
+  const isActive = (preset: AnimationPreset) => {
+    if (!selected) return false;
+    const inType = selected.transitionIn?.type ?? 'none';
+    const outType = selected.transitionOut?.type ?? 'none';
+    const inDirection = selected.transitionIn?.direction ?? 'left';
+    const outDirection = selected.transitionOut?.direction ?? 'left';
+    const matches = (type: TransitionPreset, value: TransitionDirection) => type === preset.type && (preset.type !== 'slide' || value === preset.motionDirection);
+    if (mode === 'in') return matches(inType, inDirection);
+    if (mode === 'out') return matches(outType, outDirection);
+    return matches(inType, inDirection) && matches(outType, outDirection);
+  };
+
+  const apply = (preset: AnimationPreset, directionOverride = preset.motionDirection) => {
+    if (!selectedIds.length) {
+      setNotice('Önce timeline’dan bir klip seç; animasyon seçimi o klibe uygulanır.');
+      return;
+    }
+    const nextInDuration = preset.type === 'none' ? 0 : Math.max(0.1, inDuration || preset.duration);
+    const nextOutDuration = preset.type === 'none' ? 0 : Math.max(0.1, outDuration || preset.duration);
+    const makeTransition = (duration: number, clip: Clip): Clip['transitionIn'] => ({
+      type: preset.type,
+      duration: Math.min(Math.min(5, clip.duration), duration),
+      direction: directionOverride,
+      easing,
+      intensity: clamp(intensity, 0.1, 2),
+    });
+    mutateProject((draft) => {
+      for (const track of draft.tracks) {
+        for (const clip of track.clips) {
+          if (!selectedIds.includes(clip.id)) continue;
+          if (mode === 'in' || mode === 'both') clip.transitionIn = makeTransition(nextInDuration, clip);
+          if (mode === 'out' || mode === 'both') clip.transitionOut = makeTransition(nextOutDuration, clip);
+        }
+      }
+    });
+    setNotice(`${preset.label} ${mode === 'both' ? 'giriş ve çıkışa' : mode === 'in' ? 'girişe' : 'çıkışa'} uygulandı.`);
+  };
+  const applyAdvanced = () => {
+    const preset = ANIMATION_PRESETS.find((item) => item.id === activePresetId) ?? ANIMATION_PRESETS[1];
+    apply(preset, direction);
+  };
+  const updateSelectedDurations = (nextInDuration: number, nextOutDuration: number) => {
+    if (!selectedIds.length) return;
+    mutateProject((draft) => {
+      for (const track of draft.tracks) {
+        for (const clip of track.clips) {
+          if (!selectedIds.includes(clip.id)) continue;
+          const maxDuration = Math.min(5, clip.duration);
+          if (mode === 'in' || mode === 'both') clip.transitionIn.duration = Math.min(maxDuration, Math.max(0, nextInDuration));
+          if (mode === 'out' || mode === 'both') clip.transitionOut.duration = Math.min(maxDuration, Math.max(0, nextOutDuration));
+        }
+      }
+    });
+  };
+  const changeInDuration = (value: number) => {
+    const nextOutDuration = linkDurations ? value : outDuration;
+    setInDuration(value);
+    if (linkDurations) setOutDuration(value);
+    updateSelectedDurations(value, nextOutDuration);
+  };
+  const changeOutDuration = (value: number) => {
+    const nextInDuration = linkDurations ? value : inDuration;
+    setOutDuration(value);
+    if (linkDurations) setInDuration(value);
+    updateSelectedDurations(nextInDuration, value);
+  };
+
+  return <div className="quick-panel animation-studio">
+    <div className="animation-studio-heading"><div><p className="eyebrow">Hareket stüdyosu</p><h3>Giriş ve çıkışı birlikte tasarla</h3><small>Bir kart seç; sonra süre, yön ve yumuşatmayı ince ayarla.</small></div><span className="animation-studio-mark">✧</span></div>
+    <div className="animation-target-row"><span className={selected ? 'target-dot ready' : 'target-dot'} />{selected ? <><strong>{selected.name}</strong><small>{selectedIds.length > 1 ? `${selectedIds.length} klip seçili` : 'Seçili klip'}</small></> : <><strong>Klip seçilmedi</strong><small>Önce timeline’dan bir klip seç</small></>}</div>
+    <div className="animation-section-label"><strong>Uygulama alanı</strong><small>Hangi bölüme yazacağını seç</small></div>
+    <div className="animation-mode-tabs" role="tablist" aria-label="Animasyon bölümü">{([['both', 'Giriş + çıkış'], ['in', 'Yalnız giriş'], ['out', 'Yalnız çıkış']] as const).map(([value, label]) => <button key={value} role="tab" aria-selected={mode === value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}>{label}</button>)}</div>
+    <div className="animation-duration-grid">
+      <label><span>Giriş süresi</span><strong>{inDuration.toFixed(2)} sn</strong><input type="range" min="0" max="1.5" step="0.05" value={inDuration} disabled={!selectedIds.length} onChange={(event) => changeInDuration(Number(event.target.value))} aria-label="Giriş animasyonu süresi" /></label>
+      <label><span>Çıkış süresi</span><strong>{outDuration.toFixed(2)} sn</strong><input type="range" min="0" max="1.5" step="0.05" value={outDuration} disabled={!selectedIds.length} onChange={(event) => changeOutDuration(Number(event.target.value))} aria-label="Çıkış animasyonu süresi" /></label>
+    </div>
+    <div className="animation-section-label"><strong>Hareket seç</strong><small>{visiblePresets.length} hazır davranış</small></div>
+    <div className="animation-category-tabs" role="tablist" aria-label="Animasyon kategorileri">{(['Tümü', 'Kesme', 'Yumuşak', 'Hareket', 'Odak'] as const).map((value) => <button key={value} role="tab" aria-selected={category === value} className={category === value ? 'active' : ''} onClick={() => setCategory(value)}>{value}</button>)}</div>
+    <div className="animation-card-grid">{visiblePresets.map((preset) => <button key={preset.id} className={`animation-card ${isActive(preset) ? 'active' : ''}`} aria-pressed={isActive(preset)} onClick={() => { setActivePresetId(preset.id); setDirection(preset.motionDirection); apply(preset, preset.motionDirection); }}><span className={`animation-card-visual animation-visual-${preset.type} animation-visual-${preset.id}`}><i /></span><span className="animation-card-copy"><strong>{preset.label}</strong><small>{preset.description}</small><em>{preset.directionLabel}</em></span><b>{isActive(preset) ? '✓' : '＋'}</b></button>)}</div>
+    <button className={`animation-advanced-toggle ${showAdvanced ? 'active' : ''}`} onClick={() => setShowAdvanced((value) => !value)} aria-expanded={showAdvanced}><span><strong>Gelişmiş hareket</strong><small>Yön, yumuşatma, yoğunluk ve süre bağlantısı</small></span><b>{showAdvanced ? '⌃' : '⌄'}</b></button>
+    {showAdvanced && <div className="animation-advanced">
+      <label><span>Yön</span><select value={direction} onChange={(event) => setDirection(event.target.value as TransitionDirection)}><option value="left">Soldan</option><option value="right">Sağdan</option><option value="up">Yukarıdan</option><option value="down">Aşağıdan</option><option value="center">Merkezden</option></select></label>
+       <label><span>Yumuşatma</span><select value={easing} onChange={(event) => setEasing(event.target.value as TransitionEasing)}><option value="linear">Doğrusal</option><option value="ease-in">Yavaş başla</option><option value="ease-out">Yavaş bitir</option><option value="ease-in-out">Yumuşak giriş/çıkış</option></select></label>
+      <label className="animation-intensity"><span>Yoğunluk <b>{Math.round(intensity * 100)}%</b></span><input type="range" min="0.1" max="2" step="0.05" value={intensity} onChange={(event) => setIntensity(Number(event.target.value))} /></label>
+      <label className="animation-link-toggle"><input type="checkbox" checked={linkDurations} onChange={(event) => setLinkDurations(event.target.checked)} /><span>Giriş ve çıkış süresini birlikte ayarla</span></label>
+      <button className="animation-apply-button" onClick={applyAdvanced}>Gelişmiş ayarları uygula</button>
+    </div>}
+    <div className="animation-footer"><button onClick={() => setNotice('Keyframe için playhead’i taşı ve sağ Inspector’daki Animasyon sekmesinden özellik düğmesine bas.')}>◇ Keyframe</button><small>Animasyon seçmek klibin giriş/çıkış davranışını günceller; dışa aktarmada gelişmiş geçişler fade yaklaşımıyla işlenebilir.</small></div>
+  </div>;
 }
 
 function ProjectBackupPanel({ backups, onRestore }: { backups: BackupSummary[]; onRestore: (fileName: string) => void }) {
@@ -1407,7 +1632,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
       <div className="media-source-tabs" role="tablist" aria-label="Medya kaynakları">
         <button role="tab" aria-selected={mediaSection === 'project'} className={mediaSection === 'project' ? 'active' : ''} onClick={() => setMediaSection('project')}><span className="media-source-tab-icon">▧</span><span className="media-source-tab-label">Medya</span><small>{project.assets.length}</small></button>
         <button role="tab" aria-selected={mediaSection === 'stock'} className={mediaSection === 'stock' ? 'active' : ''} onClick={() => setMediaSection('stock')}><span className="media-source-tab-icon">✦</span><span className="media-source-tab-label">Stok</span><small>{STOCK_MEDIA.length}</small></button>
-        <button role="tab" aria-selected={mediaSection === 'shapes'} className={mediaSection === 'shapes' ? 'active' : ''} onClick={() => setMediaSection('shapes')}><span className="media-source-tab-icon">◇</span><span className="media-source-tab-label">Şekiller</span><small>6</small></button>
+        <button role="tab" aria-selected={mediaSection === 'shapes'} className={mediaSection === 'shapes' ? 'active' : ''} onClick={() => setMediaSection('shapes')}><span className="media-source-tab-icon">◇</span><span className="media-source-tab-label">Şekiller</span><small>{SHAPE_PRESETS.length}</small></button>
       </div>
       {mediaSection !== 'project' && <p className="media-source-copy">{mediaSection === 'stock' ? 'Hazır arka planları ve yüzeyleri seç, tek tıkla boş bir alana ekle.' : 'Basit vurguları ve metin şekillerini hızlıca timeline’a ekle.'}</p>}
       <input ref={fileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(file); event.target.value = ''; }} />
@@ -1439,8 +1664,15 @@ function StockMediaShelf({ busyId, onAdd }: { busyId: string | null; onAdd: (sto
 }
 
 function ShapeShelf({ onAdd }: { onAdd: (preset: TextPreset) => void }) {
-  const shapes: Array<[string, string, string]> = [['Daire', '●', '#b7f36a'], ['Yıldız', '✦', '#f18df0'], ['Ok', '→', '#9ce8ff'], ['Kare', '■', '#ffd36a'], ['Kalp', '♥', '#ff7f9f'], ['Onay', '✓', '#82e6b5']];
-  return <section className="shape-shelf" aria-label="Şekiller"><div className="stock-shelf-heading"><div><strong>Şekiller</strong><small>Medya panelinden hızlı vurgu ekle</small></div><span>{shapes.length}</span></div><div className="shape-shelf-grid">{shapes.map(([label, glyph, color]) => <button key={label} onClick={() => onAdd({ ...TEXT_PRESETS[0], id: `shape-${Date.now()}`, label: `${label} vurgu`, text: glyph, fontSize: 120, color, background: 'transparent' })}><b style={{ color }}>{glyph}</b><span>{label}</span></button>)}</div></section>;
+  const [category, setCategory] = useState<ShapePreset['category'] | 'Tümü'>('Tümü');
+  const visibleShapes = category === 'Tümü' ? SHAPE_PRESETS : SHAPE_PRESETS.filter((shape) => shape.category === category);
+  return <section className="shape-shelf" aria-label="Şekiller">
+    <div className="stock-shelf-heading"><div><strong>Şekil stüdyosu</strong><small>Bir vurgu seç, timeline’a ekle</small></div><span>{SHAPE_PRESETS.length}</span></div>
+    <div className="shape-category-tabs" role="tablist" aria-label="Şekil kategorileri">
+      {(['Tümü', 'Temel', 'Oklar', 'Semboller', 'Rozet'] as const).map((value) => <button key={value} role="tab" aria-selected={category === value} className={category === value ? 'active' : ''} onClick={() => setCategory(value)}>{value}</button>)}
+    </div>
+    <div className="shape-shelf-grid">{visibleShapes.map((shape) => <button key={shape.id} className="shape-card" onClick={() => onAdd({ ...TEXT_PRESETS[0], id: `shape-${shape.id}-${Date.now()}`, label: `${shape.label} vurgu`, text: shape.glyph, fontSize: 120, color: shape.color, background: 'transparent' })} aria-label={`${shape.label} şeklini timeline'a ekle`}><b style={{ color: shape.color }}>{shape.glyph}</b><span><strong>{shape.label}</strong><small>{shape.description}</small></span><i>＋</i></button>)}</div>
+  </section>;
 }
 
 function AssetCardPro({ projectId, asset, usage, view, onAdd, onOpenMenu }: { projectId: string; asset: Asset; usage: number; view: 'list' | 'grid'; onAdd: () => void; onOpenMenu: (event: React.MouseEvent<HTMLButtonElement>) => void }) {
@@ -1508,6 +1740,41 @@ const TEXT_PRESETS: TextPreset[] = [
   { id: 'soft-note', label: 'Yumuşak not', category: 'Vurgu', description: 'Minimal ve sıcak', text: 'Küçük bir not', fontFamily: 'Nunito, Arial, sans-serif', fontSize: 42, fontWeight: 600, fontStyle: 'normal', color: '#fff2d6', background: '#4d304acc', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' },
 ];
 
+type ShapePreset = {
+  id: string;
+  label: string;
+  glyph: string;
+  color: string;
+  category: 'Temel' | 'Oklar' | 'Semboller' | 'Rozet';
+  description: string;
+};
+
+/**
+ * Shapes intentionally remain text-based clips for now. That keeps insertion,
+ * transform, keyframes and FFmpeg export on the existing stable Clip contract
+ * while giving the left library a real, browsable catalog.
+ */
+const SHAPE_PRESETS: ShapePreset[] = [
+  { id: 'circle', label: 'Daire', glyph: '●', color: '#b7f36a', category: 'Temel', description: 'Yumuşak vurgu' },
+  { id: 'square', label: 'Kare', glyph: '■', color: '#ffd36a', category: 'Temel', description: 'Keskin blok' },
+  { id: 'diamond', label: 'Elmas', glyph: '◆', color: '#f18df0', category: 'Temel', description: 'Döndürülmüş vurgu' },
+  { id: 'triangle', label: 'Üçgen', glyph: '▲', color: '#9ce8ff', category: 'Temel', description: 'Yönlü yüzey' },
+  { id: 'star', label: 'Yıldız', glyph: '★', color: '#ffd36a', category: 'Semboller', description: 'Parlak vurgu' },
+  { id: 'spark', label: 'Parıltı', glyph: '✦', color: '#f18df0', category: 'Semboller', description: 'Küçük ışıltı' },
+  { id: 'heart', label: 'Kalp', glyph: '♥', color: '#ff7f9f', category: 'Semboller', description: 'Duygusal vurgu' },
+  { id: 'sun', label: 'Güneş', glyph: '☀', color: '#ffd36a', category: 'Semboller', description: 'Sıcak enerji' },
+  { id: 'arrow-right', label: 'Sağ ok', glyph: '→', color: '#9ce8ff', category: 'Oklar', description: 'Yön göster' },
+  { id: 'arrow-up', label: 'Yukarı ok', glyph: '↑', color: '#9ce8ff', category: 'Oklar', description: 'Yukarı taşı' },
+  { id: 'arrow-diagonal', label: 'Çapraz ok', glyph: '↗', color: '#9ce8ff', category: 'Oklar', description: 'Hareket yönü' },
+  { id: 'chevron', label: 'Şevron', glyph: '›', color: '#b7f36a', category: 'Oklar', description: 'İleri çağrı' },
+  { id: 'check', label: 'Onay', glyph: '✓', color: '#82e6b5', category: 'Rozet', description: 'Tamamlandı' },
+  { id: 'plus', label: 'Artı', glyph: '＋', color: '#b7f36a', category: 'Rozet', description: 'Ekle işareti' },
+  { id: 'cross', label: 'Çarpı', glyph: '×', color: '#ff9d9d', category: 'Rozet', description: 'Kapat işareti' },
+  { id: 'badge', label: 'Rozet', glyph: '⬡', color: '#f18df0', category: 'Rozet', description: 'Altıgen etiket' },
+  { id: 'orbit', label: 'Yörünge', glyph: '◒', color: '#9ce8ff', category: 'Semboller', description: 'Dairesel hareket' },
+  { id: 'cloud', label: 'Bulut', glyph: '☁', color: '#d5e7ff', category: 'Semboller', description: 'Hafif atmosfer' },
+];
+
 function legacyTextPreset(template: 'title' | 'subtitle' | 'quote'): TextPreset {
   return TEXT_PRESETS.find((preset) => preset.id === (template === 'title' ? 'clean-title' : template === 'subtitle' ? 'caption' : 'quote')) ?? TEXT_PRESETS[0];
 }
@@ -1568,20 +1835,30 @@ function clipVisualValues(clip: Clip, projectTime: number) {
   let transitionX = 0;
   let transitionY = 0;
   let transitionScale = 1;
+  let wipe: { progress: number; direction: TransitionDirection } | null = null;
   const enter = clip.transitionIn?.duration ?? 0;
   const leave = clip.transitionOut?.duration ?? 0;
-  if (clip.transitionIn?.type !== 'none' && enter > 0 && localTime < enter) {
-    const progress = clamp(localTime / enter, 0, 1);
-    if (clip.transitionIn.type === 'fade' || clip.transitionIn.type === 'dissolve' || clip.transitionIn.type === 'wipe') transitionOpacity *= progress;
-    if (clip.transitionIn.type === 'slide') transitionX -= (1 - progress) * 120;
-    if (clip.transitionIn.type === 'zoom') transitionScale *= 0.82 + progress * 0.18;
-  }
+  const applyMotion = (transition: NonNullable<Clip['transitionIn']>, progress: number, entering: boolean) => {
+    const eased = motionProgress(progress, transition.easing as TransitionEasing | undefined);
+    const intensity = clamp(transition.intensity ?? 1, 0.1, 2);
+    const direction = transition.direction ?? 'left';
+    if (transition.type === 'fade' || transition.type === 'dissolve') transitionOpacity *= eased;
+    if (transition.type === 'wipe') wipe = !wipe || eased < wipe.progress ? { progress: eased, direction } : wipe;
+    if (transition.type === 'slide') {
+      const vector = transitionVector(direction);
+      const distance = (1 - eased) * 120 * intensity;
+      if (entering) { transitionX += vector.x * distance; transitionY += vector.y * distance; }
+      else { transitionX += vector.x * distance; transitionY += vector.y * distance; }
+    }
+    if (transition.type === 'zoom') {
+      const amount = 0.18 * intensity;
+      transitionScale *= entering ? Math.max(0.12, 1 - (1 - eased) * amount) : 1 + (1 - eased) * amount;
+    }
+  };
+  if (clip.transitionIn?.type !== 'none' && enter > 0 && localTime < enter) applyMotion(clip.transitionIn, clamp(localTime / enter, 0, 1), true);
   const remaining = clip.duration - localTime;
   if (clip.transitionOut?.type !== 'none' && leave > 0 && remaining < leave) {
-    const progress = clamp(remaining / leave, 0, 1);
-    if (clip.transitionOut.type === 'fade' || clip.transitionOut.type === 'dissolve' || clip.transitionOut.type === 'wipe') transitionOpacity *= progress;
-    if (clip.transitionOut.type === 'slide') transitionX += (1 - progress) * 120;
-    if (clip.transitionOut.type === 'zoom') transitionScale *= 1 + (1 - progress) * 0.18;
+    applyMotion(clip.transitionOut, clamp(remaining / leave, 0, 1), false);
   }
   return {
     localTime,
@@ -1592,7 +1869,55 @@ function clipVisualValues(clip: Clip, projectTime: number) {
     opacity: clamp(interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity) * transitionOpacity, 0, 1),
     volume: clamp(interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume), 0, 2),
     speed: clipSpeedAt(clip, localTime),
+    wipe,
   };
+}
+
+function motionProgress(value: number, easing: TransitionEasing = 'ease-in-out') {
+  const t = clamp(value, 0, 1);
+  if (easing === 'ease-in') return t * t;
+  if (easing === 'ease-out') return 1 - ((1 - t) ** 2);
+  if (easing === 'ease-in-out') return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+  return t;
+}
+
+function transitionVector(direction: TransitionDirection) {
+  if (direction === 'right') return { x: 1, y: 0 };
+  if (direction === 'up') return { x: 0, y: -1 };
+  if (direction === 'down') return { x: 0, y: 1 };
+  if (direction === 'center') return { x: 0, y: 0 };
+  return { x: -1, y: 0 };
+}
+
+function transitionClipPath(wipe: { progress: number; direction: TransitionDirection } | null) {
+  if (!wipe) return undefined;
+  const hidden = `${Math.round((1 - clamp(wipe.progress, 0, 1)) * 10000) / 100}%`;
+  if (wipe.direction === 'right') return `inset(0 0 0 ${hidden})`;
+  if (wipe.direction === 'up') return `inset(0 0 ${hidden} 0)`;
+  if (wipe.direction === 'down') return `inset(${hidden} 0 0 0)`;
+  if (wipe.direction === 'center') {
+    const centerHidden = `${Math.round((1 - clamp(wipe.progress, 0, 1)) * 5000) / 100}%`;
+    return `inset(${centerHidden} ${centerHidden} ${centerHidden} ${centerHidden})`;
+  }
+  return `inset(0 ${hidden} 0 0)`;
+}
+
+function previewMediaBounds(asset: Asset, canvasWidth: number, canvasHeight: number, fit: 'contain' | 'cover' | 'stretch') {
+  const sourceWidth = Math.max(1, asset.width ?? canvasWidth);
+  const sourceHeight = Math.max(1, asset.height ?? canvasHeight);
+  if (fit === 'stretch') return { width: canvasWidth, height: canvasHeight };
+  const ratio = fit === 'cover' ? Math.max(canvasWidth / sourceWidth, canvasHeight / sourceHeight) : Math.min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
+  return { width: sourceWidth * ratio, height: sourceHeight * ratio };
+}
+
+function previewTextBounds(style: NonNullable<Clip['textStyle']>, canvasWidth: number, canvasHeight: number, renderScale = 1) {
+  const effectiveFontSize = Math.max(style.fontSize, 12 / Math.max(0.001, renderScale));
+  const longestLine = Math.max(1, ...style.text.split('\n').map((line) => line.length));
+  const estimatedWidth = longestLine * effectiveFontSize * 0.58 + style.padding * 2;
+  const width = Math.min(canvasWidth * 0.9, Math.max(64, estimatedWidth));
+  const lineCount = Math.max(1, style.text.split('\n').length);
+  const height = Math.min(canvasHeight * 0.75, Math.max(effectiveFontSize, lineCount * effectiveFontSize * style.lineHeight + style.padding * 2));
+  return { width, height };
 }
 
 function normalizeProjectDurations(project: Project): Project {
@@ -1635,6 +1960,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
   const canvasRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const [showSafeArea, setShowSafeArea] = useState(false);
   const [previewZoom, setPreviewZoom] = useState(100);
   const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'fit' : project.canvas.fitMode ?? 'fit');
@@ -1652,15 +1978,12 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     return () => observer.disconnect();
   }, [project.canvas.width, project.canvas.height]);
   useEffect(() => {
-    const element = stageRef.current;
+    const element = viewportRef.current ?? stageRef.current;
     if (!element) return;
     const updateSize = () => {
-      const style = window.getComputedStyle(element);
-      const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-      const verticalPadding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
       setStageSize({
-        width: Math.max(1, element.clientWidth - horizontalPadding),
-        height: Math.max(1, element.clientHeight - verticalPadding),
+        width: Math.max(1, element.clientWidth),
+        height: Math.max(1, element.clientHeight),
       });
     };
     updateSize();
@@ -1678,8 +2001,9 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     return Boolean(asset?.hasAudio);
   });
   const texts = activeClips.filter(({ clip }) => clip.textStyle || clip.subtitle).map(({ clip }) => ({ clip, style: clip.textStyle ?? { ...DEFAULT_TEXT_STYLE, text: clip.subtitle?.text ?? clip.name, fontSize: 42, background: '#101116cc', padding: 10 } }));
-  const activeSelected = selectedClipId ? activeClips.find(({ clip }) => clip.id === selectedClipId && (clip.type === 'video' || clip.type === 'image' || clip.type === 'text')) : undefined;
+  const activeSelected = selectedClipId ? activeClips.find(({ clip }) => clip.id === selectedClipId && (clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'subtitle')) : undefined;
   const activeSelectedVisual = activeSelected ? clipVisualValues(activeSelected.clip, currentTime) : null;
+  const activeSelectedAsset = activeSelected?.clip.assetId ? project.assets.find((item) => item.id === activeSelected.clip.assetId) : undefined;
 
   const beginPreviewTransform = (event: React.PointerEvent<HTMLElement>, clip: Clip, mode: 'move' | 'scale') => {
     if (event.button !== 0) return;
@@ -1776,6 +2100,16 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     width: Math.max(1, Math.round(project.canvas.width * displayScale)),
     height: Math.max(1, Math.round(project.canvas.height * displayScale)),
   };
+  const canvasPadding = 28;
+  const canvasPadSize = {
+    width: Math.max(stageSize.width, canvasDisplaySize.width + canvasPadding * 2),
+    height: Math.max(stageSize.height, canvasDisplaySize.height + canvasPadding * 2),
+  };
+  const selectedBounds = activeSelected?.clip.type === 'text' || activeSelected?.clip.type === 'subtitle'
+    ? previewTextBounds(activeSelected.clip.textStyle ?? { ...DEFAULT_TEXT_STYLE, text: activeSelected.clip.name }, project.canvas.width, project.canvas.height, canvasScale)
+    : activeSelectedAsset
+      ? previewMediaBounds(activeSelectedAsset, project.canvas.width, project.canvas.height, (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : activeSelected?.clip.transform.fit ?? 'contain')
+      : { width: project.canvas.width * 0.72, height: project.canvas.height * 0.72 };
   const changePreviewFraming = (next: 'clip' | 'fit' | 'fill' | 'smart') => {
     setPreviewFraming(next);
     mutateProject((draft) => { draft.canvas.fitMode = next === 'clip' ? 'fit' : next; });
@@ -1788,7 +2122,9 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
   }, [playing, project.canvas.fps, project.duration, setCurrentTime, setPlaying]);
 
   const useProxy = settings?.proxyQuality !== 'high';
-  return <main className="preview-area"><div className="preview-toolbar"><div className="preview-breadcrumb"><span>Canvas</span><select className="preview-aspect-select" aria-label="Preview oranı" value={aspect} onChange={(event) => setAspect(event.target.value as CanvasAspect)}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Dikey</option><option value="1:1">1:1 · Kare</option><option value="4:5">4:5 · Instagram</option><option value="3:2">3:2 · Klasik</option><option value="21:9">21:9 · Sinematik</option></select><select className="preview-fit-select" aria-label="Medya kadrajı" title="Medyanın canvas içindeki kadrajı" value={previewFraming} onChange={(event) => changePreviewFraming(event.target.value as typeof previewFraming)}><option value="clip">Klip kadrajı</option><option value="fit">Medya: Sığdır</option><option value="fill">Medya: Doldur</option><option value="smart">Akıllı kadraj</option></select></div><div className="preview-tools" aria-label="Preview görünümü"><label className="preview-zoom-slider"><span>Zoom</span><input type="range" min="40" max="180" step="5" value={previewZoom} onChange={(event) => setPreviewZoom(Number(event.target.value))} aria-label="Canvas yakınlaştırma" /><b>{previewZoom}%</b></label><button className={showSafeArea ? 'active' : ''} aria-label="Güvenli alan" aria-pressed={showSafeArea} title="Güvenli alan" onClick={() => setShowSafeArea((value) => !value)}>◫</button><button aria-label="Tam ekran" title="Tam ekran" onClick={toggleFullscreen}>⛶</button></div></div><div ref={stageRef} className="preview-stage"><div ref={canvasRef} className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`} style={{ width: canvasDisplaySize.width, height: canvasDisplaySize.height, aspectRatio: `${project.canvas.width}/${project.canvas.height}`, ['--canvas-ratio' as string]: canvasRatio, background: project.canvas.background }} onPointerMove={updatePreviewTransform} onPointerUp={finishPreviewTransform} onPointerCancel={finishPreviewTransform}>
+  return <main className="preview-area">
+    <div className="preview-toolbar"><div className="preview-breadcrumb"><span>Canvas</span><select className="preview-aspect-select" aria-label="Preview oranı" value={aspect} onChange={(event) => setAspect(event.target.value as CanvasAspect)}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · Dikey</option><option value="1:1">1:1 · Kare</option><option value="4:5">4:5 · Instagram</option><option value="3:2">3:2 · Klasik</option><option value="21:9">21:9 · Sinematik</option></select><select className="preview-fit-select" aria-label="Medya kadrajı" title="Medyanın canvas içindeki kadrajı" value={previewFraming} onChange={(event) => changePreviewFraming(event.target.value as typeof previewFraming)}><option value="clip">Klip kadrajı</option><option value="fit">Medya: Sığdır</option><option value="fill">Medya: Doldur</option><option value="smart">Akıllı kadraj</option></select></div><div className="preview-tools" aria-label="Preview görünümü"><div className="preview-zoom-control" aria-label="Canvas yakınlaştırma"><div className="preview-zoom-readout"><span>Yakınlaştırma</span><strong>{previewZoom}%</strong></div><button type="button" className="preview-zoom-step" aria-label="Yakınlaştırmayı azalt" onClick={() => setPreviewZoom((value) => clamp(value - 10, 40, 180))}>−</button><input type="range" min="40" max="180" step="5" value={previewZoom} onChange={(event) => setPreviewZoom(Number(event.target.value))} aria-label="Canvas yakınlaştırma" /><button type="button" className="preview-zoom-step" aria-label="Yakınlaştırmayı artır" onClick={() => setPreviewZoom((value) => clamp(value + 10, 40, 180))}>＋</button><button type="button" className="preview-zoom-fit" onClick={() => setPreviewZoom(100)} aria-label="Preview sığdır" title="Preview sığdır">Sığdır</button></div><button className={showSafeArea ? 'active' : ''} aria-label="Güvenli alan" aria-pressed={showSafeArea} title="Güvenli alan" onClick={() => setShowSafeArea((value) => !value)}>◫</button><button aria-label="Tam ekran" title="Tam ekran" onClick={toggleFullscreen}>⛶</button></div></div>
+    <div ref={stageRef} className="preview-stage"><div ref={viewportRef} className="preview-canvas-viewport"><div className="preview-canvas-pad" style={{ width: canvasPadSize.width, height: canvasPadSize.height }}><div ref={canvasRef} className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`} style={{ width: canvasDisplaySize.width, height: canvasDisplaySize.height, aspectRatio: `${project.canvas.width}/${project.canvas.height}`, ['--canvas-ratio' as string]: canvasRatio, background: project.canvas.background }} onPointerMove={updatePreviewTransform} onPointerUp={finishPreviewTransform} onPointerCancel={finishPreviewTransform}>
     {activeMedia.map(({ clip, trackIndex }) => {
       const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
       if (!asset) return null;
@@ -1796,16 +2132,26 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
       const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
       const mediaStyle: React.CSSProperties = {
         opacity: visual.opacity,
+        pointerEvents: 'none',
         objectFit: (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit === 'stretch' ? 'fill' : clip.transform.fit,
         zIndex: trackIndex + 1,
         transform: `translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})`,
         filter: `brightness(${1 + clip.filters.brightness}) contrast(${1 + clip.filters.contrast}) saturate(${1 + clip.filters.saturation}) hue-rotate(${clip.filters.hue ?? 0}deg) blur(${clip.filters.blur}px) grayscale(${clip.filters.grayscale})${(clip.filters.temperature ?? 0) > 0 ? ` sepia(${Math.abs(clip.filters.temperature ?? 0) * 0.35})` : ''}`,
-        clipPath: clip.mask ? `${clip.mask.type === 'ellipse' ? 'ellipse' : 'inset'}(${clip.mask.type === 'ellipse' ? `${clip.mask.height * 50}% ${clip.mask.width * 50}%` : `${clip.mask.y * 100}% ${(1 - clip.mask.x - clip.mask.width) * 100}% ${(1 - clip.mask.y - clip.mask.height) * 100}% ${clip.mask.x * 100}%`}${clip.mask.type === 'ellipse' ? ` at ${(clip.mask.x + clip.mask.width / 2) * 100}% ${(clip.mask.y + clip.mask.height / 2) * 100}%` : ''})` : undefined,
+        clipPath: visual.wipe ? transitionClipPath(visual.wipe) : clip.mask ? `${clip.mask.type === 'ellipse' ? 'ellipse' : 'inset'}(${clip.mask.type === 'ellipse' ? `${clip.mask.height * 50}% ${clip.mask.width * 50}%` : `${clip.mask.y * 100}% ${(1 - clip.mask.x - clip.mask.width) * 100}% ${(1 - clip.mask.y - clip.mask.height) * 100}% ${clip.mask.x * 100}%`}${clip.mask.type === 'ellipse' ? ` at ${(clip.mask.x + clip.mask.width / 2) * 100}% ${(clip.mask.y + clip.mask.height / 2) * 100}%` : ''})` : undefined,
         borderRadius: clip.mask?.type === 'ellipse' ? '50%' : undefined,
       };
       return asset.type === 'video'
-        ? <video key={clip.id} ref={(element) => { mediaRefs.current[clip.id] = element; if (element) syncVideo(clip, element); }} src={mediaUrl} muted playsInline className={`preview-media preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onLoadedMetadata={(event) => syncVideo(clip, event.currentTarget)} />
-        : <img key={clip.id} src={mediaUrl} className={`preview-media preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} alt={clip.name} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} />;
+        ? <video key={clip.id} ref={(element) => { mediaRefs.current[clip.id] = element; if (element) syncVideo(clip, element); }} src={mediaUrl} muted playsInline className={`preview-media preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} onLoadedMetadata={(event) => syncVideo(clip, event.currentTarget)} />
+        : <img key={clip.id} src={mediaUrl} className={`preview-media preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} alt={clip.name} />;
+    })}
+    {activeMedia.map(({ clip, trackIndex }) => {
+      const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
+      if (!asset) return null;
+      const visual = clipVisualValues(clip, currentTime);
+      const fit = (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
+      const bounds = previewMediaBounds(asset, project.canvas.width, project.canvas.height, fit);
+      const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
+      return <button type="button" key={`preview-hit-${clip.id}`} className={`preview-hit-target ${selectedClipIds.includes(clip.id) ? 'selected' : ''}`} style={{ width: bounds.width * canvasScale, height: bounds.height * canvasScale, zIndex: 40 + trackIndex, transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})` }} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} aria-label={`${clip.name} seç`}><span className="preview-hit-label">{clip.type === 'image' ? 'Görsel' : 'Video'}</span></button>;
     })}
     {activeAudio.map(({ clip }) => {
       const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
@@ -1813,9 +2159,14 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
       const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
       return <audio key={`audio-${clip.id}`} ref={(element) => { audioRefs.current[clip.id] = element; if (element) syncAudio(clip, element); }} src={mediaUrl} preload="auto" onLoadedMetadata={(event) => syncAudio(clip, event.currentTarget)} />;
     })}
-    {texts.map(({ clip, style }) => { const visual = clipVisualValues(clip, currentTime); return <div key={clip.id} className={`preview-text preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} style={{ left: '50%', top: '50%', bottom: 'auto', zIndex: 100 + (clip.start || 0), transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`, opacity: visual.opacity, fontFamily: style.fontFamily, fontSize: Math.max(12, style.fontSize * canvasScale), color: style.color, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecoration: style.textDecoration, letterSpacing: `${style.letterSpacing * canvasScale}px`, lineHeight: style.lineHeight, padding: `${style.padding * canvasScale}px`, background: style.background, WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`, textShadow: style.shadow ? '0 2px 8px #000' : 'none', textAlign: style.align }}>{style.text}</div>; })}
-    {activeSelected && activeSelectedVisual && <div className="preview-transform-box" style={{ zIndex: 300, transform: `translate(${activeSelectedVisual.x * canvasScale}px, ${activeSelectedVisual.y * canvasScale}px) rotate(${activeSelectedVisual.rotation}deg) scale(${activeSelectedVisual.scale})` }}><span className="preview-transform-label">{activeSelected.clip.type === 'text' ? 'Metin' : activeSelected.clip.type === 'image' ? 'Görsel' : 'Video'}</span><button className="preview-scale-handle" aria-label="Önizlemede yeniden boyutlandır" onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} /></div>}
-    {showSafeArea && <div className="safe-area" />}</div></div><div className="preview-controls"><span className="preview-time"><b>{formatTime(currentTime, true, project.canvas.fps)}</b> <i>/</i> {formatTime(project.duration, true, project.canvas.fps)}</span><div className="transport-center"><button className="control-button" title="Önceki kare" onClick={() => stepFrame(-1)}>↶</button><button className="play-button" aria-label={playing ? 'Duraklat' : 'Oynat'} onClick={() => setPlaying(!playing)}>{playing ? 'Ⅱ' : '▶'}</button><button className="control-button" title="Sonraki kare" onClick={() => stepFrame(1)}>↷</button></div><div className="transport-right"><button className="control-button" title="Başa sar" onClick={() => { setPlaying(false); setCurrentTime(0); }}>⌁</button><button className="quality-button" onClick={cycleQuality} title="Preview kalitesini değiştir">{settings?.proxyQuality === 'draft' ? 'Draft' : settings?.proxyQuality === 'high' ? 'High' : 'Balanced'}⌄</button></div></div></main>;
+    {texts.map(({ clip, style }) => { const visual = clipVisualValues(clip, currentTime); const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale); const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id)); return <div key={clip.id} className={`preview-text preview-layer ${selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} role="button" tabIndex={0} aria-label={`${style.text || clip.name} seç`} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} style={{ left: '50%', top: '50%', bottom: 'auto', width: bounds.width * canvasScale, zIndex: 100 + (clip.start || 0), pointerEvents: 'auto', transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`, opacity: visual.opacity, fontFamily: style.fontFamily, fontSize: Math.max(12, style.fontSize * canvasScale), color: style.color, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecoration: style.textDecoration, letterSpacing: `${style.letterSpacing * canvasScale}px`, lineHeight: style.lineHeight, padding: `${style.padding * canvasScale}px`, background: style.background, clipPath: transitionClipPath(visual.wipe), WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`, textShadow: style.shadow ? '0 2px 8px #000' : 'none', textAlign: style.align }}>{style.text}</div>; })}
+    {activeSelected && activeSelectedVisual && <div className="preview-transform-box" style={{ zIndex: 300, left: '50%', top: '50%', width: selectedBounds.width * canvasScale, height: selectedBounds.height * canvasScale, transform: `translate(-50%, -50%) translate(${activeSelectedVisual.x * canvasScale}px, ${activeSelectedVisual.y * canvasScale}px) rotate(${activeSelectedVisual.rotation}deg) scale(${activeSelectedVisual.scale})` }}><span className="preview-transform-label">{activeSelected.clip.type === 'text' ? 'Metin' : activeSelected.clip.type === 'subtitle' ? 'Altyazı' : activeSelected.clip.type === 'image' ? 'Görsel' : 'Video'}</span><button className="preview-scale-handle" aria-label="Önizlemede yeniden boyutlandır" onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} /></div>}
+    {showSafeArea && <div className="safe-area" />}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div className="preview-controls"><span className="preview-time"><b>{formatTime(currentTime, true, project.canvas.fps)}</b> <i>/</i> {formatTime(project.duration, true, project.canvas.fps)}</span><div className="transport-center"><button className="control-button" title="Önceki kare" onClick={() => stepFrame(-1)}>↶</button><button className="play-button" aria-label={playing ? 'Duraklat' : 'Oynat'} onClick={() => setPlaying(!playing)}>{playing ? 'Ⅱ' : '▶'}</button><button className="control-button" title="Sonraki kare" onClick={() => stepFrame(1)}>↷</button></div><div className="transport-right"><button className="control-button" title="Başa sar" onClick={() => { setPlaying(false); setCurrentTime(0); }}>⌁</button><button className="quality-button" onClick={cycleQuality} title="Preview kalitesini değiştir">{settings?.proxyQuality === 'draft' ? 'Draft' : settings?.proxyQuality === 'high' ? 'High' : 'Balanced'}⌄</button></div></div></main>;
 }
 
 function InspectorLegacy({ project }: { project: Project }) {
@@ -1847,6 +2198,7 @@ function Inspector({ project }: { project: Project }) {
   const currentTime = useEditor((state) => state.currentTime);
   const mutateProject = useEditor((state) => state.mutateProject);
   const setSelected = useEditor((state) => state.setSelected);
+  const setPanel = useEditor((state) => state.setPanel);
   const [activeGroup, setActiveGroup] = useState<'layout' | 'motion' | 'audio'>('layout');
   const [activeInspectorTab, setActiveInspectorTab] = useState<'primary' | 'audio' | 'speed' | 'motion' | 'adjust'>('primary');
   const selected = project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
@@ -1903,6 +2255,7 @@ function Inspector({ project }: { project: Project }) {
       {(selected.type === 'video' || selected.type === 'image') && <div className="inspector-button-row"><button className={selected.transform.flipX ? 'active' : ''} onClick={() => update((clip) => { clip.transform.flipX = !clip.transform.flipX; })}>↔ Yatay çevir</button><button className={selected.transform.flipY ? 'active' : ''} onClick={() => update((clip) => { clip.transform.flipY = !clip.transform.flipY; })}>↕ Dikey çevir</button></div>}
     </InspectorSection>}
     {activeGroup === 'motion' && <InspectorSection id="inspector-motion" title="Animasyon keyframe'leri">
+      <div className="inspector-animation-launch"><div><strong>Geçiş davranışı</strong><small>Fade, Kaydır ve Yakınlaş seçeneklerini önizleyerek seç.</small></div><button onClick={() => setPanel('animation')}>Stüdyoyu aç ↗</button></div>
       <div className="inspector-button-row keyframe-buttons"><button onClick={() => addKeyframe('x')}>X</button><button onClick={() => addKeyframe('y')}>Y</button><button onClick={() => addKeyframe('scale')}>Scale</button><button onClick={() => addKeyframe('rotation')}>Rotate</button><button onClick={() => addKeyframe('opacity')}>Opacity</button>{(selected.type === 'audio' || selected.type === 'video') && <button onClick={() => addKeyframe('volume')}>Volume</button>}</div>
       <div className="inspector-tip">Playhead'i taşıyıp bir özellik düğmesine basarak animasyon noktası ekleyin. Easing düğmeleri aşağıdaki grafikten değişir.</div>
     </InspectorSection>}
@@ -2565,4 +2918,9 @@ function AppWrapper() {
   return <StrictMode><UiLanguageBoundary language={language}><App /></UiLanguageBoundary></StrictMode>;
 }
 
-createRoot(document.getElementById('root')!).render(<AppWrapper />);
+const rootElement = document.getElementById('root');
+if (!rootElement) throw new Error('CutLoc root elementi bulunamadı.');
+const root = createRoot(rootElement);
+root.render(<AppWrapper />);
+const hot = (import.meta as ImportMeta & { hot?: { dispose: (callback: () => void) => void } }).hot;
+hot?.dispose(() => root.unmount());

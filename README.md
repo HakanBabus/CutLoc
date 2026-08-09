@@ -30,6 +30,20 @@ It is:
 - a local FFmpeg workflow for previews, derived media, and exports;
 - an experimental project for interface and editing-workflow exploration.
 
+It includes:
+- **Local-first workspace** — projects, media, proxies, thumbnails, waveforms, backups, and exports are stored locally.
+- **Multi-track timeline** — arrange clips across layers, move them between compatible tracks, trim, split, duplicate, ripple-delete, and snap to useful boundaries.
+- **Frame-aware editing** — move the playhead, markers, and selected clips using project frame precision.
+- **Direct canvas editing** — click a visible text or media object to select the matching timeline clip and Inspector, then position, scale, rotate, flip, or adjust opacity while viewing the result.
+- **Zoomable preview** — fit the canvas to the workspace, zoom in with a compact control, and scroll across the enlarged canvas without losing object selection.
+- **Motion studio** — apply in, out, or combined animation presets, then tune duration, direction, easing, intensity, and linked timing.
+- **Structured Inspector** — edit layout, trim, speed, animation, appearance, filters, keyframes, transitions, audio, text, and subtitles.
+- **Media library** — import video, audio, and images; search, filter, sort, preview, and drag items onto the timeline.
+- **Creative building blocks** — built-in stock surfaces, shapes inside the Media area, text styles, captions, and SRT/VTT subtitle import.
+- **In-app help center** — searchable, topic-based guidance with shortcuts and direct links to the relevant editor panel.
+- **Flexible workspace** — resize the tool rail, library, Inspector, preview, and timeline; saved layout settings persist locally.
+- **Local export** — render MP4 video or MP3/WAV audio with selectable resolution, frame rate, quality, and range.
+- **Safety-oriented project handling** — autosave, revision checks, backups, a recoverable trash area, and partial-output cleanup.
 It is not:
 
 - a hosted video platform or collaboration service;
@@ -87,13 +101,13 @@ Preview changes on the canvas, use the transport controls to move frame by frame
 | --- | --- |
 | Local dashboard and project storage | Available locally |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
-| Media search, filtering, sorting, list/card views | Available |
+| Media search, filtering, sorting, list/card views | Available; imported media also gets derived previews |
 | Multi-track timeline editing | Available; still evolving |
 | Canvas and Inspector controls | Available; parity varies by media and effect combination |
 | Text, shapes, captions, SRT/VTT import | Available; still evolving |
 | MP4, MP3, and WAV export | Available through local FFmpeg; export is re-encoded rather than lossless |
 | Autosave, revision checks, backups, and trash | Available locally |
-| English and Turkish interface | Experimental; some labels and copy may still be incomplete |
+| English and Turkish interface | Dictionary-based editor coverage; some legacy labels and copy may still be incomplete |
 | AI Chat | Visible as a disabled future placeholder |
 | Automatic subtitles/transcription | Not available as a core feature |
 | Hosted or collaborative editing | Not supported |
