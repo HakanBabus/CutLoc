@@ -460,7 +460,7 @@ function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRes
       {loading ? <div className="empty-state"><div className="spinner" /> Projeler yükleniyor…</div> : projects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">✦</div><h3>İlk hikâyeni başlat</h3><p>Bir proje oluştur ve medya dosyalarını sürükleyerek timeline’a ekle.</p><button className="secondary-button" onClick={onCreate}>Yeni proje</button></div> : <div className="project-grid">{projects.map((item) => <ProjectCard key={item.id} project={item} onOpen={() => onOpen(item.id)} onDelete={() => onDelete(item.id)} />)}</div>}
     </section>
     <TrashSection entries={trash} onRestore={onRestoreTrash} onPurge={onPurgeTrash} />
-    <footer className="dashboard-footer"><span><i className="status-dot" /> Verilerin cihazında kalır</span><span>CutLoc <b>v0.0.1</b></span></footer>
+    <footer className="dashboard-footer"><span><i className="status-dot" /> Verilerin cihazında kalır</span><span>CutLoc <b>v0.0.2</b></span></footer>
   </main>;
 }
 
