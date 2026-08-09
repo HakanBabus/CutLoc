@@ -10,7 +10,6 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
-import mime from 'mime-types';
 import {
   defaultProject,
   defaultSettings,
@@ -18,6 +17,7 @@ import {
   exportDimensions,
   ProjectSchema,
   ExportOptionsSchema,
+  JobSchema,
   SettingsSchema,
   type Asset,
   type ExportOptions,
@@ -47,7 +47,8 @@ const maxConcurrentJobs = 2;
 
 type SseClient = { reply: FastifyReply };
 const clients = new Set<SseClient>();
-const jobs = new Map<string, Job>();
+type InternalJob = Job & { outputPath?: string; absoluteOutputPath?: string; relativeOutputPath?: string };
+const jobs = new Map<string, InternalJob>();
 const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
 let settings: Settings = defaultSettings();
 const transientKeys = { openai: '', gemini: '' };
@@ -206,10 +207,11 @@ async function probeMedia(file: string) {
     child.once('close', () => {
       clearTimeout(timeout);
       try {
-        const parsed = JSON.parse(out) as { format?: { duration?: string }; streams?: Array<Record<string, unknown>> };
+        const parsed = JSON.parse(out) as { format?: { duration?: string; format_name?: string }; streams?: Array<Record<string, unknown>> };
         const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
         const audio = parsed.streams?.some((stream) => stream.codec_type === 'audio') ?? false;
         resolve({
+          formatName: parsed.format?.format_name,
           duration: Number(parsed.format?.duration ?? video?.duration ?? 0),
           width: Number(video?.width ?? 0) || undefined,
           height: Number(video?.height ?? 0) || undefined,
@@ -217,14 +219,20 @@ async function probeMedia(file: string) {
             ? Number(video.r_frame_rate.split('/')[0]) / Number(video.r_frame_rate.split('/')[1])
             : undefined,
           hasAudio: audio,
+          hasVideo: Boolean(video),
         });
       } catch { resolve({}); }
     });
   });
 }
 
-function publicJob(job: Job) {
-  return job;
+function publicJob(job: InternalJob): Job {
+  const safeJob = { ...job };
+  delete safeJob.outputPath;
+  delete safeJob.absoluteOutputPath;
+  delete safeJob.relativeOutputPath;
+  if (job.kind === 'export') safeJob.downloadUrl = `/api/jobs/${job.id}/download`;
+  return JobSchema.parse(safeJob);
 }
 
 function publish(event: string, data: unknown) {
@@ -232,7 +240,7 @@ function publish(event: string, data: unknown) {
   for (const client of clients) client.reply.raw.write(payload);
 }
 
-function updateJob(jobId: string, patch: Partial<Job>) {
+function updateJob(jobId: string, patch: Partial<InternalJob>) {
   const job = jobs.get(jobId);
   if (!job) return;
   const next = { ...job, ...patch, updatedAt: new Date().toISOString() };
@@ -249,12 +257,12 @@ function pruneJobs() {
   for (const job of removable.slice(0, Math.max(0, jobs.size - maxJobHistory))) jobs.delete(job.id);
 }
 
-async function makeJob(projectId: string, kind: Job['kind'], runner: (job: Job) => Promise<void>) {
+async function makeJob(projectId: string, kind: Job['kind'], runner: (job: InternalJob) => Promise<void>) {
   const now = new Date().toISOString();
   const job: Job = { id: id('job'), projectId, kind, status: 'queued', progress: 0, createdAt: now, updatedAt: now };
   jobs.set(job.id, job);
   pruneJobs();
-  publish('job', job);
+  publish('job', publicJob(job));
   // A cancelled process can still reject while its child is being reaped.  Do
   // not turn that expected rejection into a misleading "failed" state.
   void runner(job).catch((error: unknown) => {
@@ -731,9 +739,44 @@ async function listBackups(projectId: string) {
   return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function extensionFor(name: string, fallback = '.bin') {
-  const ext = path.extname(name).toLowerCase();
-  return ext && ext.length < 12 ? ext : fallback;
+type UploadedMediaType = 'image' | 'audio' | 'video';
+type MediaExtensionInfo = { type: UploadedMediaType; mimeType: string; storedExtension: string };
+
+const mediaExtensionInfo: Record<string, MediaExtensionInfo> = {
+  '.png': { type: 'image', mimeType: 'image/png', storedExtension: '.png' },
+  '.jpg': { type: 'image', mimeType: 'image/jpeg', storedExtension: '.jpg' },
+  '.jpeg': { type: 'image', mimeType: 'image/jpeg', storedExtension: '.jpg' },
+  '.gif': { type: 'image', mimeType: 'image/gif', storedExtension: '.gif' },
+  '.webp': { type: 'image', mimeType: 'image/webp', storedExtension: '.webp' },
+  '.bmp': { type: 'image', mimeType: 'image/bmp', storedExtension: '.bmp' },
+  '.tif': { type: 'image', mimeType: 'image/tiff', storedExtension: '.tif' },
+  '.tiff': { type: 'image', mimeType: 'image/tiff', storedExtension: '.tif' },
+  '.mp3': { type: 'audio', mimeType: 'audio/mpeg', storedExtension: '.mp3' },
+  '.wav': { type: 'audio', mimeType: 'audio/wav', storedExtension: '.wav' },
+  '.m4a': { type: 'audio', mimeType: 'audio/mp4', storedExtension: '.m4a' },
+  '.aac': { type: 'audio', mimeType: 'audio/aac', storedExtension: '.aac' },
+  '.ogg': { type: 'audio', mimeType: 'audio/ogg', storedExtension: '.ogg' },
+  '.oga': { type: 'audio', mimeType: 'audio/ogg', storedExtension: '.oga' },
+  '.flac': { type: 'audio', mimeType: 'audio/flac', storedExtension: '.flac' },
+  '.opus': { type: 'audio', mimeType: 'audio/ogg', storedExtension: '.opus' },
+  '.mp4': { type: 'video', mimeType: 'video/mp4', storedExtension: '.mp4' },
+  '.webm': { type: 'video', mimeType: 'video/webm', storedExtension: '.webm' },
+  '.mov': { type: 'video', mimeType: 'video/quicktime', storedExtension: '.mov' },
+  '.mkv': { type: 'video', mimeType: 'video/x-matroska', storedExtension: '.mkv' },
+  '.avi': { type: 'video', mimeType: 'video/x-msvideo', storedExtension: '.avi' },
+  '.m4v': { type: 'video', mimeType: 'video/x-m4v', storedExtension: '.m4v' },
+};
+
+const imageProbeFormats = new Set(['png_pipe', 'jpeg_pipe', 'gif', 'webp_pipe', 'bmp_pipe', 'tiff', 'image2', 'image2pipe']);
+const containerProbeFormats = new Set(['wav', 'mp3', 'mp4', 'mov', 'm4a', '3gp', '3g2', 'mj2', 'matroska', 'webm', 'avi', 'ogg', 'oga', 'flac', 'aac', 'image2']);
+
+function detectedMediaType(probed: Record<string, unknown>): UploadedMediaType | undefined {
+  const formats = String(probed.formatName ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+  if (formats.some((format) => imageProbeFormats.has(format))) return 'image';
+  if (!formats.some((format) => containerProbeFormats.has(format))) return undefined;
+  if (probed.hasVideo === true) return 'video';
+  if (probed.hasAudio === true) return 'audio';
+  return undefined;
 }
 
 async function registerRoutes(app: FastifyInstance) {
@@ -919,42 +962,49 @@ async function registerRoutes(app: FastifyInstance) {
       return reply.code(code === 'FST_REQ_FILE_TOO_LARGE' ? 413 : 400).send({ error: code === 'FST_REQ_FILE_TOO_LARGE' ? 'Dosya boyutu izin verilen sınırı aşıyor.' : 'Dosya okunamadı.' });
     }
     if (!part) return reply.code(400).send({ error: 'Dosya gönderilmedi' });
-    const extension = extensionFor(part.filename);
-    const mimeType = String(part.mimetype || '').toLowerCase();
-    const imageExtension = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(extension);
-    const audioExtension = /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i.test(extension);
-    const videoExtension = /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(extension);
-    const supportedMime = mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/');
-    if (!supportedMime && !imageExtension && !audioExtension && !videoExtension) {
-      return reply.code(415).send({ error: 'Bu medya türü desteklenmiyor' });
+    const extension = path.extname(part.filename).toLowerCase();
+    const expected = mediaExtensionInfo[extension];
+    const declaredMimeType = String(part.mimetype || '').toLowerCase().split(';')[0];
+    if (!expected || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) {
+      return reply.code(415).send({ error: 'Bu medya türü desteklenmiyor veya dosya bilgileri uyuşmuyor' });
     }
     const assetId = id('asset');
-    const storedName = `${assetId}${extension}`;
-    const relativePath = path.join('media', storedName);
-    const absolutePath = safeJoin(projectPath(project.id), relativePath);
-    await ensureDir(path.dirname(absolutePath));
+    const uploadRelativePath = path.join('media', `${assetId}.upload`);
+    const uploadAbsolutePath = safeJoin(projectPath(project.id), uploadRelativePath);
+    await ensureDir(path.dirname(uploadAbsolutePath));
     try {
-      await pipeline(part.file, fs.createWriteStream(absolutePath));
+      await pipeline(part.file, fs.createWriteStream(uploadAbsolutePath));
     } catch {
-      await fsp.rm(absolutePath, { force: true });
+      await fsp.rm(uploadAbsolutePath, { force: true });
       return reply.code(400).send({ error: 'Medya yüklemesi tamamlanamadı' });
     }
+    const probed = await probeMedia(uploadAbsolutePath);
+    const detectedType = detectedMediaType(probed);
+    if (detectedType !== expected.type) {
+      await fsp.rm(uploadAbsolutePath, { force: true });
+      return reply.code(415).send({ error: 'Medya içeriği dosya uzantısıyla uyuşmuyor veya doğrulanamadı' });
+    }
+    const relativePath = path.join('media', `${assetId}${expected.storedExtension}`);
+    const absolutePath = safeJoin(projectPath(project.id), relativePath);
+    try {
+      await fsp.rename(uploadAbsolutePath, absolutePath);
+    } catch {
+      await fsp.rm(uploadAbsolutePath, { force: true });
+      return reply.code(400).send({ error: 'Medya kaydedilemedi' });
+    }
     const stat = await fsp.stat(absolutePath);
-    const probed = await probeMedia(absolutePath);
-    const isImage = mimeType.startsWith('image/') || imageExtension;
-    const isAudio = mimeType.startsWith('audio/') || audioExtension || (!probed.width && !probed.height && Boolean(probed.hasAudio));
     const asset: Asset = {
       id: assetId,
       name: part.filename,
-      type: isImage ? 'image' : isAudio ? 'audio' : 'video',
-      mimeType: mimeType || mime.getType(extension) || 'application/octet-stream',
+      type: expected.type,
+      mimeType: expected.mimeType,
       path: relativePath,
       size: stat.size,
       duration: Number(probed.duration ?? 0),
       width: Number(probed.width ?? 0) || undefined,
       height: Number(probed.height ?? 0) || undefined,
       fps: Number(probed.fps ?? 0) || undefined,
-      hasAudio: Boolean(probed.hasAudio ?? isAudio),
+      hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'),
       createdAt: new Date().toISOString(),
     };
     const next = await withProjectLock(project.id, async () => {
@@ -997,7 +1047,7 @@ async function registerRoutes(app: FastifyInstance) {
       }
       updateJob(jobInfo.id, { status: 'completed', progress: 1, message: 'Medya hazır' });
     });
-    return reply.code(201).send({ asset, job, project: next });
+    return reply.code(201).send({ asset, job: publicJob(job), project: next });
   });
 
   app.get<{ Params: { projectId: string; assetId: string }; Querystring: { proxy?: string; waveform?: string; thumbnail?: string } }>('/api/projects/:projectId/media/:assetId', async (request, reply) => {
@@ -1075,10 +1125,28 @@ async function registerRoutes(app: FastifyInstance) {
       updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: 'Export tamamlandı' });
     });
     updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
-    return reply.code(202).send({ job, preflight });
+    return reply.code(202).send({ job: publicJob(job), preflight });
   });
 
-  app.get('/api/jobs', async () => Array.from(jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  app.get<{ Params: { jobId: string } }>('/api/jobs/:jobId/download', async (request, reply) => {
+    const job = jobs.get(request.params.jobId);
+    if (!job || job.kind !== 'export') return reply.code(404).send({ error: 'Export işi bulunamadı' });
+    if (job.status !== 'completed') return reply.code(409).send({ error: 'Export henüz hazır değil' });
+    if (!job.relativeOutputPath || !job.fileName) return reply.code(404).send({ error: 'Export dosyası bulunamadı' });
+    let file: string;
+    try { file = safeExistingPath(projectPath(job.projectId), job.relativeOutputPath); }
+    catch { return reply.code(404).send({ error: 'Export dosyası bulunamadı' }); }
+    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Export dosyası bulunamadı' });
+    const stat = await fsp.stat(file);
+    const contentType = job.format === 'mp4' ? 'video/mp4' : job.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+    const fileName = path.basename(job.fileName).replace(/["\r\n]/g, '-');
+    return reply.header('Content-Type', contentType)
+      .header('Content-Disposition', `attachment; filename="${fileName}"`)
+      .header('Content-Length', stat.size)
+      .send(fs.createReadStream(file));
+  });
+
+  app.get('/api/jobs', async () => Array.from(jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(publicJob));
   app.delete<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
     if (!jobs.has(request.params.jobId)) return reply.code(404).send({ error: 'İş bulunamadı' });
     const process = jobProcesses.get(request.params.jobId);

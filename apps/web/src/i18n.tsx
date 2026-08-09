@@ -76,7 +76,7 @@ const ENGLISH: Record<string, string> = {
   'Frame rate': 'Frame rate', 'Ses bitrate': 'Audio bitrate', 'Kalite': 'Quality', 'Taslak': 'Draft', 'Standart': 'Standard',
   'Yüksek': 'High', 'Gelişmiş': 'Advanced', 'Kapsam': 'Range', 'Tüm timeline': 'Entire timeline', 'belirlenmedi': 'not set',
   'Dosya adı': 'File name', 'Video export': 'Video export', 'Ses export': 'Audio export', 'Hazırlanıyor': 'Preparing',
-  'Hazır': 'Ready', 'Kopyalandı': 'Copied', 'Yolu kopyala': 'Copy path', 'Yeniden export': 'Export again',
+  'Hazır': 'Ready', 'Kopyalandı': 'Copied', 'Yolu kopyala': 'Copy path', 'İndir': 'Download', 'Yeniden export': 'Export again',
   'Export ediliyor…': 'Exporting…', 'FFmpeg yerel olarak çalışır': 'FFmpeg runs locally',
   'Aç': 'Open', 'İptal': 'Cancel', 'Onayla': 'Confirm', 'Ara': 'Search', 'Daha fazla': 'More',
   'Seçimi kaldır': 'Clear selection', 'Metin klibi': 'Text clip', 'Görsel klibi': 'Image clip',

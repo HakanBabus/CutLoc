@@ -339,11 +339,9 @@ export type ExportPreflight = z.infer<typeof ExportPreflightSchema>;
 export const ExportJobResultSchema = z.object({
   jobId: z.string(),
   status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
-  outputPath: z.string().optional(),
-  absoluteOutputPath: z.string().optional(),
-  relativeOutputPath: z.string().optional(),
   fileName: z.string().optional(),
   format: ExportFormatSchema.optional(),
+  downloadUrl: z.string().optional(),
 });
 export type ExportJobResult = z.infer<typeof ExportJobResultSchema>;
 
@@ -354,11 +352,9 @@ export const JobSchema = z.object({
   status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
   progress: z.number().min(0).max(1).default(0),
   message: z.string().optional(),
-  outputPath: z.string().optional(),
-  absoluteOutputPath: z.string().optional(),
-  relativeOutputPath: z.string().optional(),
   fileName: z.string().optional(),
   format: ExportFormatSchema.optional(),
+  downloadUrl: z.string().optional(),
   phase: z.string().optional(),
   etaSeconds: z.number().nonnegative().optional(),
   error: z.string().optional(),

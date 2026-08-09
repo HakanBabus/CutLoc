@@ -505,7 +505,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   const [exportMessage, setExportMessage] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showExport, setShowExport] = useState(false);
-  const [exportStatus, setExportStatus] = useState<{ jobId?: string; status?: string; progress: number; message?: string; absoluteOutputPath?: string; fileName?: string; error?: string }>({ progress: 0 });
+  const [exportStatus, setExportStatus] = useState<{ jobId?: string; status?: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string }>({ progress: 0 });
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>({ ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) });
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
@@ -725,9 +725,9 @@ function Editor({ onBack }: { onBack: () => void }) {
       void new Promise<void>((resolve) => {
         const eventSource = new EventSource('/api/events');
         eventSource.addEventListener('job', (event) => {
-          const job = JSON.parse((event as MessageEvent).data) as { id: string; status: string; progress: number; message?: string; absoluteOutputPath?: string; fileName?: string; error?: string };
+          const job = JSON.parse((event as MessageEvent).data) as { id: string; status: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string };
           if (job.id !== jobId) return;
-          setExportStatus({ jobId, progress: job.progress ?? 0, status: job.status, message: job.message, absoluteOutputPath: job.absoluteOutputPath, fileName: job.fileName, error: job.error });
+          setExportStatus({ jobId, progress: job.progress ?? 0, status: job.status, message: job.message, downloadUrl: job.downloadUrl, fileName: job.fileName, error: job.error });
           if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
             setExporting(false);
             eventSource.close();
@@ -755,7 +755,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   </div>;
 }
 
-function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: { jobId?: string; status?: string; progress: number; message?: string; absoluteOutputPath?: string; fileName?: string; error?: string }; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
+function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: { jobId?: string; status?: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string }; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
   const defaults = settings?.defaultExport;
   // Export always follows the project canvas.  Aspect changes belong to the
   // Preview toolbar; keeping a second profile picker here made output sizing
@@ -773,7 +773,6 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [fileName, setFileName] = useState(`${project.name}-export`);
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState<ExportPreflight | null>(null);
-  const [copied, setCopied] = useState(false);
   const done = status.status === 'completed';
   const canvasHint = `${project.canvas.width} × ${project.canvas.height}`;
   const outputSize = exportDimensions(aspect, resolution, { width: project.canvas.width, height: project.canvas.height });
@@ -796,12 +795,6 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
     try { setPreflight(await onStart(options())); }
     catch (submitError) { setError(submitError instanceof Error ? submitError.message : 'Export başlatılamadı'); }
   };
-  const copyPath = async () => {
-    if (!status.absoluteOutputPath) return;
-    await navigator.clipboard?.writeText(status.absoluteOutputPath);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-  };
   return <div className="modal-backdrop export-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) onClose(); }}><section className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
     <div className="modal-head"><div><p className="eyebrow">Render studio</p><h2 id="export-title">Dışa aktarma</h2><small>{project.name} · {formatTime(project.duration)} timeline</small></div><button onClick={onClose} disabled={exporting} aria-label="Kapat">×</button></div>
     <div className="export-layout">
@@ -813,7 +806,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
         <div className="export-section"><span className="export-label">Kapsam</span><div className="scope-toggle"><button className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')} disabled={exporting}>Tüm timeline</button><button className={scope === 'range' ? 'active' : ''} onClick={() => setScope('range')} disabled={exporting || rangeStart === null || rangeEnd === null}>In–Out {rangeStart !== null && rangeEnd !== null ? `(${formatTime(rangeEnd - rangeStart)})` : 'belirlenmedi'}</button></div></div>
         <label className="export-file-name"><span>Dosya adı</span><input value={fileName} onChange={(event) => setFileName(event.target.value)} disabled={exporting} /></label>
       </div>
-      <aside className="export-summary"><div className="summary-icon">↗</div><strong>{format === 'mp4' ? 'Video export' : 'Ses export'}</strong><p>{format === 'mp4' ? `${aspect} · ${outputHint} · ${fps} FPS` : `${format.toUpperCase()} · ${audioBitrateKbps} kbps`}</p><div className="summary-row"><span>Kalite</span><b>{quality === 'draft' ? 'Taslak' : quality === 'standard' ? 'Standart' : quality === 'high' ? 'Yüksek' : 'Özel'}</b></div><div className="summary-row"><span>Codec</span><b>{format === 'mp4' ? 'H.264 / AAC' : format.toUpperCase()}</b></div>{preflight?.warnings.map((warning) => <div className="export-warning" key={warning.code}>⚠ {warning.message}</div>)}{status.status && <div className="export-progress"><div className="progress-head"><span>{status.message || 'Hazırlanıyor'}</span><b>{Math.round(status.progress * 100)}%</b></div><div className="progress-track"><i style={{ width: `${Math.max(2, status.progress * 100)}%` }} /></div></div>}{status.error && <div className="export-error">{status.error}</div>}{done && status.absoluteOutputPath && <div className="export-complete"><span>✓ Hazır</span><strong>{status.fileName}</strong><code title={status.absoluteOutputPath}>{status.absoluteOutputPath}</code><button className="secondary-button" onClick={() => void copyPath()}>{copied ? 'Kopyalandı' : 'Yolu kopyala'}</button></div>}</aside>
+      <aside className="export-summary"><div className="summary-icon">↗</div><strong>{format === 'mp4' ? 'Video export' : 'Ses export'}</strong><p>{format === 'mp4' ? `${aspect} · ${outputHint} · ${fps} FPS` : `${format.toUpperCase()} · ${audioBitrateKbps} kbps`}</p><div className="summary-row"><span>Kalite</span><b>{quality === 'draft' ? 'Taslak' : quality === 'standard' ? 'Standart' : quality === 'high' ? 'Yüksek' : 'Özel'}</b></div><div className="summary-row"><span>Codec</span><b>{format === 'mp4' ? 'H.264 / AAC' : format.toUpperCase()}</b></div>{preflight?.warnings.map((warning) => <div className="export-warning" key={warning.code}>⚠ {warning.message}</div>)}{status.status && <div className="export-progress"><div className="progress-head"><span>{status.message || 'Hazırlanıyor'}</span><b>{Math.round(status.progress * 100)}%</b></div><div className="progress-track"><i style={{ width: `${Math.max(2, status.progress * 100)}%` }} /></div></div>}{status.error && <div className="export-error">{status.error}</div>}{done && status.downloadUrl && <div className="export-complete"><span>✓ Hazır</span><strong>{status.fileName}</strong><a className="secondary-button" href={status.downloadUrl} download={status.fileName}>İndir</a></div>}</aside>
     </div>
     {error && <div className="export-error export-error-bottom">{error}{error.toLocaleLowerCase('tr-TR').includes('timeline') && <button className="secondary-button export-recovery-button" onClick={() => { if (onAddFirstAsset()) setError(''); }}>Kütüphanedeki medyayı timeline'a ekle</button>}</div>}
     <div className="modal-actions"><span>{preflight?.estimatedBytes ? `Tahmini boyut: ${(preflight.estimatedBytes / 1024 / 1024).toFixed(1)} MB` : 'FFmpeg yerel olarak çalışır'}</span><button className="secondary-button" onClick={onClose} disabled={exporting}>Kapat</button><button className="primary-button export-start-button" onClick={() => void submit()} disabled={exporting}>{exporting ? 'Export ediliyor…' : done ? 'Yeniden export' : 'Dışa aktar'}</button></div>

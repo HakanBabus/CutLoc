@@ -70,6 +70,11 @@ async function waitForJob(jobId, timeoutMs = 10000) {
   throw new Error(`Job ${jobId} zaman aşımına uğradı`);
 }
 
+function exportFilePath(projectId, fileName) {
+  assert.equal(typeof fileName, 'string');
+  return path.join(dataDir, 'projects', projectId, 'exports', fileName);
+}
+
 function probeVideoDimensions(filePath) {
   const result = spawnSync(ffprobePath, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,codec_name,r_frame_rate', '-of', 'json', filePath], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || 'ffprobe failed');
@@ -222,9 +227,19 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal(preflightResponse.json().ok, true);
   const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', fileName: 'stock-fixture.mp4' });
   assert.equal(exportResponse.statusCode, 202);
+  assert.equal('absoluteOutputPath' in exportResponse.json().job, false);
+  assert.equal('outputPath' in exportResponse.json().job, false);
+  assert.equal('relativeOutputPath' in exportResponse.json().job, false);
+  assert.equal(exportResponse.json().job.downloadUrl, `/api/jobs/${exportResponse.json().job.id}/download`);
   const exportJob = await waitForJob(exportResponse.json().job.id);
   assert.equal(exportJob.status, 'completed');
-  assert.equal((await fsp.stat(exportJob.absoluteOutputPath)).size > 0, true);
+  assert.equal('absoluteOutputPath' in exportJob, false);
+  const exportOutputPath = exportFilePath(created.id, exportJob.fileName);
+  assert.equal((await fsp.stat(exportOutputPath)).size > 0, true);
+  const downloadResponse = await app.inject({ method: 'GET', url: exportJob.downloadUrl });
+  assert.equal(downloadResponse.statusCode, 200);
+  assert.match(downloadResponse.headers['content-disposition'], /attachment/);
+  assert.equal(downloadResponse.headers['content-type'], 'video/mp4');
   const export4kResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, {
     format: 'mp4',
     aspect: '16:9',
@@ -237,7 +252,7 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal(export4kResponse.statusCode, 202);
   const export4kJob = await waitForJob(export4kResponse.json().job.id, 30000);
   assert.equal(export4kJob.status, 'completed');
-  assert.deepEqual(probeVideoDimensions(export4kJob.absoluteOutputPath), { width: 3840, height: 2160, codec: 'h264', frameRate: '24/1' });
+  assert.deepEqual(probeVideoDimensions(exportFilePath(created.id, export4kJob.fileName)), { width: 3840, height: 2160, codec: 'h264', frameRate: '24/1' });
   const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   const purgedResponse = await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
   assert.equal(purgedResponse.statusCode, 200);
@@ -247,7 +262,18 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   const createdResponse = await jsonRequest('POST', '/api/projects', { name: 'Fixture proje' });
   assert.equal(createdResponse.statusCode, 201);
   const created = createdResponse.json();
-  const multipart = multipartFile('file', 'tone.wav', 'audio/wav', makeWavFixture());
+  const invalidMultipart = multipartFile('file', 'payload.png', 'image/png', Buffer.from('<!doctype html><script>document.body.innerHTML = "stored"</script>'));
+  const invalidUploadResponse = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + created.id + '/media',
+    headers: { 'content-type': `multipart/form-data; boundary=${invalidMultipart.boundary}` },
+    payload: invalidMultipart.payload,
+  });
+  assert.equal(invalidUploadResponse.statusCode, 415);
+  assert.match(invalidUploadResponse.json().error, /doğrulanamadı/i);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json().assets.length, 0);
+
+  const multipart = multipartFile('file', 'tone.wav', 'application/octet-stream', makeWavFixture());
   const uploadResponse = await app.inject({
     method: 'POST',
     url: '/api/projects/' + created.id + '/media',
@@ -257,6 +283,7 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(uploadResponse.statusCode, 201);
   const upload = uploadResponse.json();
   assert.equal(upload.asset.type, 'audio');
+  assert.equal(upload.asset.mimeType, 'audio/wav');
   assert.equal(upload.asset.hasAudio, true);
   const proxyJob = await waitForJob(upload.job.id);
   assert.equal(proxyJob.status, 'completed');
@@ -288,13 +315,12 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(exportResponse.statusCode, 202);
   const exportJob = await waitForJob(exportResponse.json().job.id);
   assert.equal(exportJob.status, 'completed');
-  const outputPath = exportJob.absoluteOutputPath;
-  assert.equal(typeof outputPath, 'string');
+  const outputPath = exportFilePath(created.id, exportJob.fileName);
   assert.equal((await fsp.stat(outputPath)).size > 0, true);
   const wavExportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'fixture.wav' });
   assert.equal(wavExportResponse.statusCode, 202);
   const wavExportJob = await waitForJob(wavExportResponse.json().job.id);
   assert.equal(wavExportJob.status, 'completed');
-  const wavHeader = await fsp.readFile(wavExportJob.absoluteOutputPath);
+  const wavHeader = await fsp.readFile(exportFilePath(created.id, wavExportJob.fileName));
   assert.equal(wavHeader.subarray(0, 4).toString('ascii'), 'RIFF');
 });

@@ -112,7 +112,7 @@ Preview changes on the canvas, use the transport controls to move frame by frame
 | Automatic subtitles/transcription | Not available as a core feature |
 | Hosted or collaborative editing | Not supported |
 
-For the exact import/export boundaries, see [the media and export matrix](docs/MEDIA_EXPORT_MATRIX.md). For the product guarantees and deliberate non-guarantees, see [the product contract](docs/PRODUCT_CONTRACT.md).
+The exact import/export boundaries and development contracts are kept as internal Codex working notes; they are intentionally not part of the public repository.
 
 ## Technology
 
@@ -178,13 +178,7 @@ http://127.0.0.1:4173
 | `npm start` | Build and start the production-style local server |
 | `npm audit --omit=dev --audit-level=high` | Check production dependency advisories |
 
-The current automated baseline does not include a registered browser test script. The web smoke path is documented as a manual release check in [docs/TESTING.md](docs/TESTING.md); this distinction keeps the public documentation honest about what CI actually runs.
-
-## Documentation map
-
-- [Product contract](docs/PRODUCT_CONTRACT.md) — local-first guarantees, experimental boundaries, project compatibility, and export behavior
-- [Media and export matrix](docs/MEDIA_EXPORT_MATRIX.md) — accepted file classes, output formats, options, and tested combinations
-- [Testing and baseline policy](docs/TESTING.md) — automated commands, CI gates, fixtures, and manual web smoke coverage
+The current automated baseline does not include a registered browser test script. The web smoke path remains a manual release check; this distinction keeps the public documentation honest about what CI actually runs.
 
 ## Local data
 
@@ -214,7 +208,7 @@ You can change the location with `DATA_DIR` in a local `.env` file. Never commit
 - Do not commit API keys, personal media, local projects, or exported files.
 - Treat media from unknown sources carefully; FFmpeg processes complex native formats and the current experimental build does not provide a full process sandbox.
 - AI settings are disabled by default and do not represent an active hosted provider workflow in this release.
-- GitHub Actions run build, test, and dependency-audit checks for repository changes; CodeQL is configured separately.
+- GitHub Actions run build, test, dependency-audit, and CodeQL checks for repository changes; CodeQL also runs on a weekly schedule.
 
 ## Contributing
 
@@ -234,4 +228,4 @@ In the pull request, explain the user-facing behavior, list validation performed
 
 ## License
 
-No open-source license has been selected yet. Until a license is added, the repository remains **all rights reserved** by default.
+CutLoc is released under the [MIT License](LICENSE), so you can use, modify, and redistribute it freely under that license.
