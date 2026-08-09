@@ -8,3 +8,5 @@ data/
 *.tsbuildinfo
 coverage/
 .vite/
+.codex/
+docs/
