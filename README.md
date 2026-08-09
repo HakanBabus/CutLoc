@@ -25,10 +25,13 @@ The application is designed around a simple principle: **your working media and 
 - **Local-first workspace** — projects, media, proxies, thumbnails, waveforms, backups, and exports are stored locally.
 - **Multi-track timeline** — arrange clips across layers, move them between compatible tracks, trim, split, duplicate, ripple-delete, and snap to useful boundaries.
 - **Frame-aware editing** — move the playhead, markers, and selected clips using project frame precision.
-- **Direct canvas editing** — position, scale, rotate, flip, and adjust clip opacity while viewing the result.
+- **Direct canvas editing** — click a visible text or media object to select the matching timeline clip and Inspector, then position, scale, rotate, flip, or adjust opacity while viewing the result.
+- **Zoomable preview** — fit the canvas to the workspace, zoom in with a compact control, and scroll across the enlarged canvas without losing object selection.
+- **Motion studio** — apply in, out, or combined animation presets, then tune duration, direction, easing, intensity, and linked timing.
 - **Structured Inspector** — edit layout, trim, speed, animation, appearance, filters, keyframes, transitions, audio, text, and subtitles.
 - **Media library** — import video, audio, and images; search, filter, sort, preview, and drag items onto the timeline.
-- **Creative building blocks** — built-in stock surfaces, shapes, text styles, captions, and SRT/VTT subtitle import.
+- **Creative building blocks** — built-in stock surfaces, shapes inside the Media area, text styles, captions, and SRT/VTT subtitle import.
+- **In-app help center** — searchable, topic-based guidance with shortcuts and direct links to the relevant editor panel.
 - **Flexible workspace** — resize the tool rail, library, Inspector, preview, and timeline; saved layout settings persist locally.
 - **Local export** — render MP4 video or MP3/WAV audio with selectable resolution, frame rate, quality, and range.
 - **Safety-oriented project handling** — autosave, revision checks, backups, a recoverable trash area, and partial-output cleanup.
@@ -55,7 +58,7 @@ CutLoc is currently an **experimental v0.0.1 project**. It is suitable for local
 | Layered timeline editing | Available, still evolving |
 | Canvas and Inspector controls | Available, still evolving |
 | MP4, MP3, and WAV export | Available through local FFmpeg |
-| English and Turkish UI | Experimental; some labels may still be incomplete |
+| English and Turkish UI | Dictionary-based coverage for the editor surfaces; legacy labels may still be incomplete |
 | AI Chat | Visible as a disabled future placeholder |
 | Hosted or collaborative editing | Not supported |
 

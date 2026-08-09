@@ -128,6 +128,11 @@ export type TextStyle = z.infer<typeof TextStyleSchema>;
 export const TransitionSchema = z.object({
   type: z.enum(['none', 'dissolve', 'fade', 'slide', 'wipe', 'zoom']).default('none'),
   duration: z.number().min(0).max(5).default(0.4),
+  /** Optional motion controls keep old project files valid while letting the
+   * preview and animation studio share one transition contract. */
+  direction: z.enum(['left', 'right', 'up', 'down', 'center']).optional(),
+  easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']).optional(),
+  intensity: z.number().min(0.1).max(2).optional(),
 });
 export type Transition = z.infer<typeof TransitionSchema>;
 
