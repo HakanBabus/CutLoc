@@ -13,7 +13,7 @@
 > [!WARNING]
 > **CutLoc v0.0.2 is experimental software.** Features are still changing, export and preview parity is not guaranteed for every media or effect combination, and project files may not remain compatible with future versions. Keep independent backups of important media and projects. Do not use this build as the only copy of production work.
 
-CutLoc is a single-user video editor that runs on your own computer. It brings a media library, multi-track timeline, live canvas, clip Inspector, text and caption tools, project recovery, and FFmpeg-based export into one local workspace.
+CutLoc is a single-user video editor that runs on your own computer. It brings a media library, multi-track timeline, live canvas, clip Inspector, text tools, project recovery, and FFmpeg-based export into one local workspace.
 
 The product is intentionally small and exploratory: it is a serious engineering playground, not a production platform. The goal is to make the core loop feel useful while keeping the local-first boundary clear.
 
@@ -26,7 +26,7 @@ CutLoc is designed around a simple principle: **your working media and project d
 It is:
 
 - a local browser interface backed by a Fastify server;
-- a frame-aware editor for arranging video, audio, image, text, and subtitle layers;
+- a frame-aware editor for arranging video, audio, image, text, and adjustment layers;
 - a local FFmpeg workflow for previews, derived media, and exports;
 - an experimental project for interface and editing-workflow exploration.
 
@@ -37,9 +37,9 @@ It includes:
 - **Direct canvas editing** — click a visible text or media object to select the matching timeline clip and Inspector, then position, scale, rotate, flip, or adjust opacity while viewing the result.
 - **Zoomable preview** — fit the canvas to the workspace, zoom in with a compact control, and scroll across the enlarged canvas without losing object selection.
 - **Motion studio** — apply in, out, or combined animation presets, then tune duration, direction, easing, intensity, and linked timing.
-- **Structured Inspector** — edit layout, trim, speed, animation, appearance, filters, keyframes, transitions, audio, text, and subtitles.
+- **Structured Inspector** — edit layout, trim, speed, animation, appearance, filters, crop, masks, keyframes, transitions, audio, and text.
 - **Media library** — import video, audio, and images; search, filter, sort, preview, and drag items onto the timeline.
-- **Creative building blocks** — built-in stock surfaces, shapes inside the Media area, text styles, captions, and SRT/VTT subtitle import.
+- **Creative building blocks** — built-in stock surfaces, shapes inside the Media area, text styles, and adjustment layers.
 - **In-app help center** — searchable, topic-based guidance with shortcuts and direct links to the relevant editor panel.
 - **Flexible workspace** — resize the tool rail, library, Inspector, preview, and timeline; saved layout settings persist locally.
 - **Local export** — render MP4 video or MP3/WAV audio with selectable resolution, frame rate, quality, and range.
@@ -83,9 +83,9 @@ Use the **Timeline** to do the practical editing work:
 
 The **Canvas** and **Inspector** work together. Choose an aspect such as `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; switch between fit, fill, and smart framing; zoom or use safe-area and fullscreen views; then adjust the selected clip’s position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, transitions, motion, and keyframes.
 
-### 5. Add text, captions, and visual building blocks
+### 5. Add text and visual building blocks
 
-The left tool rail exposes **Text**, **Captions**, **Project**, **Help**, and **Settings** surfaces. Text presets can be added to the timeline and edited in the Inspector. Shape presets, subtitle styling, and SRT/VTT import are available; automatic transcription is not a core feature in this release.
+The left tool rail exposes **Text**, **Animation**, **Project**, **Help**, and **Settings** surfaces. Text presets can be added to the timeline and edited in the Inspector. Shape presets and adjustment layers keep repeated visual changes manageable; caption and SRT/VTT import are intentionally outside the current editor scope.
 
 ### 6. Preview, save, and export
 
@@ -104,12 +104,11 @@ Preview changes on the canvas, use the transport controls to move frame by frame
 | Media search, filtering, sorting, list/card views | Available; imported media also gets derived previews |
 | Multi-track timeline editing | Available; still evolving |
 | Canvas and Inspector controls | Available; parity varies by media and effect combination |
-| Text, shapes, captions, SRT/VTT import | Available; still evolving |
+| Text, shapes, adjustment layers | Available; still evolving |
 | MP4, MP3, and WAV export | Available through local FFmpeg; export is re-encoded rather than lossless |
 | Autosave, revision checks, backups, and trash | Available locally |
 | English and Turkish interface | Dictionary-based editor coverage; some legacy labels and copy may still be incomplete |
-| AI Chat | Visible as a disabled future placeholder |
-| Automatic subtitles/transcription | Not available as a core feature |
+| AI editing and automatic transcription | Not part of the current editor scope |
 | Hosted or collaborative editing | Not supported |
 
 The exact import/export boundaries and development contracts are kept as internal Codex working notes; they are intentionally not part of the public repository.
@@ -207,7 +206,7 @@ You can change the location with `DATA_DIR` in a local `.env` file. Never commit
 - Do not expose it through a public interface, tunnel, LAN binding, or reverse proxy.
 - Do not commit API keys, personal media, local projects, or exported files.
 - Treat media from unknown sources carefully; FFmpeg processes complex native formats and the current experimental build does not provide a full process sandbox.
-- AI settings are disabled by default and do not represent an active hosted provider workflow in this release.
+- AI editing and transcription are intentionally outside the current local editor scope.
 - GitHub Actions run build, test, and dependency-audit checks; GitHub's Default setup manages CodeQL scanning.
 
 ## Contributing
