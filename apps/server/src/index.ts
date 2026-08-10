@@ -10,6 +10,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { serverT, type ServerTranslationKey, type ServerTranslationValues } from './i18n.js';
 import {
   defaultProject,
   defaultSettings,
@@ -19,6 +20,9 @@ import {
   ExportOptionsSchema,
   JobSchema,
   SettingsSchema,
+  sourceTimeAt,
+  speedCurveSegments,
+  speedAt,
   type Asset,
   type ExportOptions,
   type Job,
@@ -53,6 +57,19 @@ const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
 let settings: Settings = defaultSettings();
 const transientKeys = { openai: '', gemini: '' };
 
+function message(key: ServerTranslationKey, values?: ServerTranslationValues) {
+  return serverT(settings.language, key, values);
+}
+
+function localizedError(error: unknown, fallback: ServerTranslationKey) {
+  const issues = typeof error === 'object' && error !== null && 'issues' in error
+    ? (error as { issues?: Array<{ message?: string }> }).issues
+    : undefined;
+  if (issues?.some((issue) => issue.message === 'INVALID_EXPORT_RANGE')) return message('invalidExportRange');
+  if (issues?.length) return message(fallback);
+  return error instanceof Error ? error.message : message(fallback);
+}
+
 function activeJobCount() {
   return Array.from(jobs.values()).filter((job) => job.status === 'queued' || job.status === 'running').length;
 }
@@ -61,16 +78,32 @@ type TimelineClip = Project['tracks'][number]['clips'][number];
 type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean };
 
 const STOCK_MEDIA = [
-  { id: 'white', name: 'Beyaz yüzey', description: 'Temiz ve aydınlık arka plan', fileName: 'white.png', mimeType: 'image/png', width: 1600, height: 900 },
-  { id: 'black', name: 'Siyah yüzey', description: 'Sade ve sinematik arka plan', fileName: 'black.png', mimeType: 'image/png', width: 1600, height: 900 },
-  { id: 'sage', name: 'Adaçayı degrade', description: 'Yumuşak yeşil geçiş', fileName: 'sage.png', mimeType: 'image/png', width: 1600, height: 900 },
-  { id: 'sunset', name: 'Gün batımı', description: 'Sıcak renkli sahne', fileName: 'sunset.png', mimeType: 'image/png', width: 1600, height: 900 },
-  { id: 'paper', name: 'Kâğıt dokusu', description: 'Sıcak nötr yüzey', fileName: 'paper.png', mimeType: 'image/png', width: 1600, height: 900 },
-  { id: 'neon-grid', name: 'Neon ızgara', description: 'Teknolojik vurgu', fileName: 'neon-grid.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'white', fileName: 'white.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'black', fileName: 'black.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'sage', fileName: 'sage.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'sunset', fileName: 'sunset.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'paper', fileName: 'paper.png', mimeType: 'image/png', width: 1600, height: 900 },
+  { id: 'neon-grid', fileName: 'neon-grid.png', mimeType: 'image/png', width: 1600, height: 900 },
 ] as const;
+
+function localizedStock(item: (typeof STOCK_MEDIA)[number]) {
+  return { ...item, name: message(`stock.${item.id}.name` as ServerTranslationKey), description: message(`stock.${item.id}.description` as ServerTranslationKey) };
+}
 
 function isLocalHostname(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function isAllowedWebOrigin(origin: string | undefined) {
+  if (!origin || origin === 'null') return !origin;
+  try {
+    const parsed = new URL(origin);
+    const originPort = parsed.port ? Number(parsed.port) : undefined;
+    const isViteDevPort = originPort !== undefined && originPort >= 5173 && originPort <= 5199;
+    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || originPort === port || isViteDevPort);
+  } catch {
+    return false;
+  }
 }
 
 function isAllowedLocalRequest(request: FastifyRequest) {
@@ -79,14 +112,7 @@ function isAllowedLocalRequest(request: FastifyRequest) {
     const hostname = host.replace(/^\[/, '').split(']')[0].split(':')[0].toLowerCase();
     if (!isLocalHostname(hostname)) return false;
   }
-  const origin = request.headers.origin;
-  if (!origin || origin === 'null') return !origin;
-  try {
-    const parsed = new URL(origin);
-    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || parsed.port === String(port) || parsed.port === '5173');
-  } catch {
-    return false;
-  }
+  return isAllowedWebOrigin(request.headers.origin);
 }
 
 function id(prefix: string) {
@@ -99,7 +125,7 @@ async function ensureDir(dir: string) {
 
 function projectPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) {
-    throw Object.assign(new Error('Geçersiz proje kimliği'), { statusCode: 400 });
+    throw Object.assign(new Error(message('invalidProjectId')), { statusCode: 400 });
   }
   return path.join(projectsDir, projectId);
 }
@@ -275,7 +301,7 @@ async function makeJob(projectId: string, kind: Job['kind'], runner: (job: Inter
 
 async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
   const ffmpeg = binaryPath('ffmpeg');
-  if (!ffmpeg) throw new Error('FFmpeg bulunamadı. npm install sonrası ffmpeg-static kurulmalı veya FFMPEG_PATH tanımlanmalı.');
+  if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
   return await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true });
     jobProcesses.set(job.id, child);
@@ -296,20 +322,32 @@ async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
       if (outputPath) void fsp.rm(outputPath, { force: true }).catch(() => undefined);
       reject(error);
     });
-    child.once('close', (code) => {
+    child.once('close', async (code) => {
       clearTimeout(timeout);
       jobProcesses.delete(job.id);
       jobProgressDuration.delete(job.id);
       if (code === 0 && jobs.get(job.id)?.status !== 'cancelled') {
-        resolve();
-        return;
+        if (!outputPath) {
+          resolve();
+          return;
+        }
+        try {
+          const output = await fsp.stat(outputPath);
+          if (output.size <= 0) throw new Error(message('ffmpegEmpty'));
+          resolve();
+          return;
+        } catch (error) {
+          await fsp.rm(outputPath, { force: true }).catch(() => undefined);
+          reject(error instanceof Error ? error : new Error(message('ffmpegOutputInvalid')));
+          return;
+        }
       }
       // The output is always a newly generated file.  Removing a partial file
       // makes retrying safe and prevents a failed export looking complete in
       // the exports directory.
       if (outputPath) void fsp.rm(outputPath, { force: true }).catch(() => undefined);
       if (jobs.get(job.id)?.status === 'cancelled') {
-        reject(new Error('İşlem iptal edildi'));
+        reject(new Error(message('cancelled')));
         return;
       }
       reject(new Error(stderr.slice(-2400) || `FFmpeg exit code ${code}`));
@@ -319,9 +357,55 @@ async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
 
 const jobProgressDuration = new Map<string, number>();
 
+async function queueDerivedMediaJob(projectId: string, asset: Asset) {
+  const sourcePath = assetFile(projectId, asset);
+  if (!fs.existsSync(sourcePath)) throw Object.assign(new Error(message('sourceMissing')), { statusCode: 404 });
+  if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyMediaJobs')), { statusCode: 429 });
+  const quality = settings?.proxyQuality === 'draft'
+    ? { width: 640, crf: 32, preset: 'veryfast' }
+    : settings?.proxyQuality === 'high'
+      ? { width: 1280, crf: 26, preset: 'faster' }
+      : { width: 960, crf: 30, preset: 'veryfast' };
+  return makeJob(projectId, 'proxy', async (jobInfo) => {
+    updateJob(jobInfo.id, { status: 'running', message: message('derivativesPreparing') });
+    const proxyDir = path.join(projectPath(projectId), 'proxies');
+    const thumbnailDir = path.join(projectPath(projectId), 'thumbnails');
+    const waveformDir = path.join(projectPath(projectId), 'waveforms');
+    await Promise.all([ensureDir(proxyDir), ensureDir(thumbnailDir), ensureDir(waveformDir)]);
+    if (!binaryPath('ffmpeg')) throw new Error(message('ffmpegDerivativesMissing'));
+    const proxyPath = path.join(proxyDir, `${asset.id}.mp4`);
+    const thumbnailPath = path.join(thumbnailDir, `${asset.id}.jpg`);
+    const waveformPath = path.join(waveformDir, `${asset.id}.png`);
+    jobProgressDuration.set(jobInfo.id, asset.duration || 1);
+    let proxyRelative: string | undefined;
+    let thumbnailRelative: string | undefined;
+    let waveformRelative: string | undefined;
+    if (asset.type === 'video') {
+      await runFfmpeg(['-i', sourcePath, '-vf', `scale=${quality.width}:-2:force_original_aspect_ratio=decrease`, '-c:v', 'libx264', '-preset', quality.preset, '-crf', String(quality.crf), '-c:a', 'aac', '-b:a', '128k', proxyPath], jobInfo, proxyPath);
+      proxyRelative = path.relative(projectPath(projectId), proxyPath);
+    }
+    if (asset.type === 'video' || asset.type === 'image') {
+      const thumbnailInput = asset.type === 'video' ? ['-ss', '0.2', '-i', sourcePath] : ['-i', sourcePath];
+      await runFfmpeg([...thumbnailInput, '-frames:v', '1', '-vf', 'scale=480:-2', thumbnailPath], jobInfo, thumbnailPath);
+      thumbnailRelative = path.relative(projectPath(projectId), thumbnailPath);
+    }
+    if (asset.hasAudio || asset.type === 'audio') {
+      await runFfmpeg(['-i', sourcePath, '-filter_complex', 'showwavespic=s=900x120:colors=80e6c4:scale=sqrt', '-frames:v', '1', waveformPath], jobInfo, waveformPath);
+      waveformRelative = path.relative(projectPath(projectId), waveformPath);
+    }
+    await withProjectLock(projectId, async () => {
+      const updated = await readProject(projectId);
+      const index = updated.assets.findIndex((item) => item.id === asset.id);
+      if (index >= 0) updated.assets[index] = { ...updated.assets[index], proxyPath: proxyRelative, thumbnailPath: thumbnailRelative, waveformPath: waveformRelative };
+      await saveProject(ProjectSchema.parse({ ...updated, revision: updated.revision + 1, updatedAt: new Date().toISOString() }));
+    });
+    updateJob(jobInfo.id, { status: 'completed', progress: 1, message: message('mediaReady') });
+  });
+}
+
 function safeJoin(base: string, candidate: string) {
   const resolved = path.resolve(base, candidate);
-  if (resolved !== path.resolve(base) && !resolved.startsWith(`${path.resolve(base)}${path.sep}`)) throw new Error('Geçersiz dosya yolu');
+  if (resolved !== path.resolve(base) && !resolved.startsWith(`${path.resolve(base)}${path.sep}`)) throw new Error(message('invalidPath'));
   return resolved;
 }
 
@@ -330,7 +414,7 @@ function safeExistingPath(base: string, candidate: string) {
   if (!fs.existsSync(resolved)) return resolved;
   const realBase = fs.realpathSync.native(base);
   const realPath = fs.realpathSync.native(resolved);
-  if (realPath !== realBase && !realPath.startsWith(realBase + path.sep)) throw new Error('Geçersiz dosya yolu');
+  if (realPath !== realBase && !realPath.startsWith(realBase + path.sep)) throw new Error(message('invalidPath'));
   return realPath;
 }
 
@@ -392,21 +476,91 @@ function visibleRenderClip(clip: TimelineClip, rangeStart: number, rangeEnd: num
   const visibleStart = Math.max(clipStart, rangeStart);
   const visibleEnd = Math.min(clipEnd, rangeEnd);
   if (visibleEnd <= visibleStart) return null;
-  const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
   const offset = Math.max(0, visibleStart - clipStart);
+  const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
+  const sourceOffset = sourceTimeAt(clip.speedCurve, speed, offset);
+  const visibleSourceDuration = sourceTimeAt(clip.speedCurve, speed, visibleEnd - visibleStart);
   return {
     ...clip,
     start: visibleStart - rangeStart,
     duration: visibleEnd - visibleStart,
-    sourceStart: Math.max(0, numberOr(clip.sourceStart, 0) + offset * speed),
-    sourceDuration: Math.max(0.05, (visibleEnd - visibleStart) * speed),
+    sourceStart: Math.max(0, numberOr(clip.sourceStart, 0) + sourceOffset),
+    sourceDuration: Math.max(0.05, visibleSourceDuration),
+  };
+}
+
+function mergeAdjustmentFilters(base: TimelineClip['filters'], layers: TimelineClip['filters'][]): TimelineClip['filters'] {
+  const stack = [base, ...layers];
+  return {
+    ...base,
+    brightness: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.brightness, 0), 0), -1, 1),
+    contrast: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.contrast, 0), 0), -1, 1),
+    saturation: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.saturation, 0), 0), -1, 1),
+    temperature: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.temperature, 0), 0), -1, 1),
+    hue: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.hue, 0), 0), -180, 180),
+    vignette: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.vignette, 0), 0), 0, 1),
+    blur: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.blur, 0), 0), 0, 24),
+    grayscale: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.grayscale, 0), 0), 0, 1),
+    chromaKey: [...stack].reverse().find((filter) => filter.chromaKey)?.chromaKey,
+  };
+}
+
+type AdjustmentRenderSegment = {
+  start: number;
+  end: number;
+  filters: TimelineClip['filters'];
+};
+
+const EMPTY_FILTERS: TimelineClip['filters'] = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  blur: 0,
+  grayscale: 0,
+  temperature: 0,
+  hue: 0,
+  vignette: 0,
+};
+
+function normalizeCrop(crop: NonNullable<TimelineClip['crop']>) {
+  const x = clamp(numberOr(crop.x, 0), 0, 0.99);
+  const y = clamp(numberOr(crop.y, 0), 0, 0.99);
+  return {
+    x,
+    y,
+    width: clamp(Math.min(numberOr(crop.width, 1), 1 - x), 0.01, 1),
+    height: clamp(Math.min(numberOr(crop.height, 1), 1 - y), 0.01, 1),
   };
 }
 
 function ffmpegNumber(value: number) {
   // Filter expressions are easier to debug when they never contain scientific
   // notation.  Keep enough precision for frame-accurate clip boundaries.
-  return Math.max(0, value).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
+  const finite = Number.isFinite(value) ? value : 0;
+  return finite.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
+}
+
+function appendColorFilters(target: string[], values: TimelineClip['filters'], interval?: { start: number; end: number }) {
+  const enabled = interval ? `:enable='between(t,${ffmpegNumber(interval.start)},${ffmpegNumber(interval.end)})'` : '';
+  const brightness = numberOr(values.brightness, 0);
+  const contrast = numberOr(values.contrast, 0);
+  const saturation = numberOr(values.saturation, 0);
+  if (Math.abs(brightness) > 0.001 || Math.abs(contrast) > 0.001 || Math.abs(saturation) > 0.001) {
+    target.push(`eq=brightness=${ffmpegNumber(brightness)}:contrast=${ffmpegNumber(1 + contrast)}:saturation=${ffmpegNumber(1 + saturation)}${enabled}`);
+  }
+  const blur = Math.max(0, numberOr(values.blur, 0));
+  if (blur > 0.01) target.push(`boxblur=luma_radius=${ffmpegNumber(Math.max(1, blur / 2))}:luma_power=1${enabled}`);
+  if (numberOr(values.grayscale, 0) > 0.01) target.push(`hue=s=0${enabled}`);
+  const temperature = numberOr(values.temperature, 0);
+  if (Math.abs(temperature) > 0.001) target.push(`colorbalance=rs=${ffmpegNumber(temperature * 0.35)}:gs=${ffmpegNumber(temperature * 0.08)}:bs=${ffmpegNumber(-temperature * 0.35)}${enabled}`);
+  const hue = numberOr(values.hue, 0);
+  if (Math.abs(hue) > 0.001) target.push(`hue=h=${ffmpegNumber(hue)}${enabled}`);
+  const vignette = clamp(numberOr(values.vignette, 0), 0, 1);
+  if (vignette > 0.001) target.push(`vignette=angle=${ffmpegNumber(Math.PI / 4 + vignette * Math.PI / 4)}${enabled}`);
+  if (values.chromaKey) {
+    const key = values.chromaKey;
+    target.push(`chromakey=${ffmpegColor(key.color)}:${ffmpegNumber(key.similarity)}:${ffmpegNumber(key.blend)}${enabled}`);
+  }
 }
 
 function ffmpegColor(value: string) {
@@ -463,41 +617,66 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
   const tracks = [...project.tracks]
     .filter((track) => !track.hidden)
     .sort((a, b) => a.order - b.order);
-  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean }> = [];
+  const adjustmentClips = tracks.flatMap((track) => track.clips.filter((clip) => clip.adjustment));
+  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number }> = [];
   const allTextClips: TimelineClip[] = [];
   for (const track of tracks) {
     for (const clip of track.clips) {
+      if (clip.adjustment) continue;
       if (clip.type === 'text' || clip.type === 'subtitle') {
         if (clip.textStyle?.text || clip.subtitle?.text) allTextClips.push(clip);
         continue;
       }
       if (!clip.assetId) continue;
       const asset = project.assets.find((item) => item.id === clip.assetId);
-      if (!asset) throw new Error(`Klip medyası bulunamadı: ${clip.name}`);
+      if (!asset) throw new Error(message('clipMediaMissing', { name: clip.name }));
       const file = assetFile(project.id, asset);
-      if (!fs.existsSync(file)) throw new Error(`Medya dosyası bulunamadı: ${asset.name}`);
+      if (!fs.existsSync(file)) throw new Error(message('mediaFileMissingNamed', { name: asset.name }));
       if (numberOr(clip.duration, 0) <= 0) continue;
-      allTimelineClips.push({ clip, asset, trackMuted: track.muted });
+      allTimelineClips.push({ clip, asset, trackMuted: track.muted, trackVolume: clamp(numberOr(track.volume, 1), 0, 2) });
     }
   }
-  if (!allTimelineClips.length && !allTextClips.length) throw new Error('Export için timeline üzerinde medya veya metin klibi gerekli');
+  if (!allTimelineClips.length && !allTextClips.length) throw new Error(message('timelineNeedsClip'));
 
   const fullDuration = Math.max(0.1, numberOr(project.duration, 0), ...allTimelineClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))), ...allTextClips.map((clip) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))));
   const rangeStart = clamp(numberOr(body.range?.start, 0), 0, Math.max(0, fullDuration - 0.001));
   const rangeEnd = clamp(numberOr(body.range?.end, fullDuration), rangeStart + 0.001, fullDuration);
   const projectDuration = Math.max(0.1, rangeEnd - rangeStart);
   const clips = allTimelineClips
-    .map((entry) => ({ ...entry, clip: visibleRenderClip(entry.clip, rangeStart, rangeEnd) }))
-    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean } => Boolean(entry.clip));
+    .map((entry) => {
+      const visible = visibleRenderClip(entry.clip, rangeStart, rangeEnd);
+      if (!visible) return { ...entry, clip: null, adjustmentSegments: [] as AdjustmentRenderSegment[] };
+      const layers = adjustmentClips
+        .filter((layer) => numberOr(layer.start, 0) < numberOr(entry.clip.start, 0) + numberOr(entry.clip.duration, 0) && numberOr(layer.start, 0) + numberOr(layer.duration, 0) > numberOr(entry.clip.start, 0));
+      const visibleEnd = visible.start + visible.duration;
+      const boundaries = [
+        visible.start,
+        visibleEnd,
+        ...layers.flatMap((layer) => [
+          clamp(numberOr(layer.start, 0) - rangeStart, visible.start, visibleEnd),
+          clamp(numberOr(layer.start, 0) + numberOr(layer.duration, 0) - rangeStart, visible.start, visibleEnd),
+        ]),
+      ].sort((a, b) => a - b).filter((value, index, values) => index === 0 || Math.abs(value - values[index - 1]) > 0.000001);
+      const adjustmentSegments = boundaries.slice(0, -1).flatMap((start, index): AdjustmentRenderSegment[] => {
+        const end = boundaries[index + 1];
+        if (end <= start) return [];
+        const midpoint = (start + end) / 2 + rangeStart;
+        const activeLayers = layers.filter((layer) => midpoint >= numberOr(layer.start, 0) && midpoint < numberOr(layer.start, 0) + numberOr(layer.duration, 0));
+        if (!activeLayers.length) return [];
+        return [{ start: start - visible.start, end: end - visible.start, filters: mergeAdjustmentFilters(EMPTY_FILTERS, activeLayers.map((layer) => layer.filters)) }];
+      });
+      return { ...entry, clip: visible, adjustmentSegments };
+    })
+    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; adjustmentSegments: AdjustmentRenderSegment[] } => Boolean(entry.clip));
   const textClips = allTextClips.map((clip) => visibleRenderClip(clip, rangeStart, rangeEnd)).filter((clip): clip is TimelineClip => Boolean(clip));
   if (!clips.length && !textClips.length) throw new Error('Selected range does not contain media or text');
   const inputArgs: string[] = [];
-  const videoClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number }> = [];
-  const audioClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; trackMuted: boolean }> = [];
+  const videoClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; adjustmentSegments: AdjustmentRenderSegment[] }> = [];
+  const audioClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; trackMuted: boolean; trackVolume: number }> = [];
   const filterLines: string[] = [];
 
   for (const entry of clips) {
-    const { clip, asset, trackMuted } = entry;
+    const { clip, asset, trackMuted, trackVolume, adjustmentSegments } = entry;
     const clipDuration = Math.max(0, numberOr(clip.duration, 0));
     if (clipDuration <= 0) continue;
     const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
@@ -507,7 +686,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     if (!wantsVideo && !wantsAudio) continue;
 
     const sourceStart = Math.max(0, numberOr(clip.sourceStart, 0));
-    const requestedSourceDuration = Math.max(0.1, clipDuration * speed + 0.25);
+    const requestedSourceDuration = Math.max(0.1, sourceTimeAt(clip.speedCurve, speed, clipDuration) + 0.1);
     const sourceDuration = asset.duration > 0
       ? Math.max(0.1, Math.min(requestedSourceDuration, Math.max(0.1, asset.duration - Math.min(sourceStart, Math.max(0, asset.duration - 0.1)))))
       : requestedSourceDuration;
@@ -516,64 +695,86 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     if (isImage) inputArgs.push('-loop', '1', '-framerate', String(fps), '-i', inputPath);
     else inputArgs.push('-ss', ffmpegNumber(Math.min(sourceStart, Math.max(0, asset.duration - 0.05))), '-t', ffmpegNumber(sourceDuration), '-i', inputPath);
 
-    if (wantsVideo) videoClips.push({ clip, asset, inputIndex, duration: clipDuration });
-    if (wantsAudio) audioClips.push({ clip, asset, inputIndex, duration: clipDuration, trackMuted });
+    if (wantsVideo) videoClips.push({ clip, asset, inputIndex, duration: clipDuration, adjustmentSegments });
+    if (wantsAudio) audioClips.push({ clip, asset, inputIndex, duration: clipDuration, trackMuted, trackVolume });
   }
 
   if (!audioOnly) {
     const baseDuration = ffmpegNumber(projectDuration);
     filterLines.push(`color=c=${ffmpegColor(project.canvas.background)}:s=${outWidth}x${outHeight}:r=${ffmpegNumber(fps)}:d=${baseDuration}[base]`);
     let current = '[base]';
-    videoClips.forEach(({ clip, inputIndex, duration }, index) => {
+    videoClips.forEach(({ clip, inputIndex, duration, adjustmentSegments }, index) => {
       const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
       const transform = clip.transform;
-      const filters = ['setpts=PTS-STARTPTS'];
-      if (Math.abs(speed - 1) > 0.0001) filters.push(`setpts=PTS/${ffmpegNumber(speed)}`);
-      filters.push(`trim=duration=${ffmpegNumber(duration)}`, 'setpts=PTS-STARTPTS');
+      const segments = speedCurveSegments(duration, speed, clip.speedCurve);
+      const sourceLabels = segments.map((_, segmentIndex) => `[vsrc${index}_${segmentIndex}]`);
+      if (segments.length > 1) {
+        filterLines.push(`[${inputIndex}:v]split=${segments.length}${segments.map((_, segmentIndex) => `[vbranch${index}_${segmentIndex}]`).join('')}`);
+      }
+      const renderedSegments: string[] = [];
+      segments.forEach((segment, segmentIndex) => {
+        const source = segments.length > 1 ? `[vbranch${index}_${segmentIndex}]` : `[${inputIndex}:v]`;
+        const segmentFilters = [`trim=start=${ffmpegNumber(segment.sourceTime)}:duration=${ffmpegNumber(segment.sourceDuration)}`, 'setpts=PTS-STARTPTS'];
+        if (Math.abs(segment.speed - 1) > 0.0001) segmentFilters.push(`setpts=PTS/${ffmpegNumber(segment.speed)}`);
+        segmentFilters.push(`trim=duration=${ffmpegNumber(segment.duration)}`, 'setpts=PTS-STARTPTS');
+        const label = sourceLabels[segmentIndex];
+        filterLines.push(`${source}${segmentFilters.join(',')}${label}`);
+        renderedSegments.push(label);
+      });
+      const timedVideo = `[vtimed${index}]`;
+      if (renderedSegments.length > 1) filterLines.push(`${renderedSegments.join('')}concat=n=${renderedSegments.length}:v=1:a=0,setpts=PTS-STARTPTS${timedVideo}`);
+      else filterLines.push(`${renderedSegments[0]}setpts=PTS-STARTPTS${timedVideo}`);
+      const filters: string[] = [];
+      if (clip.crop) {
+        const crop = normalizeCrop(clip.crop);
+        filters.push(`crop=iw*${ffmpegNumber(crop.width)}:ih*${ffmpegNumber(crop.height)}:iw*${ffmpegNumber(crop.x)}:ih*${ffmpegNumber(crop.y)}`);
+      }
       const fit = transform.fit;
       if (fit === 'cover') filters.push(`scale=${outWidth}:${outHeight}:force_original_aspect_ratio=increase`, `crop=${outWidth}:${outHeight}`);
       else if (fit === 'stretch') filters.push(`scale=${outWidth}:${outHeight}`);
       else filters.push(`scale=${outWidth}:${outHeight}:force_original_aspect_ratio=decrease`);
       const scale = Math.max(0.05, numberOr(transform.scale, 1));
-      if (Math.abs(scale - 1) > 0.0001) filters.push(`scale=ceil(iw*${ffmpegNumber(scale)}/2)*2:ceil(ih*${ffmpegNumber(scale)}/2)*2`);
+      const scaleExpression = keyframeExpression(clip, 'scale', scale);
+      const hasScaleKeyframes = clip.keyframes.some((keyframe) => keyframe.property === 'scale');
+      const transitionScale = transitionScaleExpression(clip, duration);
+      if (hasScaleKeyframes || transitionScale !== '1') filters.push(`scale=w=ceil(iw*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:h=ceil(ih*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:eval=frame`);
+      else if (Math.abs(scale - 1) > 0.0001) filters.push(`scale=ceil(iw*${ffmpegNumber(scale)}/2)*2:ceil(ih*${ffmpegNumber(scale)}/2)*2`);
       if (transform.flipX) filters.push('hflip');
       if (transform.flipY) filters.push('vflip');
       const rotation = numberOr(transform.rotation, 0);
-      if (Math.abs(rotation) > 0.001) filters.push(`rotate=${ffmpegNumber(rotation * Math.PI / 180)}:fillcolor=none`);
-      const brightness = numberOr(clip.filters.brightness, 0);
-      const contrast = numberOr(clip.filters.contrast, 0);
-      const saturation = numberOr(clip.filters.saturation, 0);
-      if (Math.abs(brightness) > 0.001 || Math.abs(contrast) > 0.001 || Math.abs(saturation) > 0.001) {
-        filters.push(`eq=brightness=${ffmpegNumber(brightness)}:contrast=${ffmpegNumber(1 + contrast)}:saturation=${ffmpegNumber(1 + saturation)}`);
-      }
-      const blur = Math.max(0, numberOr(clip.filters.blur, 0));
-      if (blur > 0.01) filters.push(`boxblur=luma_radius=${ffmpegNumber(Math.max(1, blur / 2))}:luma_power=1`);
-      if (numberOr(clip.filters.grayscale, 0) > 0.01) filters.push('hue=s=0');
-      const temperature = numberOr(clip.filters.temperature, 0);
-      if (Math.abs(temperature) > 0.001) filters.push(`colorbalance=rs=${ffmpegNumber(temperature * 0.35)}:gs=${ffmpegNumber(temperature * 0.08)}:bs=${ffmpegNumber(-temperature * 0.35)}`);
-      const hue = numberOr(clip.filters.hue, 0);
-      if (Math.abs(hue) > 0.001) filters.push(`hue=h=${ffmpegNumber(hue)}`);
-      const vignette = clamp(numberOr(clip.filters.vignette, 0), 0, 1);
-      if (vignette > 0.001) filters.push(`vignette=angle=${ffmpegNumber(Math.PI / 4 + vignette * Math.PI / 4)}`);
-      if (clip.filters.chromaKey) {
-        const key = clip.filters.chromaKey;
-        filters.push(`chromakey=${ffmpegColor(key.color)}:${ffmpegNumber(key.similarity)}:${ffmpegNumber(key.blend)}`);
-      }
+      const rotationExpression = keyframeExpression(clip, 'rotation', rotation);
+      if (clip.keyframes.some((keyframe) => keyframe.property === 'rotation')) filters.push(`rotate=(${ffmpegExpression(rotationExpression)})*PI/180:fillcolor=none`);
+      else if (Math.abs(rotation) > 0.001) filters.push(`rotate=${ffmpegNumber(rotation * Math.PI / 180)}:fillcolor=none`);
+      appendColorFilters(filters, clip.filters);
+      for (const segment of adjustmentSegments) appendColorFilters(filters, segment.filters, segment);
       const opacity = Math.max(0, Math.min(1, numberOr(transform.opacity, 1)));
-      if (opacity < 0.999) filters.push(`format=rgba`, `colorchannelmixer=aa=${ffmpegNumber(opacity)}`);
+      const opacityExpression = keyframeExpression(clip, 'opacity', opacity, 'T');
+      const alphaExpressions = [opacityExpression];
       const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
       const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);
-      if (clip.transitionIn?.type !== 'none' && clip.transitionIn?.duration > 0) filters.push(`fade=t=in:st=0:d=${ffmpegNumber(Math.min(duration, clip.transitionIn.duration))}:alpha=1`);
-      else if (fadeIn > 0) filters.push(`fade=t=in:st=0:d=${ffmpegNumber(fadeIn)}:alpha=1`);
-      if (clip.transitionOut?.type !== 'none' && clip.transitionOut?.duration > 0) filters.push(`fade=t=out:st=${ffmpegNumber(Math.max(0, duration - clip.transitionOut.duration))}:d=${ffmpegNumber(Math.min(duration, clip.transitionOut.duration))}:alpha=1`);
-      else if (fadeOut > 0) filters.push(`fade=t=out:st=${ffmpegNumber(Math.max(0, duration - fadeOut))}:d=${ffmpegNumber(fadeOut)}:alpha=1`);
+      const transitionInProgress = clip.transitionIn ? transitionProgressExpression(clip.transitionIn, duration, true, 'T') : null;
+      const transitionOutProgress = clip.transitionOut ? transitionProgressExpression(clip.transitionOut, duration, false, 'T') : null;
+      if (transitionInProgress && (clip.transitionIn?.type === 'fade' || clip.transitionIn?.type === 'dissolve')) alphaExpressions.push(transitionInProgress);
+      else if (fadeIn > 0) alphaExpressions.push(`if(lt(T,${ffmpegNumber(fadeIn)}),T/${ffmpegNumber(fadeIn)},1)`);
+      if (transitionOutProgress && (clip.transitionOut?.type === 'fade' || clip.transitionOut?.type === 'dissolve')) alphaExpressions.push(transitionOutProgress);
+      else if (fadeOut > 0) alphaExpressions.push(`if(gt(T,${ffmpegNumber(Math.max(0, duration - fadeOut))}),(${ffmpegNumber(duration)}-T)/${ffmpegNumber(fadeOut)},1)`);
+      if (alphaExpressions.some((expression) => expression !== '1')) filters.push(`format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(${alphaExpressions.join('*')})'`);
+      if (clip.transitionIn?.type === 'wipe') filters.push(wipeAlphaFilter(clip.transitionIn, duration, true));
+      if (clip.transitionOut?.type === 'wipe') filters.push(wipeAlphaFilter(clip.transitionOut, duration, false));
+      if (clip.mask) filters.push(maskFilter(clip.mask));
       filters.push(`setpts=PTS-STARTPTS+${ffmpegNumber(Math.max(0, numberOr(clip.start, 0)))}/TB`);
       const label = `[v${index}]`;
-      filterLines.push(`[${inputIndex}:v]${filters.join(',')}${label}`);
-      const x = numberOr(transform.x, 0);
-      const y = numberOr(transform.y, 0);
+      filterLines.push(`${timedVideo}${filters.length ? filters.join(',') : 'null'}${label}`);
+      // Overlay expressions run on the main timeline clock, while the media
+      // branch above runs clip-local. Convert the clock before evaluating
+      // position keyframes and slide transitions.
+      const overlayLocalTime = `(t-${ffmpegNumber(clip.start)})`;
+      const x = keyframeExpression(clip, 'x', numberOr(transform.x, 0), overlayLocalTime);
+      const y = keyframeExpression(clip, 'y', numberOr(transform.y, 0), overlayLocalTime);
+      const transitionX = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'x', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
+      const transitionY = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'y', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
       const next = `[comp${index}]`;
-      filterLines.push(`${current}${label}overlay=x=(main_w-overlay_w)/2+${ffmpegNumber(x)}:y=(main_h-overlay_h)/2+${ffmpegNumber(y)}:eof_action=pass:shortest=0:format=auto${next}`);
+      filterLines.push(`${current}${label}overlay=x=(main_w-overlay_w)/2+${ffmpegExpression(x)}+${ffmpegExpression(transitionX)}:y=(main_h-overlay_h)/2+${ffmpegExpression(y)}+${ffmpegExpression(transitionY)}:eof_action=pass:shortest=0:format=auto${next}`);
       current = next;
     });
     for (const [index, clip] of textClips.entries()) {
@@ -610,11 +811,26 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
   }
 
   const audioLabels: string[] = [];
-  audioClips.forEach(({ clip, inputIndex, duration }, index) => {
+  audioClips.forEach(({ clip, inputIndex, duration, trackVolume }, index) => {
     const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
-    const filters = ['asetpts=PTS-STARTPTS', ...atempoChain(speed), `atrim=duration=${ffmpegNumber(duration)}`, 'asetpts=PTS-STARTPTS'];
-    const volume = Math.max(0, Math.min(2, numberOr(clip.volume, 1)));
-    if (Math.abs(volume - 1) > 0.001) filters.push(`volume=${ffmpegNumber(volume)}`);
+    const segments = speedCurveSegments(duration, speed, clip.speedCurve);
+    const sourceLabels = segments.map((_, segmentIndex) => `[asrc${index}_${segmentIndex}]`);
+    if (segments.length > 1) filterLines.push(`[${inputIndex}:a]asplit=${segments.length}${segments.map((_, segmentIndex) => `[abranch${index}_${segmentIndex}]`).join('')}`);
+    const renderedSegments: string[] = [];
+    segments.forEach((segment, segmentIndex) => {
+      const source = segments.length > 1 ? `[abranch${index}_${segmentIndex}]` : `[${inputIndex}:a]`;
+      const segmentFilters = [`atrim=start=${ffmpegNumber(segment.sourceTime)}:duration=${ffmpegNumber(segment.sourceDuration)}`, 'asetpts=PTS-STARTPTS', ...atempoChain(segment.speed), `atrim=duration=${ffmpegNumber(segment.duration)}`, 'asetpts=PTS-STARTPTS'];
+      const label = sourceLabels[segmentIndex];
+      filterLines.push(`${source}${segmentFilters.join(',')}${label}`);
+      renderedSegments.push(label);
+    });
+    const timedAudio = `[atimed${index}]`;
+    if (renderedSegments.length > 1) filterLines.push(`${renderedSegments.join('')}concat=n=${renderedSegments.length}:v=0:a=1,asetpts=PTS-STARTPTS${timedAudio}`);
+    else filterLines.push(`${renderedSegments[0]}asetpts=PTS-STARTPTS${timedAudio}`);
+    const filters: string[] = [];
+    const volume = Math.max(0, Math.min(2, numberOr(clip.volume, 1))) * clamp(trackVolume, 0, 2);
+    const volumeExpression = keyframeExpression(clip, 'volume', volume);
+    if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}`);
     const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
     const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);
     if (fadeIn > 0) filters.push(`afade=t=in:st=0:d=${ffmpegNumber(fadeIn)}`);
@@ -623,7 +839,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     const delay = Math.max(0, Math.round(numberOr(clip.start, 0) * 1000));
     if (delay > 0) filters.push(`adelay=${delay}:all=1`);
     const label = `[a${index}]`;
-    filterLines.push(`[${inputIndex}:a]${filters.join(',')}${label}`);
+    filterLines.push(`${timedAudio}${filters.length ? filters.join(',') : 'anull'}${label}`);
     audioLabels.push(label);
   });
   if (audioLabels.length) filterLines.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[aout]`);
@@ -663,29 +879,23 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
   const errors: Array<{ code: string; message: string }> = [];
   const warnings: Array<{ code: string; message: string }> = [];
   const ffmpeg = binaryPath('ffmpeg');
-  if (!ffmpeg) errors.push({ code: 'FFMPEG_MISSING', message: 'FFmpeg bulunamadı.' });
+  if (!ffmpeg) errors.push({ code: 'FFMPEG_MISSING', message: message('preflightFfmpegMissing') });
   try {
     const render = buildExportArgs(project, options, path.join(exportDir, '.preflight.tmp'));
     const estimatedBytes = estimateExportBytes(options, render.duration);
     try {
       const stat = fs.statfsSync(exportDir);
       const freeBytes = Number(stat.bavail) * Number(stat.bsize);
-      if (freeBytes < estimatedBytes * 1.2) errors.push({ code: 'DISK_SPACE', message: 'Dışa aktarma için yeterli disk alanı yok.' });
-      else if (freeBytes < estimatedBytes * 2) warnings.push({ code: 'DISK_SPACE_LOW', message: 'Dışa aktarma disk alanının büyük bölümünü kullanabilir.' });
+      if (freeBytes < estimatedBytes * 1.2) errors.push({ code: 'DISK_SPACE', message: message('preflightDiskSpace') });
+      else if (freeBytes < estimatedBytes * 2) warnings.push({ code: 'DISK_SPACE_LOW', message: message('preflightDiskLow') });
     } catch {
-      warnings.push({ code: 'DISK_SPACE_UNKNOWN', message: 'Disk alanı doğrulanamadı.' });
+      warnings.push({ code: 'DISK_SPACE_UNKNOWN', message: message('preflightDiskUnknown') });
     }
-    if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: `Proje FPS değeri ${options.fps} FPS olarak yeniden örneklenecek.` });
-    if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: '4K dışa aktarma daha uzun sürebilir ve daha fazla disk alanı kullanır.' });
-    const timelineClips = project.tracks.flatMap((track) => track.clips);
-    if (timelineClips.some((clip) => clip.keyframes.length > 0)) warnings.push({ code: 'KEYFRAMES_FALLBACK', message: "Animasyon keyframe'leri preview'de uygulanıyor; export için temel klip değerleri kullanılacak." });
-    if (timelineClips.some((clip) => Boolean(clip.speedCurve?.length))) warnings.push({ code: 'SPEED_CURVE_FALLBACK', message: "Hız rampaları preview'de uygulanıyor; export sabit klip hızına dönecek." });
-    if (timelineClips.some((clip) => Boolean(clip.mask))) warnings.push({ code: 'MASK_FALLBACK', message: "Maske ayarları preview'de gösteriliyor; export için medya kadrajı kullanılacak." });
-    const advancedTransitions = timelineClips.some((clip) => [clip.transitionIn?.type, clip.transitionOut?.type].some((type) => type !== undefined && type !== 'none' && type !== 'fade'));
-    if (advancedTransitions) warnings.push({ code: 'TRANSITION_FALLBACK', message: "Dissolve, slide, wipe ve zoom geçişleri export'ta fade yaklaşımıyla işlenir." });
+    if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { fps: options.fps }) });
+    if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: message('preflightLargeOutput') });
     return { ok: errors.length === 0, errors, warnings, estimatedBytes };
   } catch (error) {
-    errors.push({ code: 'INVALID_TIMELINE', message: error instanceof Error ? error.message : 'Timeline dışa aktarılamadı.' });
+    errors.push({ code: 'INVALID_TIMELINE', message: error instanceof Error ? error.message : message('preflightInvalidTimeline') });
     return { ok: false, errors, warnings };
   }
 }
@@ -705,7 +915,7 @@ async function listProjects() {
 }
 
 function trashPath(trashId: string) {
-  if (!/^[A-Za-z0-9_-]+-\d+$/.test(trashId)) throw Object.assign(new Error('Geçersiz çöp kutusu kimliği'), { statusCode: 400 });
+  if (!/^[A-Za-z0-9_-]+-\d+$/.test(trashId)) throw Object.assign(new Error(message('invalidTrashId')), { statusCode: 400 });
   return safeJoin(path.join(dataDir, 'trash'), trashId);
 }
 
@@ -779,6 +989,105 @@ function detectedMediaType(probed: Record<string, unknown>): UploadedMediaType |
   return undefined;
 }
 
+function ffmpegExpression(value: string) {
+  return value.replaceAll(',', '\\,');
+}
+
+function easingExpression(value: string, easing: string | undefined) {
+  if (easing === 'ease-in') return `(${value})*(${value})`;
+  if (easing === 'ease-out') return `1-(1-(${value}))*(1-(${value}))`;
+  if (easing === 'ease-in-out') return `if(lt(${value},0.5),2*(${value})*(${value}),1-((-2*(${value})+2)*(-2*(${value})+2))/2)`;
+  return value;
+}
+
+/** Translate the shared keyframe interpolation contract to FFmpeg's frame expression syntax. */
+function keyframeExpression(clip: TimelineClip, property: TimelineClip['keyframes'][number]['property'], fallback: number, timeExpression = 't') {
+  const points = clip.keyframes.filter((keyframe) => keyframe.property === property).sort((a, b) => a.time - b.time);
+  if (!points.length) return ffmpegNumber(fallback);
+  // Each media branch is reset to PTS-STARTPTS before this expression runs,
+  // so FFmpeg's `t` is already clip-local.  Subtracting the timeline start
+  // here made keyframes on clips away from 0 fire too early or never fire.
+  const localTime = `(${timeExpression})`;
+  let expression = ffmpegNumber(points.at(-1)?.value ?? fallback);
+  for (let index = points.length - 1; index > 0; index -= 1) {
+    const previous = points[index - 1];
+    const next = points[index];
+    const progress = `(${localTime}-${ffmpegNumber(previous.time)})/${ffmpegNumber(Math.max(0.000001, next.time - previous.time))}`;
+    const eased = easingExpression(progress, next.easing);
+    const value = `${ffmpegNumber(previous.value)}+(${ffmpegNumber(next.value)}-${ffmpegNumber(previous.value)})*(${eased})`;
+    expression = `if(lt(${localTime},${ffmpegNumber(next.time)}),${value},${expression})`;
+  }
+  expression = `if(lt(${localTime},${ffmpegNumber(points[0].time)}),${ffmpegNumber(points[0].value)},${expression})`;
+  return expression;
+}
+
+function transitionProgressExpression(transition: NonNullable<TimelineClip['transitionIn']>, duration: number, entering: boolean, timeExpression = 't') {
+  const transitionDuration = clamp(numberOr(transition.duration, 0), 0, duration);
+  if (transition.type === 'none' || transitionDuration <= 0) return null;
+  const time = `(${timeExpression})`;
+  const raw = entering
+    ? `(${time}/${ffmpegNumber(transitionDuration)})`
+    : `(((${ffmpegNumber(duration)})-${time})/${ffmpegNumber(transitionDuration)})`;
+  return `if(${entering ? `lt(${time},${ffmpegNumber(transitionDuration)})` : `gt(${time},${ffmpegNumber(Math.max(0, duration - transitionDuration))})`},${easingExpression(raw, transition.easing)},1)`;
+}
+
+function transitionOffsetExpression(transition: NonNullable<TimelineClip['transitionIn']>, duration: number, entering: boolean, axis: 'x' | 'y', timeExpression = 't') {
+  if (transition.type !== 'slide') return '0';
+  const progress = transitionProgressExpression(transition, duration, entering, timeExpression);
+  if (!progress) return '0';
+  const direction = transition.direction ?? 'left';
+  const vector = axis === 'x' ? direction === 'right' ? 1 : direction === 'left' ? -1 : 0 : direction === 'down' ? 1 : direction === 'up' ? -1 : 0;
+  if (!vector) return '0';
+  const distance = ffmpegNumber(120 * clamp(numberOr(transition.intensity, 1), 0.1, 2));
+  return `${vector}*(1-(${progress}))*${distance}`;
+}
+
+function transitionScaleExpression(clip: TimelineClip, duration: number) {
+  const amount = 0.18 * clamp(numberOr(clip.transitionIn?.intensity, 1), 0.1, 2);
+  const entering = clip.transitionIn?.type === 'zoom' ? transitionProgressExpression(clip.transitionIn, duration, true) : null;
+  const leaving = clip.transitionOut?.type === 'zoom' ? transitionProgressExpression(clip.transitionOut, duration, false) : null;
+  const parts = ['1'];
+  if (entering) parts.push(`-(1-(${entering}))*${ffmpegNumber(amount)}`);
+  if (leaving) parts.push(`+(1-(${leaving}))*${ffmpegNumber(amount)}`);
+  return parts.length === 1 ? '1' : parts.join('');
+}
+
+function wipeAlphaFilter(transition: NonNullable<TimelineClip['transitionIn']>, duration: number, entering: boolean) {
+  const progress = transitionProgressExpression(transition, duration, entering, 'T') ?? '1';
+  const direction = transition.direction ?? 'left';
+  const visibility = direction === 'right'
+    ? `gte(X/W,1-(${progress}))`
+    : direction === 'up'
+      ? `lte(Y/H,${progress})`
+      : direction === 'down'
+        ? `gte(Y/H,1-(${progress}))`
+        : direction === 'center'
+          ? `lte(sqrt((X/W-0.5)*(X/W-0.5)+(Y/H-0.5)*(Y/H-0.5)),(${progress})*0.7072)`
+          : `lte(X/W,${progress})`;
+  return `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(${visibility},alpha(X,Y),0)'`;
+}
+
+function maskFilter(mask: NonNullable<TimelineClip['mask']>) {
+  const left = ffmpegNumber(clamp(mask.x, 0, 1));
+  const top = ffmpegNumber(clamp(mask.y, 0, 1));
+  const right = ffmpegNumber(clamp(mask.x + mask.width, 0, 1));
+  const bottom = ffmpegNumber(clamp(mask.y + mask.height, 0, 1));
+  const inside = mask.type === 'ellipse'
+    ? `(((X/W-${ffmpegNumber(mask.x + mask.width / 2)})/${ffmpegNumber(Math.max(0.01, mask.width / 2) )})^2+((Y/H-${ffmpegNumber(mask.y + mask.height / 2)})/${ffmpegNumber(Math.max(0.01, mask.height / 2))})^2<1)`
+    : `between(X/W,${left},${right})*between(Y/H,${top},${bottom})`;
+  const feather = clamp(numberOr(mask.feather, 0), 0, 1);
+  if (feather <= 0.0001) {
+    const condition = mask.invert ? `not(${inside})` : inside;
+    return `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(${condition},alpha(X,Y),0)'`;
+  }
+  const featherSize = ffmpegNumber(Math.max(0.0001, feather));
+  const softness = mask.type === 'ellipse'
+    ? `clip((1-sqrt(((X/W-${ffmpegNumber(mask.x + mask.width / 2)})/${ffmpegNumber(Math.max(0.01, mask.width / 2))})^2+((Y/H-${ffmpegNumber(mask.y + mask.height / 2)})/${ffmpegNumber(Math.max(0.01, mask.height / 2))})^2))/${featherSize},0,1)`
+    : `clip(min(min((X/W-${left})/${featherSize},(${right}-X/W)/${featherSize}),min((Y/H-${top})/${featherSize},(${bottom}-Y/H)/${featherSize})),0,1)`;
+  const alpha = mask.invert ? `(1-(${softness}))` : softness;
+  return `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${alpha}'`;
+}
+
 async function registerRoutes(app: FastifyInstance) {
   app.get('/api/health', async () => ({ ok: true, port, ffmpeg: Boolean(binaryPath('ffmpeg')), ffprobe: Boolean(binaryPath('ffprobe')), dataDir: path.basename(dataDir) }));
 
@@ -787,16 +1096,16 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       return await saveSettings(request.body ?? {});
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Ayarlar geçersiz' });
+      return reply.code(400).send({ error: localizedError(error, 'settingsInvalid') });
     }
   });
 
-  app.get('/api/stock', async () => STOCK_MEDIA.map(({ id, name, description, mimeType, width, height }) => ({ id, name, description, mimeType, width, height })));
+  app.get('/api/stock', async () => STOCK_MEDIA.map((item) => { const { id, name, description, mimeType, width, height } = localizedStock(item); return { id, name, description, mimeType, width, height }; }));
   app.get<{ Params: { stockId: string } }>('/api/stock/:stockId', async (request, reply) => {
     const item = STOCK_MEDIA.find((entry) => entry.id === request.params.stockId);
-    if (!item) return reply.code(404).send({ error: 'Stok medya bulunamadı' });
+    if (!item) return reply.code(404).send({ error: message('stockNotFound') });
     const file = path.join(stockDir, item.fileName);
-    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Stok medya dosyası bulunamadı' });
+    if (!fs.existsSync(file)) return reply.code(404).send({ error: message('stockFileNotFound') });
     const stat = await fsp.stat(file);
     return reply.header('Content-Type', item.mimeType).header('Content-Length', stat.size).send(fs.createReadStream(file));
   });
@@ -809,30 +1118,30 @@ async function registerRoutes(app: FastifyInstance) {
       const source = trashPath(request.params.trashId);
       const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(path.join(source, 'project.json'), 'utf8')));
       const target = projectPath(project.id);
-      if (fs.existsSync(target)) return reply.code(409).send({ error: 'Bu proje zaten mevcut' });
+      if (fs.existsSync(target)) return reply.code(409).send({ error: message('projectAlreadyExists') });
       await ensureDir(projectsDir);
       await fsp.rename(source, target);
       return reply.send(project);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 404;
-      return reply.code(statusCode === 400 ? 400 : 404).send({ error: error instanceof Error ? error.message : 'Proje geri yüklenemedi' });
+      return reply.code(statusCode === 400 ? 400 : 404).send({ error: localizedError(error, 'projectRestoreFailed') });
     }
   });
 
   app.delete<{ Params: { trashId: string } }>('/api/trash/:trashId', async (request, reply) => {
     try {
       const target = trashPath(request.params.trashId);
-      if (!fs.existsSync(target)) return reply.code(404).send({ error: 'Çöp kutusu kaydı bulunamadı' });
+      if (!fs.existsSync(target)) return reply.code(404).send({ error: message('trashNotFound') });
       await fsp.rm(target, { recursive: true, force: false });
       return reply.send({ ok: true });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 400 ? 400 : 404).send({ error: error instanceof Error ? error.message : 'Çöp kutusu kaydı silinemedi' });
+      return reply.code(statusCode === 400 ? 400 : 404).send({ error: localizedError(error, 'trashDeleteFailed') });
     }
   });
 
   app.post<{ Body: { name?: string } }>('/api/projects', async (request, reply) => {
-    const project = defaultProject(id('project'), request.body?.name?.trim() || 'Yeni proje');
+    const project = defaultProject(id('project'), request.body?.name?.trim() || message('newProject'));
     await ensureProjectFolders(project.id);
     await saveProject(project);
     return reply.code(201).send(project);
@@ -840,11 +1149,11 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { projectId: string }; Body: { stockId?: string } }>('/api/projects/:projectId/stock', async (request, reply) => {
     const item = STOCK_MEDIA.find((entry) => entry.id === request.body?.stockId);
-    if (!item) return reply.code(400).send({ error: 'Geçersiz stok medya' });
+    if (!item) return reply.code(400).send({ error: message('invalidStock') });
     try {
       const project = await readProject(request.params.projectId);
       const source = path.join(stockDir, item.fileName);
-      if (!fs.existsSync(source)) return reply.code(404).send({ error: 'Stok medya dosyası bulunamadı' });
+      if (!fs.existsSync(source)) return reply.code(404).send({ error: message('stockFileNotFound') });
       const assetId = id('asset');
       const relativePath = path.join('media', `${assetId}.png`);
       const target = safeJoin(projectPath(project.id), relativePath);
@@ -853,10 +1162,11 @@ async function registerRoutes(app: FastifyInstance) {
       const stat = await fsp.stat(target);
       const asset: Asset = {
         id: assetId,
-        name: item.name,
+        name: localizedStock(item).name,
         type: 'image',
         mimeType: item.mimeType,
         path: relativePath,
+        thumbnailPath: relativePath,
         size: stat.size,
         duration: 5,
         width: item.width,
@@ -872,13 +1182,37 @@ async function registerRoutes(app: FastifyInstance) {
       });
       return reply.code(201).send({ asset, project: next });
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Stok medya eklenemedi' });
+      return reply.code(400).send({ error: localizedError(error, 'stockAddFailed') });
     }
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId', async (request, reply) => {
     try { return await readProject(request.params.projectId); }
-    catch { return reply.code(404).send({ error: 'Proje bulunamadı' }); }
+    catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+  });
+
+  app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/bundle', async (request, reply) => {
+    try {
+      const project = await readProject(request.params.projectId);
+      const bundle = { format: 'cutloc-project', version: 1, exportedAt: new Date().toISOString(), project, media: project.assets.map((asset) => ({ assetId: asset.id, name: asset.name, type: asset.type, originalPath: asset.path })) };
+      return reply.header('Content-Type', 'application/json').header('Content-Disposition', `attachment; filename="${safeExportName(project, project.name, 'cutloc.json')}"`).send(bundle);
+    } catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+  });
+
+  app.post<{ Body: { bundle?: { format?: string; version?: number; project?: unknown } } | { format?: string; version?: number; project?: unknown } }>('/api/projects/import', async (request, reply) => {
+    try {
+      const submitted = request.body;
+      const raw = ('bundle' in submitted ? submitted.bundle : submitted) as { format?: string; version?: number; project?: unknown } | undefined;
+      if (!raw || raw.format !== 'cutloc-project' || raw.version !== 1 || !raw.project) return reply.code(400).send({ error: message('invalidBundle') });
+      const source = ProjectSchema.parse(raw.project);
+      const importedId = id('project');
+      const now = new Date().toISOString();
+      const assets = source.assets.map((asset) => ({ ...asset, path: path.join('media', `${asset.id}${path.extname(asset.path) || (asset.type === 'video' ? '.mp4' : asset.type === 'audio' ? '.wav' : '.png')}`), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined }));
+      const project = ProjectSchema.parse({ ...source, id: importedId, name: message('bundleSuffix', { name: source.name }), createdAt: now, updatedAt: now, revision: 0, assets });
+      await ensureProjectFolders(project.id);
+      await saveProject(project);
+      return reply.code(201).send(project);
+    } catch (error) { return reply.code(400).send({ error: localizedError(error, 'bundleOpenFailed') }); }
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/backups', async (request, reply) => {
@@ -886,21 +1220,21 @@ async function registerRoutes(app: FastifyInstance) {
       await readProject(request.params.projectId);
       return listBackups(request.params.projectId);
     } catch {
-      return reply.code(404).send({ error: 'Proje bulunamadı' });
+      return reply.code(404).send({ error: message('projectNotFound') });
     }
   });
 
   app.post<{ Params: { projectId: string }; Body: { fileName?: string } }>('/api/projects/:projectId/restore', async (request, reply) => {
     const requestedFileName = String(request.body?.fileName ?? '');
     const fileName = path.basename(requestedFileName);
-    if (!requestedFileName || fileName !== requestedFileName || !/^project-\d+\.json$/i.test(fileName)) return reply.code(400).send({ error: 'Geçersiz backup dosyası' });
+    if (!requestedFileName || fileName !== requestedFileName || !/^project-\d+\.json$/i.test(fileName)) return reply.code(400).send({ error: message('invalidBackup') });
     try {
       const restored = await withProjectLock(request.params.projectId, async () => {
         const current = await readProject(request.params.projectId);
         const backupPath = safeExistingPath(path.join(projectPath(request.params.projectId), 'backups'), fileName);
-        if (!fs.existsSync(backupPath)) throw Object.assign(new Error('Backup bulunamadı'), { statusCode: 404 });
+        if (!fs.existsSync(backupPath)) throw Object.assign(new Error(message('backupNotFound')), { statusCode: 404 });
         const backup = ProjectSchema.parse(JSON.parse(await fsp.readFile(backupPath, 'utf8')));
-        if (backup.id !== current.id) throw Object.assign(new Error('Backup başka bir projeye ait'), { statusCode: 400 });
+        if (backup.id !== current.id) throw Object.assign(new Error(message('backupWrongProject')), { statusCode: 400 });
         const next = ProjectSchema.parse({ ...backup, id: current.id, revision: current.revision + 1, updatedAt: new Date().toISOString() });
         await saveProject(next);
         return next;
@@ -908,7 +1242,7 @@ async function registerRoutes(app: FastifyInstance) {
       return reply.send(restored);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 ? 404 : 400).send({ error: error instanceof Error ? error.message : 'Backup geri yüklenemedi' });
+      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'backupRestoreFailed') });
     }
   });
 
@@ -916,7 +1250,7 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       const next = await withProjectLock(request.params.projectId, async () => {
         const current = await readProject(request.params.projectId);
-        if (request.body.revision !== undefined && request.body.revision !== current.revision) throw Object.assign(new Error('Proje başka bir sürümde değişti'), { statusCode: 409, project: current });
+        if (request.body.revision !== undefined && request.body.revision !== current.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409, project: current });
         const updated = ProjectSchema.parse({ ...current, ...request.body, id: current.id, schemaVersion: 1, revision: current.revision + 1, updatedAt: new Date().toISOString() });
         await saveProject(updated);
         return updated;
@@ -925,7 +1259,7 @@ async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && Number(error.statusCode) === 409 ? 409 : 400;
       const conflictProject = statusCode === 409 && typeof error === 'object' && error !== null && 'project' in error ? error.project : undefined;
-      return reply.code(statusCode).send({ error: error instanceof Error ? error.message : 'Proje kaydedilemedi', ...(conflictProject ? { project: conflictProject } : {}) });
+      return reply.code(statusCode).send({ error: localizedError(error, 'projectSaveFailed'), ...(conflictProject ? { project: conflictProject } : {}) });
     }
   });
 
@@ -937,14 +1271,14 @@ async function registerRoutes(app: FastifyInstance) {
       await saveProject(copy);
       return reply.code(201).send(copy);
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return reply.code(404).send({ error: 'Proje bulunamadı' });
-      return reply.code(400).send({ error: 'Proje kopyalanamadı' });
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return reply.code(404).send({ error: message('projectNotFound') });
+      return reply.code(400).send({ error: message('projectCopyFailed') });
     }
   });
 
   app.delete<{ Params: { projectId: string } }>('/api/projects/:projectId', async (request, reply) => {
     const target = projectPath(request.params.projectId);
-    if (!fs.existsSync(target)) return reply.code(404).send({ error: 'Proje bulunamadı' });
+    if (!fs.existsSync(target)) return reply.code(404).send({ error: message('projectNotFound') });
     const trash = path.join(dataDir, 'trash', `${request.params.projectId}-${Date.now()}`);
     await ensureDir(path.dirname(trash));
     await fsp.rename(target, trash);
@@ -959,14 +1293,14 @@ async function registerRoutes(app: FastifyInstance) {
       part = await request.file();
     } catch (error) {
       const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
-      return reply.code(code === 'FST_REQ_FILE_TOO_LARGE' ? 413 : 400).send({ error: code === 'FST_REQ_FILE_TOO_LARGE' ? 'Dosya boyutu izin verilen sınırı aşıyor.' : 'Dosya okunamadı.' });
+      return reply.code(code === 'FST_REQ_FILE_TOO_LARGE' ? 413 : 400).send({ error: message(code === 'FST_REQ_FILE_TOO_LARGE' ? 'uploadTooLarge' : 'fileUnreadable') });
     }
-    if (!part) return reply.code(400).send({ error: 'Dosya gönderilmedi' });
+    if (!part) return reply.code(400).send({ error: message('fileMissing') });
     const extension = path.extname(part.filename).toLowerCase();
     const expected = mediaExtensionInfo[extension];
     const declaredMimeType = String(part.mimetype || '').toLowerCase().split(';')[0];
     if (!expected || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) {
-      return reply.code(415).send({ error: 'Bu medya türü desteklenmiyor veya dosya bilgileri uyuşmuyor' });
+      return reply.code(415).send({ error: message('unsupportedMedia') });
     }
     const assetId = id('asset');
     const uploadRelativePath = path.join('media', `${assetId}.upload`);
@@ -976,13 +1310,13 @@ async function registerRoutes(app: FastifyInstance) {
       await pipeline(part.file, fs.createWriteStream(uploadAbsolutePath));
     } catch {
       await fsp.rm(uploadAbsolutePath, { force: true });
-      return reply.code(400).send({ error: 'Medya yüklemesi tamamlanamadı' });
+      return reply.code(400).send({ error: message('uploadFailed') });
     }
     const probed = await probeMedia(uploadAbsolutePath);
     const detectedType = detectedMediaType(probed);
     if (detectedType !== expected.type) {
       await fsp.rm(uploadAbsolutePath, { force: true });
-      return reply.code(415).send({ error: 'Medya içeriği dosya uzantısıyla uyuşmuyor veya doğrulanamadı' });
+      return reply.code(415).send({ error: message('contentMismatch') });
     }
     const relativePath = path.join('media', `${assetId}${expected.storedExtension}`);
     const absolutePath = safeJoin(projectPath(project.id), relativePath);
@@ -1013,55 +1347,96 @@ async function registerRoutes(app: FastifyInstance) {
       await saveProject(updated);
       return updated;
     });
-    if (activeJobCount() >= maxConcurrentJobs) return reply.code(429).send({ error: 'Aynı anda çok fazla iş çalışıyor. Mevcut işler tamamlanınca tekrar deneyin.' });
-    const job = await makeJob(project.id, 'proxy', async (jobInfo) => {
-      updateJob(jobInfo.id, { status: 'running', message: 'Medya hazırlanıyor' });
-      const proxyDir = path.join(projectPath(project.id), 'proxies');
-      await ensureDir(proxyDir);
-      if (binaryPath('ffmpeg')) {
-        const proxyPath = path.join(proxyDir, `${asset.id}.mp4`);
-        const thumbnailPath = path.join(projectPath(project.id), 'thumbnails', `${asset.id}.jpg`);
-        const waveformPath = path.join(projectPath(project.id), 'waveforms', `${asset.id}.png`);
-        jobProgressDuration.set(jobInfo.id, asset.duration || 1);
-        let proxyRelative: string | undefined;
-        let thumbnailRelative: string | undefined;
-        let waveformRelative: string | undefined;
-        if (asset.type === 'video') {
-          await runFfmpeg(['-i', absolutePath, '-vf', 'scale=960:-2:force_original_aspect_ratio=decrease', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30', '-c:a', 'aac', '-b:a', '128k', proxyPath], jobInfo);
-          proxyRelative = path.relative(projectPath(project.id), proxyPath);
-        }
-        if (asset.type === 'video' || asset.type === 'image') {
-          await runFfmpeg(['-ss', asset.type === 'video' ? '0.2' : '0', '-i', absolutePath, '-frames:v', '1', '-vf', 'scale=480:-2', thumbnailPath], jobInfo);
-          thumbnailRelative = path.relative(projectPath(project.id), thumbnailPath);
-        }
-        if (asset.hasAudio || asset.type === 'audio') {
-          await runFfmpeg(['-i', absolutePath, '-filter_complex', 'showwavespic=s=900x120:colors=80e6c4:scale=sqrt', '-frames:v', '1', waveformPath], jobInfo);
-          waveformRelative = path.relative(projectPath(project.id), waveformPath);
-        }
-        await withProjectLock(project.id, async () => {
-          const updated = await readProject(project.id);
-          const index = updated.assets.findIndex((item) => item.id === asset.id);
-          if (index >= 0) updated.assets[index] = { ...updated.assets[index], proxyPath: proxyRelative, thumbnailPath: thumbnailRelative, waveformPath: waveformRelative };
-          await saveProject(ProjectSchema.parse({ ...updated, revision: updated.revision + 1, updatedAt: new Date().toISOString() }));
-        });
-      }
-      updateJob(jobInfo.id, { status: 'completed', progress: 1, message: 'Medya hazır' });
+    try {
+      const job = await queueDerivedMediaJob(project.id, asset);
+      return reply.code(201).send({ asset, job: publicJob(job), project: next });
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 429 ? 429 : 400).send({ asset, project: next, error: localizedError(error, 'derivativesPrepareFailed') });
+    }
+  });
+
+  app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/media-health', async (request, reply) => {
+    try {
+      const project = await readProject(request.params.projectId);
+      return project.assets.map((asset) => {
+        const sourceExists = fs.existsSync(assetFile(project.id, asset));
+        const proxyExists = Boolean(asset.proxyPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.proxyPath)));
+        const thumbnailExists = Boolean(asset.thumbnailPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.thumbnailPath)));
+        const waveformExists = Boolean(asset.waveformPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.waveformPath)));
+        return { assetId: asset.id, sourceExists, proxyExists, thumbnailExists, waveformExists, status: !sourceExists ? 'missing' : sourceExists && (asset.type === 'audio' ? waveformExists : thumbnailExists) ? 'ready' : 'derived-missing' };
+      });
+    } catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+  });
+
+  app.post<{ Params: { projectId: string; assetId: string } }>('/api/projects/:projectId/media/:assetId/rebuild-derived', async (request, reply) => {
+    try {
+      const project = await readProject(request.params.projectId);
+      const asset = project.assets.find((item) => item.id === request.params.assetId);
+      if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
+      const job = await queueDerivedMediaJob(project.id, asset);
+      return reply.code(202).send({ job: publicJob(job) });
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 || statusCode === 429 ? statusCode : 400).send({ error: localizedError(error, 'derivativesRebuildFailed') });
+    }
+  });
+
+  app.post<{ Params: { projectId: string; assetId: string } }>('/api/projects/:projectId/media/:assetId/relink', async (request, reply) => {
+    const project = await readProject(request.params.projectId);
+    const asset = project.assets.find((item) => item.id === request.params.assetId);
+    if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
+    let part: Awaited<ReturnType<FastifyRequest['file']>> | undefined;
+    try { part = await request.file(); } catch { return reply.code(400).send({ error: message('fileUnreadable') }); }
+    if (!part) return reply.code(400).send({ error: message('fileMissing') });
+    const extension = path.extname(part.filename).toLowerCase();
+    const expected = mediaExtensionInfo[extension];
+    const declaredMimeType = String(part.mimetype || '').toLowerCase().split(';')[0];
+    if (!expected || expected.type !== asset.type || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) return reply.code(415).send({ error: message('relinkTypeMismatch') });
+    const uploadPath = safeJoin(projectPath(project.id), path.join('media', `${asset.id}.relink`));
+    await ensureDir(path.dirname(uploadPath));
+    try { await pipeline(part.file, fs.createWriteStream(uploadPath)); } catch { await fsp.rm(uploadPath, { force: true }); return reply.code(400).send({ error: message('relinkSaveFailed') }); }
+    const probed = await probeMedia(uploadPath);
+    if (detectedMediaType(probed) !== expected.type) { await fsp.rm(uploadPath, { force: true }); return reply.code(415).send({ error: message('mediaValidationFailed') }); }
+    const finalPath = assetFile(project.id, asset);
+    try { if (fs.existsSync(finalPath)) await fsp.rm(finalPath, { force: true }); await fsp.rename(uploadPath, finalPath); } catch { await fsp.rm(uploadPath, { force: true }); return reply.code(400).send({ error: message('mediaPathFailed') }); }
+    const stat = await fsp.stat(finalPath);
+    const updatedAsset: Asset = { ...asset, name: part.filename, mimeType: expected.mimeType, size: stat.size, duration: Number(probed.duration ?? 0), width: Number(probed.width ?? 0) || undefined, height: Number(probed.height ?? 0) || undefined, fps: Number(probed.fps ?? 0) || undefined, hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined };
+    const next = await withProjectLock(project.id, async () => {
+      const current = await readProject(project.id);
+      const index = current.assets.findIndex((item) => item.id === asset.id);
+      if (index < 0) throw new Error(message('mediaNotFound'));
+      current.assets[index] = updatedAsset;
+      current.duration = Math.max(current.duration, updatedAsset.duration);
+      const saved = ProjectSchema.parse({ ...current, revision: current.revision + 1, updatedAt: new Date().toISOString() });
+      await saveProject(saved);
+      return saved;
     });
-    return reply.code(201).send({ asset, job: publicJob(job), project: next });
+    try {
+      const job = await queueDerivedMediaJob(project.id, updatedAsset);
+      return reply.code(202).send({ project: next, asset: updatedAsset, job: publicJob(job) });
+    } catch (error) { return reply.code(400).send({ project: next, asset: updatedAsset, error: localizedError(error, 'derivativesOutputFailed') }); }
   });
 
   app.get<{ Params: { projectId: string; assetId: string }; Querystring: { proxy?: string; waveform?: string; thumbnail?: string } }>('/api/projects/:projectId/media/:assetId', async (request, reply) => {
     const project = await readProject(request.params.projectId);
     const asset = project.assets.find((item) => item.id === request.params.assetId);
-    if (!asset) return reply.code(404).send({ error: 'Medya bulunamadı' });
+    if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
     let file = assetFile(project.id, asset);
     if (request.query.proxy === '1' && asset.proxyPath) file = safeExistingPath(projectPath(project.id), asset.proxyPath);
     if (request.query.waveform === '1' && asset.waveformPath) file = safeExistingPath(projectPath(project.id), asset.waveformPath);
     if (request.query.thumbnail === '1' && asset.thumbnailPath) file = safeExistingPath(projectPath(project.id), asset.thumbnailPath);
-    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Medya dosyası bulunamadı' });
+    if (!fs.existsSync(file)) return reply.code(404).send({ error: message('mediaFileNotFound') });
     const stat = await fsp.stat(file);
     const range = request.headers.range;
-    const contentType = request.query.waveform === '1' || request.query.thumbnail === '1' ? 'image/png' : asset.mimeType || 'application/octet-stream';
+    const extension = path.extname(file).toLowerCase();
+    const contentType = request.query.proxy === '1'
+      ? 'video/mp4'
+      : extension === '.jpg' || extension === '.jpeg'
+        ? 'image/jpeg'
+        : extension === '.png'
+          ? 'image/png'
+          : asset.mimeType || 'application/octet-stream';
     reply.header('Accept-Ranges', 'bytes').header('Content-Type', contentType);
     if (!range) return reply.header('Content-Length', stat.size).send(fs.createReadStream(file));
     const match = /bytes=(\d*)-(\d*)/.exec(range);
@@ -1080,14 +1455,14 @@ async function registerRoutes(app: FastifyInstance) {
   app.post<{ Params: { projectId: string }; Body: ExportRequest }>('/api/projects/:projectId/export/preflight', async (request, reply) => {
     let project: Project;
     try { project = await readProject(request.params.projectId); }
-    catch { return reply.code(404).send({ error: 'Proje bulunamadı' }); }
+    catch { return reply.code(404).send({ error: message('projectNotFound') }); }
     const exportDir = path.join(projectPath(project.id), 'exports');
     await ensureDir(exportDir);
     try {
       const options = normalizeExportOptions(project, request.body ?? {});
       return exportPreflight(project, options, exportDir);
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Export ayarları geçersiz' });
+      return reply.code(400).send({ error: localizedError(error, 'exportSettingsInvalid') });
     }
   });
 
@@ -1096,13 +1471,13 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       project = await readProject(request.params.projectId);
     } catch {
-      return reply.code(404).send({ error: 'Proje bulunamadı' });
+      return reply.code(404).send({ error: message('projectNotFound') });
     }
     const exportDir = path.join(projectPath(project.id), 'exports');
     await ensureDir(exportDir);
     let options: ExportOptions;
     try { options = normalizeExportOptions(project, request.body ?? {}); }
-    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : 'Export ayarları geçersiz' }); }
+    catch (error) { return reply.code(400).send({ error: localizedError(error, 'exportSettingsInvalid') }); }
     const preflight = await exportPreflight(project, options, exportDir);
     if (!preflight.ok) return reply.code(400).send({ error: preflight.errors.map((item) => item.message).join(' '), preflight });
     const extension = options.format === 'wav' ? 'wav' : options.format === 'mp3' ? 'mp3' : 'mp4';
@@ -1113,16 +1488,16 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       render = buildExportArgs(project, options, output);
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : 'Export hazırlanamadı' });
+      return reply.code(400).send({ error: localizedError(error, 'exportPrepareFailed') });
     }
-    if (activeJobCount() >= maxConcurrentJobs) return reply.code(429).send({ error: 'Aynı anda çok fazla iş çalışıyor. Mevcut işler tamamlanınca tekrar deneyin.' });
+    if (activeJobCount() >= maxConcurrentJobs) return reply.code(429).send({ error: message('tooManyJobs') });
     const job = await makeJob(project.id, 'export', async (jobInfo) => {
-      updateJob(jobInfo.id, { status: 'running', message: audioOnly ? 'Ses dışa aktarılıyor' : 'Video dışa aktarılıyor' });
+      updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
       jobProgressDuration.set(jobInfo.id, render.duration);
       await runFfmpeg(render.args, jobInfo, output);
       jobProgressDuration.delete(jobInfo.id);
       updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName, format: options.format, phase: 'complete' });
-      updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: 'Export tamamlandı' });
+      updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
     });
     updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
     return reply.code(202).send({ job: publicJob(job), preflight });
@@ -1130,13 +1505,13 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { jobId: string } }>('/api/jobs/:jobId/download', async (request, reply) => {
     const job = jobs.get(request.params.jobId);
-    if (!job || job.kind !== 'export') return reply.code(404).send({ error: 'Export işi bulunamadı' });
-    if (job.status !== 'completed') return reply.code(409).send({ error: 'Export henüz hazır değil' });
-    if (!job.relativeOutputPath || !job.fileName) return reply.code(404).send({ error: 'Export dosyası bulunamadı' });
+    if (!job || job.kind !== 'export') return reply.code(404).send({ error: message('exportJobNotFound') });
+    if (job.status !== 'completed') return reply.code(409).send({ error: message('exportNotReady') });
+    if (!job.relativeOutputPath || !job.fileName) return reply.code(404).send({ error: message('exportFileNotFound') });
     let file: string;
     try { file = safeExistingPath(projectPath(job.projectId), job.relativeOutputPath); }
-    catch { return reply.code(404).send({ error: 'Export dosyası bulunamadı' }); }
-    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Export dosyası bulunamadı' });
+    catch { return reply.code(404).send({ error: message('exportFileNotFound') }); }
+    if (!fs.existsSync(file)) return reply.code(404).send({ error: message('exportFileNotFound') });
     const stat = await fsp.stat(file);
     const contentType = job.format === 'mp4' ? 'video/mp4' : job.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
     const fileName = path.basename(job.fileName).replace(/["\r\n]/g, '-');
@@ -1148,25 +1523,19 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.get('/api/jobs', async () => Array.from(jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(publicJob));
   app.delete<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
-    if (!jobs.has(request.params.jobId)) return reply.code(404).send({ error: 'İş bulunamadı' });
+    if (!jobs.has(request.params.jobId)) return reply.code(404).send({ error: message('jobNotFound') });
     const process = jobProcesses.get(request.params.jobId);
     if (process) process.kill();
-    updateJob(request.params.jobId, { status: 'cancelled', message: 'İptal edildi' });
+    updateJob(request.params.jobId, { status: 'cancelled', message: message('cancelledMessage') });
     return reply.send({ ok: true });
   });
 
   app.get('/api/events', async (request, reply) => {
-    if (clients.size >= maxSseClients) return reply.code(429).send({ error: 'Çok fazla ilerleme bağlantısı açık' });
+    if (clients.size >= maxSseClients) return reply.code(429).send({ error: message('tooManyProgressConnections') });
     const origin = request.headers.origin;
-    const allowedOrigins = new Set([
-      `http://127.0.0.1:${port}`,
-      `http://localhost:${port}`,
-      'http://127.0.0.1:5173',
-      'http://localhost:5173',
-    ]);
     reply.hijack();
     const headers: Record<string, string> = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' };
-    if (origin && allowedOrigins.has(origin)) headers['Access-Control-Allow-Origin'] = origin;
+    if (origin && isAllowedWebOrigin(origin)) headers['Access-Control-Allow-Origin'] = origin;
     reply.raw.writeHead(200, headers);
     reply.raw.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     const client = { reply };
@@ -1199,7 +1568,7 @@ export async function createServer() {
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 });
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api/') && !isAllowedLocalRequest(request)) {
-      return reply.code(403).send({ error: 'Yalnızca yerel istemciye izin verilir' });
+      return reply.code(403).send({ error: message('localOnly') });
     }
   });
   app.addHook('onSend', async (request, reply, payload) => {
