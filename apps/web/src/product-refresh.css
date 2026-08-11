@@ -2115,3 +2115,10 @@ body {
 }
 .preview-zoom-control > .preview-zoom-step { width: 26px !important; min-width: 26px !important; }
 .preview-zoom-control > .preview-zoom-fit { width: 45px !important; min-width: 45px !important; }
+.save-indicator{display:inline-flex;align-items:center;gap:4px;min-width:0;color:var(--muted-2);font:10px 'DM Mono';margin-left:12px;white-space:nowrap}
+.save-indicator .status-dot{margin-right:0}
+.save-indicator.saved{color:#b7f36a}
+.save-indicator.saving{color:#f2d28b}
+.save-indicator.error,.save-indicator.offline{color:#ff9d9d}
+.save-indicator.saving .status-dot{background:#f2d28b;box-shadow:0 0 10px rgba(242,210,139,.55)}
+.save-indicator.error .status-dot,.save-indicator.offline .status-dot{background:#ff7777;box-shadow:0 0 10px rgba(255,119,119,.55)}

@@ -58,7 +58,7 @@ function activeJobCount() {
 }
 
 type TimelineClip = Project['tracks'][number]['clips'][number];
-type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean };
+type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean; projectRevision?: number };
 
 const STOCK_MEDIA = [
   { id: 'white', name: 'Beyaz yüzey', description: 'Temiz ve aydınlık arka plan', fileName: 'white.png', mimeType: 'image/png', width: 1600, height: 900 },
@@ -1081,6 +1081,9 @@ async function registerRoutes(app: FastifyInstance) {
     let project: Project;
     try { project = await readProject(request.params.projectId); }
     catch { return reply.code(404).send({ error: 'Proje bulunamadı' }); }
+    if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) {
+      return reply.code(409).send({ error: 'Proje revizyonu g\u00fcncel de\u011fil; \u00f6nce kaydedin.' });
+    }
     const exportDir = path.join(projectPath(project.id), 'exports');
     await ensureDir(exportDir);
     try {
@@ -1097,6 +1100,9 @@ async function registerRoutes(app: FastifyInstance) {
       project = await readProject(request.params.projectId);
     } catch {
       return reply.code(404).send({ error: 'Proje bulunamadı' });
+    }
+    if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) {
+      return reply.code(409).send({ error: 'Proje revizyonu g\u00fcncel de\u011fil; \u00f6nce kaydedin.' });
     }
     const exportDir = path.join(projectPath(project.id), 'exports');
     await ensureDir(exportDir);
@@ -1147,6 +1153,11 @@ async function registerRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/jobs', async () => Array.from(jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(publicJob));
+  app.get<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.code(404).send({ error: 'Job bulunamad\u0131' });
+    return publicJob(job);
+  });
   app.delete<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
     if (!jobs.has(request.params.jobId)) return reply.code(404).send({ error: 'İş bulunamadı' });
     const process = jobProcesses.get(request.params.jobId);

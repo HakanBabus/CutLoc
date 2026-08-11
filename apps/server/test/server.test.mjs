@@ -112,6 +112,10 @@ test('project CRUD and revision conflicts work in an isolated data directory', a
   const conflictResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'Eski sürüm', revision: 0 });
   assert.equal(conflictResponse.statusCode, 409);
   assert.equal(conflictResponse.json().project.revision, 1);
+  const stalePreflightResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export/preflight', { projectRevision: 0 });
+  assert.equal(stalePreflightResponse.statusCode, 409);
+  const staleExportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { projectRevision: 0, format: 'mp4' });
+  assert.equal(staleExportResponse.statusCode, 409);
 
   const backupsResponse = await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/backups' });
   assert.equal(backupsResponse.statusCode, 200);
@@ -231,6 +235,9 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal('outputPath' in exportResponse.json().job, false);
   assert.equal('relativeOutputPath' in exportResponse.json().job, false);
   assert.equal(exportResponse.json().job.downloadUrl, `/api/jobs/${exportResponse.json().job.id}/download`);
+  const jobSnapshotResponse = await app.inject({ method: 'GET', url: '/api/jobs/' + exportResponse.json().job.id });
+  assert.equal(jobSnapshotResponse.statusCode, 200);
+  assert.equal(jobSnapshotResponse.json().id, exportResponse.json().job.id);
   const exportJob = await waitForJob(exportResponse.json().job.id);
   assert.equal(exportJob.status, 'completed');
   assert.equal('absoluteOutputPath' in exportJob, false);

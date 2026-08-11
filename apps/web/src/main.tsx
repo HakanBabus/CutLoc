@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
@@ -17,6 +17,7 @@ import {
   type ExportOptions,
   type ExportPreflight,
   type ExportJobResult,
+  type Job,
   formatTime,
   type Asset,
   type CanvasAspect,
@@ -39,6 +40,9 @@ type HistoryState = { past: Project[]; future: Project[] };
 type HistoryMutationOptions = { historyGroup?: string };
 type ShortcutAction = keyof ShortcutSettings;
 type StockMediaItem = { id: string; name: string; description: string; category: 'solid' | 'soft' | 'texture'; mimeType: string; width: number; height: number };
+type SaveState = 'saved' | 'saving' | 'error' | 'offline';
+type ExportUiStatus = Job['status'] | 'reconnecting' | 'preflight' | 'saving';
+type ExportStatus = { jobId?: string; status?: ExportUiStatus; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string };
 
 const DEFAULT_SHORTCUTS: ShortcutSettings = {
   togglePlayback: 'Space',
@@ -95,7 +99,10 @@ type EditorState = {
   pxPerSecond: number;
   panel: Panel;
   theme: Theme;
-  saveState: 'saved' | 'saving' | 'error';
+  saveState: SaveState;
+  localRevision: number;
+  savedRevision: number;
+  lastSavedAt: string | null;
   notice: string;
   history: HistoryState;
   historyGroup: string | null;
@@ -114,6 +121,8 @@ type EditorState = {
   toggleSelected: (clipId: string, trackId?: string | null) => void;
   setZoom: (zoom: number) => void;
   mutateProject: (recipe: (draft: Project) => void, options?: HistoryMutationOptions) => void;
+  applyServerProject: (project: Project) => void;
+  acknowledgeSaved: (project: Project, snapshot: Project) => void;
   undo: () => void;
   redo: () => void;
   setSaveState: (state: EditorState['saveState']) => void;
@@ -166,12 +175,15 @@ const useEditor = create<EditorState>((set) => ({
   panel: 'media',
   theme: initialTheme(),
   saveState: 'saved',
+  localRevision: 0,
+  savedRevision: 0,
+  lastSavedAt: null,
   notice: '',
   history: { past: [], future: [] },
   historyGroup: null,
   setProject: (project, resetHistory = true) => set((state) => resetHistory
-    ? { project, history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null }
-    : { ...state, project }),
+    ? { project, localRevision: project.revision, savedRevision: project.revision, lastSavedAt: project.updatedAt, saveState: 'saved', history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null }
+    : { ...state, project, localRevision: Math.max(state.localRevision, project.revision), savedRevision: Math.max(state.savedRevision, project.revision), lastSavedAt: project.updatedAt }),
   setSettings: (settings) => set({ settings }),
   setCurrentTime: (time) => set((state) => ({ currentTime: clamp(time, 0, state.project?.duration ?? 0) })),
   setRangeStart: (rangeStart) => set((state) => ({ rangeStart: rangeStart === null ? null : clamp(rangeStart, 0, state.project?.duration ?? 0) })),
@@ -201,20 +213,43 @@ const useEditor = create<EditorState>((set) => ({
       project: next,
       history: grouped ? { ...state.history, future: [] } : { past: [...state.history.past.slice(-49), state.project], future: [] },
       historyGroup: options?.historyGroup ?? null,
-      saveState: 'saving',
+      localRevision: Math.max(state.localRevision, state.savedRevision) + 1,
+      saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving',
     };
   }),
   undo: () => set((state) => {
     const previous = state.history.past.at(-1);
     if (!previous || !state.project) return state;
-    return { project: previous, history: { past: state.history.past.slice(0, -1), future: [state.project, ...state.history.future] }, historyGroup: null, saveState: 'saving' };
+    return { project: previous, history: { past: state.history.past.slice(0, -1), future: [state.project, ...state.history.future] }, historyGroup: null, localRevision: Math.max(state.localRevision, state.savedRevision) + 1, saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving' };
   }),
   redo: () => set((state) => {
     const next = state.history.future[0];
     if (!next || !state.project) return state;
-    return { project: next, history: { past: [...state.history.past, state.project], future: state.history.future.slice(1) }, historyGroup: null, saveState: 'saving' };
+    return { project: next, history: { past: [...state.history.past, state.project], future: state.history.future.slice(1) }, historyGroup: null, localRevision: Math.max(state.localRevision, state.savedRevision) + 1, saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving' };
   }),
   setSaveState: (saveState) => set({ saveState }),
+  applyServerProject: (project) => set((state) => {
+    const wasDirty = state.localRevision !== state.savedRevision;
+    return {
+      project,
+      localRevision: wasDirty ? Math.max(state.localRevision, project.revision) + 1 : project.revision,
+      savedRevision: project.revision,
+      lastSavedAt: project.updatedAt,
+      saveState: wasDirty ? 'saving' : 'saved',
+    };
+  }),
+  acknowledgeSaved: (project, snapshot) => set((state) => {
+    const isLatestLocalSnapshot = state.project === snapshot;
+    return {
+      project: isLatestLocalSnapshot || !state.project
+        ? project
+        : { ...state.project, revision: project.revision, updatedAt: state.project.updatedAt },
+      localRevision: isLatestLocalSnapshot ? project.revision : Math.max(state.localRevision, project.revision),
+      savedRevision: project.revision,
+      lastSavedAt: project.updatedAt,
+      saveState: isLatestLocalSnapshot ? 'saved' : 'saving',
+    };
+  }),
   setNotice: (notice) => set({ notice }),
 }));
 
@@ -360,10 +395,44 @@ function App() {
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Proje oluşturulamadı'); }
   };
 
-  const requestDeleteProject = (id: string) => {
+  const requestDeleteProject = (id: string) => { const candidate = projects.find((item) => item.id === id); if (candidate) setDeleteCandidate(candidate); };
+  const startWithMedia = async (file: File) => {
+    try {
+      const created = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, '') || 'Yeni proje' }) });
+      const form = new FormData();
+      form.append('file', file);
+      const response = await fetch('/api/projects/' + created.id + '/media', { method: 'POST', body: form });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || 'Medya import edilemedi');
+      }
+      const result = await response.json() as { asset: Asset; project: Project };
+      setProjects((items) => [result.project, ...items.filter((item) => item.id !== result.project.id)]);
+      setProject(result.project);
+      const placement = findEmptyPlacement(result.project, Math.max(result.asset.duration || 5, 0.5), 0);
+      const clip = createMediaClip(result.asset, placement.start);
+      let targetId = placement.trackId;
+      useEditor.getState().mutateProject((draft) => {
+        const destination = targetId ? draft.tracks.find((track) => track.id === targetId) : undefined;
+        const track = destination && !destination.locked ? destination : createLayerTrack(draft);
+        targetId = track.id;
+        track.clips.push(clip);
+        draft.duration = projectDuration(draft);
+      });
+      useEditor.getState().setSelected(clip.id, targetId);
+      useEditor.getState().setPanel('media');
+      useEditor.getState().setNotice('Medya haz\u0131r: ' + result.asset.name + ' timeline\x27a eklendi.');
+      transitionTo('editor');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Medya ba\u015flat\u0131lamad\u0131');
+    }
+  };
+
+
+/* Legacy requestDelete body retained only for reference.
     const candidate = projects.find((item) => item.id === id);
     if (candidate) setDeleteCandidate(candidate);
-  };
+*/
 
   const deleteProject = async () => {
     const candidate = deleteCandidate;
@@ -419,7 +488,7 @@ function App() {
 
   return <div className="app-shell" data-theme={theme}>
     <div className={viewClass} key={screen}>
-      {screen === 'dashboard' ? <Dashboard projects={projects} trash={trash} loading={loading} onCreate={createProject} onOpen={openProject} onDelete={requestDeleteProject} onRestoreTrash={restoreTrash} onPurgeTrash={purgeTrash} onSettings={() => setShowSettings(true)} /> : project ? <Editor onBack={returnToDashboard} /> : null}
+      {screen === 'dashboard' ? <Dashboard projects={projects} trash={trash} loading={loading} onCreate={createProject} onStartWithMedia={startWithMedia} onOpen={openProject} onDelete={requestDeleteProject} onRestoreTrash={restoreTrash} onPurgeTrash={purgeTrash} onSettings={() => setShowSettings(true)} /> : project ? <Editor onBack={returnToDashboard} /> : null}
     </div>
     {screenTransition !== 'idle' && <div className={`route-transition ${screenTransition === 'enter' ? 'route-transition-enter' : ''}`} aria-hidden="true"><div className="route-transition-orbit"><i /><i /><i /></div><span>{screen === 'editor' ? 'Editör hazırlanıyor' : 'Çalışma alanına dönülüyor'}</span></div>}
     {screen === 'dashboard' && showSettings && <SettingsModal settings={useEditor.getState().settings} onClose={() => setShowSettings(false)} />}
@@ -437,9 +506,10 @@ function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
   </div>;
 }
 
-function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRestoreTrash, onPurgeTrash, onSettings }: { projects: Project[]; trash: TrashEntry[]; loading: boolean; onCreate: () => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onRestoreTrash: (trashId: string) => void; onPurgeTrash: (trashId: string) => void; onSettings: () => void }) {
+function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpen, onDelete, onRestoreTrash, onPurgeTrash, onSettings }: { projects: Project[]; trash: TrashEntry[]; loading: boolean; onCreate: () => void; onStartWithMedia: (file: File) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onRestoreTrash: (trashId: string) => void; onPurgeTrash: (trashId: string) => void; onSettings: () => void }) {
   const language = useEditor((state) => state.settings?.language ?? 'en');
   const isEnglish = language === 'en';
+  const mediaFileRef = useRef<HTMLInputElement>(null);
   return <main key={language} className="dashboard">
     <header className="dashboard-header">
       <div className="brand"><div className="brand-mark"><span /></div><div><strong>CUTLOC</strong><small>Yerel video editörü</small></div></div>
@@ -451,9 +521,10 @@ function Dashboard({ projects, trash, loading, onCreate, onOpen, onDelete, onRes
     </section>
     <section className="dashboard-command-strip" aria-label="Hızlı başlangıç">
       <button className="command-card command-primary" onClick={onCreate}><span className="command-icon">＋</span><span><strong>Yeni proje</strong><small>Boş bir canvas ile başla</small></span><b>↗</b></button>
-      <button className="command-card" onClick={onCreate}><span className="command-icon">▣</span><span><strong>Medyayla başla</strong><small>Dosyanı ekle ve timeline’a yerleştir</small></span><b>↗</b></button>
+      <button className="command-card" onClick={() => mediaFileRef.current?.click()}><span className="command-icon">▣</span><span><strong>Medyayla başla</strong><small>Dosyanı ekle ve timeline’a yerleştir</small></span><b>↗</b></button>
       {projects[0] ? <button className="command-card" onClick={() => onOpen(projects[0].id)}><span className="command-icon">▶</span><span><strong>Düzenlemeye devam et</strong><small>{projects[0].name} · {formatTime(projects[0].duration)}</small></span><b>↗</b></button> : <div className="command-card command-muted"><span className="command-icon">⌁</span><span><strong>Yerel çalışma alanı</strong><small>Dosyaların cihazından çıkmaz</small></span></div>}
     </section>
+    <input ref={mediaFileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" aria-label="Medya dosyasi sec" onChange={(event) => { const file = event.target.files?.[0]; if (file) onStartWithMedia(file); event.target.value = ''; }} />
     <section className="projects-section">
       <div className="section-heading"><div><p className="eyebrow">Çalışma alanın</p><h2>Taslakların</h2></div><span className="project-count">{`${projects.length} ${isEnglish ? 'projects' : 'proje'}`}</span></div>
       <div className="dashboard-insights"><span><b>{projects.reduce((total, item) => total + item.assets.length, 0)}</b> {isEnglish ? 'media assets' : 'medya varlığı'}</span><span><b>{projects.filter((item) => item.duration > 0).length}</b> {isEnglish ? 'active timelines' : 'aktif timeline'}</span><span><b>Ctrl / ⌘ Z</b> {isEnglish ? 'to undo' : 'ile geri al'}</span></div>
@@ -487,6 +558,11 @@ function Editor({ onBack }: { onBack: () => void }) {
   const settings = useEditor((state) => state.settings);
   const setSettings = useEditor((state) => state.setSettings);
   const saveState = useEditor((state) => state.saveState);
+  const localRevision = useEditor((state) => state.localRevision);
+  const savedRevision = useEditor((state) => state.savedRevision);
+  const lastSavedAt = useEditor((state) => state.lastSavedAt);
+  const acknowledgeSaved = useEditor((state) => state.acknowledgeSaved);
+  const applyServerProject = useEditor((state) => state.applyServerProject);
   const setProject = useEditor((state) => state.setProject);
   const setSaveState = useEditor((state) => state.setSaveState);
   const selectedClipId = useEditor((state) => state.selectedClipId);
@@ -505,10 +581,12 @@ function Editor({ onBack }: { onBack: () => void }) {
   const [exportMessage, setExportMessage] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showExport, setShowExport] = useState(false);
-  const [exportStatus, setExportStatus] = useState<{ jobId?: string; status?: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string }>({ progress: 0 });
+  const [exportStatus, setExportStatus] = useState<ExportStatus>({ progress: 0 });
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>({ ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) });
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
+  const savePromiseRef = useRef<Promise<void> | null>(null);
+  const exportWatchCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (settings?.workspaceLayout) setWorkspaceLayout({ ...DEFAULT_WORKSPACE_LAYOUT, ...settings.workspaceLayout });
@@ -521,8 +599,87 @@ function Editor({ onBack }: { onBack: () => void }) {
     void api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify({ workspaceLayout: next }) }).catch(() => setEditorNotice('Çalışma alanı düzeni kaydedilemedi.'));
   };
 
+  const saveProjectNow = useCallback(async (): Promise<void> => {
+    if (savePromiseRef.current) return savePromiseRef.current;
+    const promise = (async () => {
+      const beforeSave = useEditor.getState();
+      const snapshot = beforeSave.project;
+      if (!snapshot) return;
+      if (beforeSave.localRevision === beforeSave.savedRevision && beforeSave.saveState === 'saved') return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setSaveState('offline');
+        throw new Error('\u00c7evrimd\u0131\u015f\u0131 oldu\u011funuz i\u00e7in proje kaydedilemedi.');
+      }
+      const keepClipId = beforeSave.selectedClipId;
+      const keepClipIds = beforeSave.selectedClipIds;
+      const keepTrackId = beforeSave.selectedTrackId;
+      const keepTime = beforeSave.currentTime;
+      let candidate: Project = { ...snapshot, revision: beforeSave.savedRevision };
+      let saved: Project | null = null;
+      try {
+        setSaveState('saving');
+        for (let attempt = 0; attempt < 3 && !saved; attempt += 1) {
+          try {
+            saved = await api<Project>(`/api/projects/${snapshot.id}`, { method: 'PATCH', body: JSON.stringify(candidate) });
+          } catch (error) {
+            if (!(error instanceof ApiError) || error.status !== 409 || attempt >= 2) throw error;
+            const latest = await api<Project>(`/api/projects/${snapshot.id}`);
+            candidate = mergeImportedProject(candidate, latest);
+          }
+        }
+        if (!saved) throw new Error('Proje kaydedilemedi');
+        const isLatestLocalSnapshot = useEditor.getState().project === snapshot;
+        acknowledgeSaved(saved, snapshot);
+        if (isLatestLocalSnapshot) {
+          const survivingClipIds = keepClipIds.filter((id) => saved!.tracks.some((track) => track.clips.some((clip) => clip.id === id)));
+          if (survivingClipIds.length) useEditor.getState().setSelectedMany(survivingClipIds, keepTrackId);
+          else if (keepClipId && saved.tracks.some((track) => track.clips.some((clip) => clip.id === keepClipId))) useEditor.getState().setSelected(keepClipId, keepTrackId);
+          useEditor.getState().setCurrentTime(keepTime);
+        }
+      } catch (error) {
+        const offline = typeof navigator !== 'undefined' && !navigator.onLine || error instanceof TypeError;
+        setSaveState(offline ? 'offline' : 'error');
+        setEditorNotice(offline ? '\u00c7evrimd\u0131\u015f\u0131: de\u011fi\u015fiklikler yerelde bekliyor.' : error instanceof Error ? `Kaydetme hatas\u0131: ${error.message}` : 'Kaydetme hatas\u0131');
+        throw error;
+      }
+    })();
+    savePromiseRef.current = promise;
+    void promise.then(() => {
+      if (savePromiseRef.current === promise) savePromiseRef.current = null;
+    }, () => {
+      if (savePromiseRef.current === promise) savePromiseRef.current = null;
+    });
+    return promise;
+  }, [acknowledgeSaved, setEditorNotice, setSaveState]);
   useEffect(() => {
-    if (saveState !== 'saving') return;
+    if (!project || saveState !== 'saving' || localRevision === savedRevision) return;
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void saveProjectNow().catch(() => undefined);
+    }, 550);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [localRevision, project, saveProjectNow, saveState, savedRevision]);
+  useEffect(() => {
+    const onOffline = () => setSaveState('offline');
+    const onOnline = () => {
+      const state = useEditor.getState();
+      setSaveState(state.localRevision !== state.savedRevision ? 'saving' : 'saved');
+    };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+    if (!navigator.onLine) onOffline();
+    return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [setSaveState]);
+  /* Legacy autosave body kept only as a migration reference; saveProjectNow above is the live path.
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
@@ -572,22 +729,10 @@ function Editor({ onBack }: { onBack: () => void }) {
               if (useEditor.getState().project !== saved) useEditor.getState().setSaveState('saving');
             }, 0);
           }
-        } catch (error) {
           setSaveState('error');
           setEditorNotice(error instanceof Error ? `Kaydetme hatası: ${error.message}` : 'Kaydetme hatası');
-        } finally {
-          saveInFlightRef.current = false;
-        }
-      })();
-    }, 550);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
-  }, [project, saveState, setEditorNotice, setProject, setSaveState]);
 
+  */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement).tagName;
@@ -659,8 +804,8 @@ function Editor({ onBack }: { onBack: () => void }) {
       // selection and local timeline edits while a proxy is being prepared.
       const localProject = useEditor.getState().project;
       const mergedProject = localProject ? mergeImportedProject(localProject, serverProject) : serverProject;
-      useEditor.getState().setProject(mergedProject, false);
-      useEditor.getState().setSaveState('saving');
+      applyServerProject(mergedProject);
+      // The media endpoint already persisted the asset; only local edits remain pending.
       setEditorNotice(`“${result.asset.name}” kütüphaneye eklendi. Timeline'a eklemek için karttaki Ekle düğmesini kullanın.`);
     } catch (error) { setExportMessage(error instanceof Error ? error.message : 'Medya import edilemedi'); }
   };
@@ -689,7 +834,30 @@ function Editor({ onBack }: { onBack: () => void }) {
     return true;
   };
 
-  const flushPendingSave = async () => {
+  const flushPendingSave = async () => {};
+  const ensureProjectSaved = async (): Promise<Project> => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const state = useEditor.getState();
+      if (!state.project) throw new Error('Proje bulunamad\u0131.');
+      if (state.saveState === 'offline') throw new Error('\u00c7evrimd\u0131\u015f\u0131 ba\u011flant\u0131 varken export ba\u015flat\u0131lamaz.');
+      if (state.saveState === 'error') throw new Error('Export i\u00e7in bekleyen proje kayd\u0131n\u0131 d\u00fczeltin.');
+      if (state.localRevision !== state.savedRevision) {
+        await saveProjectNow();
+        continue;
+      }
+      const confirmed = await api<Project>(`/api/projects/${state.project.id}`);
+      const latestState = useEditor.getState();
+      if (confirmed.revision !== latestState.savedRevision) {
+        const localProject = latestState.project;
+        if (!localProject) throw new Error('Proje bulunamad\u0131.');
+        applyServerProject(mergeImportedProject(localProject, confirmed));
+        continue;
+      }
+      return confirmed;
+    }
+    throw new Error('Proje kayd\u0131 backend taraf\u0131ndan do\u011frulanamad\u0131.');
+  };
+  /* Legacy timeout helper body retained only for reference.
     const deadline = Date.now() + 3500;
     while (useEditor.getState().saveState === 'saving' && Date.now() < deadline) {
       await new Promise((resolve) => window.setTimeout(resolve, 80));
@@ -697,8 +865,124 @@ function Editor({ onBack }: { onBack: () => void }) {
     if (useEditor.getState().saveState === 'error') throw new Error('Önce bekleyen proje kaydını düzeltin.');
   };
 
+  */
+  useEffect(() => {
+    return () => {
+      exportWatchCleanupRef.current?.();
+    };
+  }, []);
+
+  const watchExportJob = (jobId: string) => new Promise<void>((resolve) => {
+    let source: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let pollTimer: number | null = null;
+    let reconnectAttempts = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      source?.close();
+      source = null;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+      if (exportWatchCleanupRef.current === cleanup) exportWatchCleanupRef.current = null;
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      setExporting(false);
+      resolve();
+    };
+    const applyJob = (job: Job) => {
+      setExportStatus({
+        jobId,
+        progress: job.progress ?? 0,
+        status: job.status,
+        message: job.message,
+        downloadUrl: job.downloadUrl,
+        fileName: job.fileName,
+        error: job.error,
+      });
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') finish();
+    };
+    const poll = () => {
+      if (settled) return;
+      setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export durumu yoklan\u0131yor...' }));
+      void api<Job>('/api/jobs/' + jobId).then(applyJob).catch(() => {
+        if (!settled) setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export sunucusuna yeniden ba\u011flan\u0131l\u0131yor...' }));
+      }).finally(() => {
+        if (!settled) pollTimer = window.setTimeout(poll, 1000);
+      });
+    };
+    const connect = () => {
+      if (settled) return;
+      source = new EventSource('/api/events');
+      source.addEventListener('job', (event) => {
+        try {
+          const job = JSON.parse((event as MessageEvent).data) as Job;
+          if (job.id === jobId) applyJob(job);
+        } catch {
+          // Ignore malformed events and let the job polling fallback recover.
+        }
+      });
+      source.onerror = () => {
+        if (settled) return;
+        source?.close();
+        source = null;
+        reconnectAttempts += 1;
+        setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export ba\u011flant\u0131s\u0131 yeniden kuruluyor...' }));
+        if (reconnectAttempts <= 3) {
+          reconnectTimer = window.setTimeout(connect, 500 * reconnectAttempts);
+        } else {
+          poll();
+        }
+      };
+    };
+
+    exportWatchCleanupRef.current = cleanup;
+    void api<Job>('/api/jobs/' + jobId).then(applyJob).catch(() => undefined);
+    connect();
+  });
+
+  const startExportResilient = async (options: ExportOptions): Promise<ExportPreflight> => {
+    setExporting(true);
+    try {
+      setExportStatus({ progress: 0, status: 'saving', message: 'Proje kayd\u0131 backend taraf\u0131ndan do\u011frulan\u0131yor' });
+      const confirmedProject = await ensureProjectSaved();
+      const requestBody = { ...options, projectRevision: confirmedProject.revision };
+      setExportStatus({ progress: 0, status: 'preflight', message: 'Export \u00f6n kontrol\u00fc yap\u0131l\u0131yor' });
+      const preflight = await api<ExportPreflight>('/api/projects/' + confirmedProject.id + '/export/preflight', { method: 'POST', body: JSON.stringify(requestBody) });
+      if (!preflight.ok) throw new Error(preflight.errors.map((item) => item.message).join(' '));
+      const currentProject = useEditor.getState().project ?? project;
+      void api<Settings>('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          defaultExport: {
+            format: options.format,
+            aspect: options.aspect === 'source' ? currentProject.canvas.aspect : options.aspect,
+            resolution: options.resolution,
+            fps: options.fps,
+            quality: options.quality,
+            audioBitrateKbps: options.audioBitrateKbps,
+          },
+        }),
+      }).then(setSettings).catch(() => undefined);
+      const response = await api<{ job: { id: string } }>('/api/projects/' + confirmedProject.id + '/export', { method: 'POST', body: JSON.stringify(requestBody) });
+      const jobId = response.job.id;
+      setExportStatus({ jobId, progress: 0, status: 'queued', message: 'Export kuyru\u011fa al\u0131nd\u0131' });
+      await watchExportJob(jobId);
+      return preflight;
+    } catch (error) {
+      setExporting(false);
+      setExportStatus({ progress: 0, status: 'failed', error: error instanceof Error ? error.message : 'Export ba\u015flat\u0131lamad\u0131' });
+      throw error;
+    }
+  };
+
+
   const startExport = async (options: ExportOptions): Promise<ExportPreflight> => {
-    await flushPendingSave();
+    return startExportResilient(options);
+    const confirmedProject = await ensureProjectSaved();
     setExporting(true);
     setExportStatus({ progress: 0, status: 'preflight', message: 'Export ön kontrolü yapılıyor' });
     try {
@@ -727,7 +1011,7 @@ function Editor({ onBack }: { onBack: () => void }) {
         eventSource.addEventListener('job', (event) => {
           const job = JSON.parse((event as MessageEvent).data) as { id: string; status: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string };
           if (job.id !== jobId) return;
-          setExportStatus({ jobId, progress: job.progress ?? 0, status: job.status, message: job.message, downloadUrl: job.downloadUrl, fileName: job.fileName, error: job.error });
+          setExportStatus({ jobId, progress: job.progress ?? 0, status: job.status as ExportUiStatus, message: job.message, downloadUrl: job.downloadUrl, fileName: job.fileName, error: job.error });
           if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
             setExporting(false);
             eventSource.close();
@@ -739,7 +1023,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       return preflight;
     } catch (error) {
       setExporting(false);
-      setExportStatus({ progress: 0, status: 'failed', error: error instanceof Error ? error.message : 'Export başarısız' });
+      setExportStatus({ progress: 0, status: 'failed', error: 'Export ba\u015flat\u0131lamad\u0131' });
       throw error;
     }
   };
@@ -749,13 +1033,13 @@ function Editor({ onBack }: { onBack: () => void }) {
     <div className="editor-body workspace-layout" style={{ '--workspace-rail-width': `${workspaceLayout.railWidth}px`, '--workspace-library-width': `${workspaceLayout.libraryWidth}px`, '--workspace-inspector-width': `${workspaceLayout.inspectorWidth}px`, '--workspace-timeline-height': `${workspaceLayout.timelineHeight}px` } as React.CSSProperties}><ToolRail onOpenSettings={() => setShowSettings(true)} /><AssetPanelPro onImport={importMedia} onOpenSettings={() => setShowSettings(true)} /><PreviewArea project={project} settings={settings} /><Inspector project={project} /><TimelinePro project={project} /><WorkspaceResizers layout={workspaceLayout} onPreview={setWorkspaceLayout} onCommit={persistWorkspaceLayout} /></div>
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
     {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
-    <div className="editor-statusbar"><span><i className="status-dot" /> CutLoc hazır</span><span>{saveState === 'saving' ? 'Kaydediliyor…' : saveState === 'error' ? 'Kaydetme hatası' : 'Tüm değişiklikler kaydedildi'}</span><span>⌘/Ctrl Z geri al · Space oynat</span></div>
+    <div className="editor-statusbar"><span><i className="status-dot" /> CutLoc hazır</span><span>{saveState === 'saving' ? 'Kaydediliyor\u2026' : saveState === 'error' ? 'Kaydetme hatas\u0131' : saveState === 'offline' ? '\u00c7evrimd\u0131\u015f\u0131 - bekliyor' : 'T\u00fcm de\u011fi\u015fiklikler kaydedildi'}</span><span>⌘/Ctrl Z geri al · Space oynat</span></div>
     {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} />}
     {showExport && <ExportModal project={project} settings={settings} rangeStart={rangeStart} rangeEnd={rangeEnd} exporting={exporting} status={exportStatus} onStart={startExport} onAddFirstAsset={addFirstAssetToTimeline} onClose={() => setShowExport(false)} />}
   </div>;
 }
 
-function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: { jobId?: string; status?: string; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string }; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
+function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: ExportStatus; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
   const defaults = settings?.defaultExport;
   // Export always follows the project canvas.  Aspect changes belong to the
   // Preview toolbar; keeping a second profile picker here made output sizing
@@ -774,6 +1058,14 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState<ExportPreflight | null>(null);
   const done = status.status === 'completed';
+  const statusLabel = status.status === 'queued' ? 'Kuyrukta'
+    : status.status === 'running' ? '\u00c7al\u0131\u015f\u0131yor'
+      : status.status === 'reconnecting' ? 'Yeniden ba\u011flan\u0131yor'
+        : status.status === 'completed' ? 'Tamamland\u0131'
+          : status.status === 'failed' ? 'Ba\u015far\u0131s\u0131z'
+            : status.status === 'cancelled' ? '\u0130ptal edildi'
+              : status.status === 'saving' ? 'Kaydediliyor\u2026'
+                : status.status === 'preflight' ? '\u00d6n kontrol' : 'Haz\u0131rlan\u0131yor';
   const canvasHint = `${project.canvas.width} × ${project.canvas.height}`;
   const outputSize = exportDimensions(aspect, resolution, { width: project.canvas.width, height: project.canvas.height });
   const outputHint = `${outputSize.width} × ${outputSize.height}`;
@@ -806,18 +1098,38 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
         <div className="export-section"><span className="export-label">Kapsam</span><div className="scope-toggle"><button className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')} disabled={exporting}>Tüm timeline</button><button className={scope === 'range' ? 'active' : ''} onClick={() => setScope('range')} disabled={exporting || rangeStart === null || rangeEnd === null}>In–Out {rangeStart !== null && rangeEnd !== null ? `(${formatTime(rangeEnd - rangeStart)})` : 'belirlenmedi'}</button></div></div>
         <label className="export-file-name"><span>Dosya adı</span><input value={fileName} onChange={(event) => setFileName(event.target.value)} disabled={exporting} /></label>
       </div>
-      <aside className="export-summary"><div className="summary-icon">↗</div><strong>{format === 'mp4' ? 'Video export' : 'Ses export'}</strong><p>{format === 'mp4' ? `${aspect} · ${outputHint} · ${fps} FPS` : `${format.toUpperCase()} · ${audioBitrateKbps} kbps`}</p><div className="summary-row"><span>Kalite</span><b>{quality === 'draft' ? 'Taslak' : quality === 'standard' ? 'Standart' : quality === 'high' ? 'Yüksek' : 'Özel'}</b></div><div className="summary-row"><span>Codec</span><b>{format === 'mp4' ? 'H.264 / AAC' : format.toUpperCase()}</b></div>{preflight?.warnings.map((warning) => <div className="export-warning" key={warning.code}>⚠ {warning.message}</div>)}{status.status && <div className="export-progress"><div className="progress-head"><span>{status.message || 'Hazırlanıyor'}</span><b>{Math.round(status.progress * 100)}%</b></div><div className="progress-track"><i style={{ width: `${Math.max(2, status.progress * 100)}%` }} /></div></div>}{status.error && <div className="export-error">{status.error}</div>}{done && status.downloadUrl && <div className="export-complete"><span>✓ Hazır</span><strong>{status.fileName}</strong><a className="secondary-button" href={status.downloadUrl} download={status.fileName}>İndir</a></div>}</aside>
+      <aside className="export-summary"><div className="summary-icon">↗</div><strong>{format === 'mp4' ? 'Video export' : 'Ses export'}</strong><p>{format === 'mp4' ? `${aspect} · ${outputHint} · ${fps} FPS` : `${format.toUpperCase()} · ${audioBitrateKbps} kbps`}</p><div className="summary-row"><span>Kalite</span><b>{quality === 'draft' ? 'Taslak' : quality === 'standard' ? 'Standart' : quality === 'high' ? 'Yüksek' : 'Özel'}</b></div><div className="summary-row"><span>Codec</span><b>{format === 'mp4' ? 'H.264 / AAC' : format.toUpperCase()}</b></div>{preflight?.warnings.map((warning) => <div className="export-warning" key={warning.code}>⚠ {warning.message}</div>)}{status.status && <div className="export-progress"><div className="progress-head"><strong>{statusLabel}</strong><span>{status.message || statusLabel}</span><b>{Math.round(status.progress * 100)}%</b></div><div className="progress-track"><i style={{ width: `${Math.max(2, status.progress * 100)}%` }} /></div></div>}{status.error && <div className="export-error">{status.error}</div>}{done && status.downloadUrl && <div className="export-complete"><span>✓ Hazır</span><strong>{status.fileName}</strong><a className="secondary-button" href={status.downloadUrl} download={status.fileName}>İndir</a></div>}</aside>
     </div>
     {error && <div className="export-error export-error-bottom">{error}{error.toLocaleLowerCase('tr-TR').includes('timeline') && <button className="secondary-button export-recovery-button" onClick={() => { if (onAddFirstAsset()) setError(''); }}>Kütüphanedeki medyayı timeline'a ekle</button>}</div>}
     <div className="modal-actions"><span>{preflight?.estimatedBytes ? `Tahmini boyut: ${(preflight.estimatedBytes / 1024 / 1024).toFixed(1)} MB` : 'FFmpeg yerel olarak çalışır'}</span><button className="secondary-button" onClick={onClose} disabled={exporting}>Kapat</button><button className="primary-button export-start-button" onClick={() => void submit()} disabled={exporting}>{exporting ? 'Export ediliyor…' : done ? 'Yeniden export' : 'Dışa aktar'}</button></div>
   </section></div>;
 }
 
+function LegacyEditorTopbar({ project, onBack, onExport, exporting, onSettings }: { project: Project; onBack: () => void; onExport: () => void; exporting: boolean; onSettings: () => void }) { void project; void onBack; void onExport; void exporting; void onSettings; return null; }
 function EditorTopbar({ project, onBack, onExport, exporting, onSettings }: { project: Project; onBack: () => void; onExport: () => void; exporting: boolean; onSettings: () => void }) {
+  const mutateProject = useEditor((state) => state.mutateProject);
+  const undo = useEditor((state) => state.undo);
+  const redo = useEditor((state) => state.redo);
+  const saveState = useEditor((state) => state.saveState);
+  const lastSavedAt = useEditor((state) => state.lastSavedAt);
+  const language = useEditor((state) => state.settings?.language ?? 'tr');
+  const saveTime = lastSavedAt ? new Date(lastSavedAt).toLocaleTimeString(language === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+  const saveLabel = saveState === 'saving'
+    ? 'Kaydediliyor\u2026'
+    : saveState === 'error'
+      ? 'Kaydetme hatas\u0131'
+      : saveState === 'offline'
+        ? '\u00c7evrimd\u0131\u015f\u0131 - bekliyor'
+        : saveTime ? 'Kaydedildi \u00b7 ' + saveTime : 'Kaydedildi';
+  const saveTitle = saveState === 'saved' && saveTime ? 'Son ba\u015far\u0131l\u0131 kay\u0131t: ' + saveTime : saveLabel;
+  return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title="Geri al">&#8630;</button><button className="history-button" onClick={redo} title="Yinele">&#8631;</button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? 'Export\u2026' : 'D\u0131\u015fa aktar'} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title="Ayarlar"><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title="Ayarlar">HK</button></div></header>;
+}
+/* Legacy topbar body retained only for reference.
   const mutateProject = useEditor((state) => state.mutateProject);
   const undo = useEditor((state) => state.undo); const redo = useEditor((state) => state.redo);
   return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" onClick={onBack}>‹</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title="Geri al">↶</button><button className="history-button" onClick={redo} title="Yinele">↷</button><span className="save-indicator"><i className="status-dot" /> Kaydedildi</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? 'Export…' : 'Dışa aktar'} <Glyph>↗</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title="Ayarlar"><Glyph>⚙</Glyph></button><button className="avatar-button" onClick={onSettings} title="Ayarlar">HK</button></div></header>;
-}
+*/
+// Legacy topbar wrapper closed in the stub above.
 
 function SettingsModal({ settings, onClose }: { settings: Settings | null; onClose: () => void }) {
   const setSettings = useEditor((state) => state.setSettings);
