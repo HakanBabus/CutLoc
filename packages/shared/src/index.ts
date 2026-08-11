@@ -59,6 +59,99 @@ export function interpolateKeyframes(keyframes: readonly Keyframe[], property: K
   return previous.value + (next.value - previous.value) * easeKeyframeProgress((time - previous.time) / span, next.easing);
 }
 
+/**
+ * Returns the instantaneous speed at a clip-local time.  The editor stores
+ * speed-curve points in timeline seconds, so this helper is intentionally
+ * independent of media duration and can be shared by preview, trimming and
+ * export planning.
+ */
+export function speedAt(speedCurve: readonly SpeedPoint[] | undefined, baseSpeed: number, time: number) {
+  const fallback = clampNumber(baseSpeed, 0.1, 10, 1);
+  const points = [...(speedCurve ?? [])]
+    .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.speed))
+    .sort((a, b) => a.time - b.time);
+  if (!points.length) return fallback;
+  const safeTime = Math.max(0, Number.isFinite(time) ? time : 0);
+  if (safeTime <= points[0].time) return clampNumber(points[0].speed, 0.1, 10, fallback);
+  const last = points[points.length - 1];
+  if (safeTime >= last.time) return clampNumber(last.speed, 0.1, 10, fallback);
+  const nextIndex = points.findIndex((point) => point.time >= safeTime);
+  const next = points[Math.max(1, nextIndex)];
+  const previous = points[Math.max(0, nextIndex - 1)];
+  const span = Math.max(0.000001, next.time - previous.time);
+  const progress = easeKeyframeProgress((safeTime - previous.time) / span, next.easing);
+  return clampNumber(previous.speed + (next.speed - previous.speed) * progress, 0.1, 10, fallback);
+}
+
+/**
+ * Integrates the speed curve over clip-local time.  A speed curve describes
+ * how many source seconds are consumed by one timeline second; using the
+ * integral fixes the common bug where a preview jumps backwards/forwards when
+ * the instantaneous speed changes.
+ */
+export function sourceTimeAt(speedCurve: readonly SpeedPoint[] | undefined, baseSpeed: number, time: number) {
+  const safeTime = Math.max(0, Number.isFinite(time) ? time : 0);
+  if (safeTime <= 0) return 0;
+  if (!speedCurve?.length) return safeTime * clampNumber(baseSpeed, 0.1, 10, 1);
+  const breakpoints = [0, ...speedCurve.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeTime), safeTime]
+    .sort((a, b) => a - b)
+    .filter((point, index, all) => index === 0 || point - all[index - 1] > 0.000001);
+  let total = 0;
+  // Simpson integration keeps easing curves smooth while remaining cheap for
+  // the small number of points an editor clip normally contains.
+  for (let index = 1; index < breakpoints.length; index += 1) {
+    const start = breakpoints[index - 1];
+    const end = breakpoints[index];
+    const span = end - start;
+    const slices = 12;
+    const step = span / slices;
+    let sum = speedAt(speedCurve, baseSpeed, start) + speedAt(speedCurve, baseSpeed, end);
+    for (let slice = 1; slice < slices; slice += 1) {
+      sum += speedAt(speedCurve, baseSpeed, start + step * slice) * (slice % 2 === 0 ? 2 : 4);
+    }
+    total += (step / 3) * sum;
+  }
+  return Math.max(0, total);
+}
+
+export type SpeedCurveSegment = {
+  time: number;
+  duration: number;
+  sourceTime: number;
+  sourceDuration: number;
+  speed: number;
+};
+
+/** Create short, constant-speed render segments with the same source integral. */
+export function speedCurveSegments(duration: number, baseSpeed: number, speedCurve?: readonly SpeedPoint[]) {
+  const safeDuration = Math.max(0.000001, Number.isFinite(duration) ? duration : 0.000001);
+  if (!speedCurve?.length) return [{ time: 0, duration: safeDuration, sourceTime: 0, sourceDuration: safeDuration * clampNumber(baseSpeed, 0.1, 10, 1), speed: clampNumber(baseSpeed, 0.1, 10, 1) }];
+  const knots = [0, ...speedCurve.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeDuration), safeDuration]
+    .sort((a, b) => a - b)
+    .filter((point, index, all) => index === 0 || point - all[index - 1] > 0.000001);
+  const segments: SpeedCurveSegment[] = [];
+  for (let knot = 1; knot < knots.length; knot += 1) {
+    const start = knots[knot - 1];
+    const end = knots[knot];
+    const span = end - start;
+    const subdivisions = Math.max(1, Math.min(12, Math.ceil(span / 0.5)));
+    for (let index = 0; index < subdivisions; index += 1) {
+      const time = start + (span * index) / subdivisions;
+      const nextTime = start + (span * (index + 1)) / subdivisions;
+      const sourceTime = sourceTimeAt(speedCurve, baseSpeed, time);
+      const sourceEnd = sourceTimeAt(speedCurve, baseSpeed, nextTime);
+      const segmentDuration = Math.max(0.000001, nextTime - time);
+      const sourceDuration = Math.max(0.000001, sourceEnd - sourceTime);
+      segments.push({ time, duration: segmentDuration, sourceTime, sourceDuration, speed: clampNumber(sourceDuration / segmentDuration, 0.1, 10, baseSpeed) });
+    }
+  }
+  return segments;
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number) {
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
 export const TransformSchema = z.object({
   x: z.number().default(0),
   y: z.number().default(0),
@@ -98,6 +191,15 @@ export const MaskSchema = z.object({
   invert: z.boolean().default(false),
 });
 export type Mask = z.infer<typeof MaskSchema>;
+
+/** Crop is a framing operation; mask remains an alpha/shape operation. */
+export const CropSchema = z.object({
+  x: z.number().min(0).max(1).default(0),
+  y: z.number().min(0).max(1).default(0),
+  width: z.number().min(0.01).max(1).default(1),
+  height: z.number().min(0.01).max(1).default(1),
+});
+export type Crop = z.infer<typeof CropSchema>;
 
 export const SpeedPointSchema = z.object({
   time: z.number().nonnegative(),
@@ -174,6 +276,8 @@ export const ClipSchema = z.object({
   fadeOut: z.number().min(0).optional(),
   normalize: z.boolean().optional(),
   mask: MaskSchema.optional(),
+  crop: CropSchema.optional(),
+  adjustment: z.boolean().default(false),
   speedCurve: z.array(SpeedPointSchema).optional(),
   keyframes: z.array(KeyframeSchema).default([]),
   textStyle: TextStyleSchema.optional(),
@@ -185,6 +289,34 @@ export const ClipSchema = z.object({
 });
 export type Clip = z.infer<typeof ClipSchema>;
 
+/**
+ * Keep time-based motion attached to a clip when its timeline duration
+ * changes.  Keyframes, transitions, fades and speed-curve knots all describe
+ * local clip time, so they must move together when a clip is retimed.
+ */
+export function retimeClipMotion(clip: Clip, nextDuration: number) {
+  const previousDuration = Math.max(0.000001, clip.duration);
+  const safeDuration = Math.max(0.05, Number.isFinite(nextDuration) ? nextDuration : previousDuration);
+  const ratio = safeDuration / previousDuration;
+  clip.keyframes = clip.keyframes.map((keyframe) => ({
+    ...keyframe,
+    time: Math.min(safeDuration, Math.max(0, keyframe.time * ratio)),
+  }));
+  if (clip.speedCurve?.length) {
+    clip.speedCurve = clip.speedCurve.map((point) => ({
+      ...point,
+      time: Math.min(safeDuration, Math.max(0, point.time * ratio)),
+    }));
+  }
+  for (const transition of [clip.transitionIn, clip.transitionOut]) {
+    if (transition.type !== 'none') transition.duration = Math.min(safeDuration, Math.max(0, transition.duration * ratio));
+  }
+  if (clip.fadeIn !== undefined) clip.fadeIn = Math.min(safeDuration, Math.max(0, clip.fadeIn * ratio));
+  if (clip.fadeOut !== undefined) clip.fadeOut = Math.min(safeDuration, Math.max(0, clip.fadeOut * ratio));
+  clip.duration = safeDuration;
+  return ratio;
+}
+
 export const TrackSchema = z.object({
   id: z.string(),
   type: TrackType,
@@ -193,6 +325,7 @@ export const TrackSchema = z.object({
   locked: z.boolean().default(false),
   hidden: z.boolean().default(false),
   muted: z.boolean().default(false),
+  volume: z.number().min(0).max(2).default(1),
   clips: z.array(ClipSchema).default([]),
 });
 export type Track = z.infer<typeof TrackSchema>;
@@ -310,7 +443,7 @@ export type ExportQuality = z.infer<typeof ExportQualitySchema>;
 export const ExportRangeSchema = z.object({
   start: z.number().finite().nonnegative(),
   end: z.number().finite().positive(),
-}).refine((range) => range.end > range.start, { message: 'Export aralığı geçersiz' });
+}).refine((range) => range.end > range.start, { message: 'INVALID_EXPORT_RANGE' });
 export type ExportRange = z.infer<typeof ExportRangeSchema>;
 
 export const ExportOptionsSchema = z.object({
@@ -416,6 +549,37 @@ function generatedClipId() {
   return 'clip_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+function remapKeyframes(keyframes: Clip['keyframes'], start: number, end: number, offset: number) {
+  const duration = Math.max(0, end - start);
+  return [...new Set(keyframes.map((keyframe) => keyframe.property))].flatMap((property) => {
+    const propertyPoints = keyframes.filter((keyframe) => keyframe.property === property).sort((a, b) => a.time - b.time);
+    if (!propertyPoints.length) return [];
+    const sliced = propertyPoints
+      .filter((keyframe) => keyframe.time >= start - 0.000001 && keyframe.time <= end + 0.000001)
+      .map((keyframe) => ({ ...keyframe, time: clamp(keyframe.time - offset, 0, duration) }));
+    if (!sliced.some((keyframe) => keyframe.time <= 0.000001)) {
+      sliced.push({ ...propertyPoints[0], id: `${propertyPoints[0].id}-slice-start-${start}`, time: 0, value: interpolateKeyframes(propertyPoints, property, start, propertyPoints[0].value), easing: 'linear' });
+    }
+    if (!sliced.some((keyframe) => Math.abs(keyframe.time - duration) <= 0.000001)) {
+      const last = propertyPoints[propertyPoints.length - 1];
+      const next = propertyPoints.find((keyframe) => keyframe.time >= end) ?? last;
+      sliced.push({ ...last, id: `${last.id}-slice-end-${end}`, time: duration, value: interpolateKeyframes(propertyPoints, property, end, last.value), easing: next.easing });
+    }
+    return sliced.sort((a, b) => a.time - b.time);
+  });
+}
+
+function sliceSpeedCurve(speedCurve: Clip['speedCurve'], start: number, end: number) {
+  if (!speedCurve?.length) return undefined;
+  const points = speedCurve
+    .filter((point) => point.time >= start - 0.000001 && point.time <= end + 0.000001)
+    .map((point) => ({ ...point, time: clamp(point.time - start, 0, Math.max(0, end - start)) }));
+  const startPoint = { time: 0, speed: speedAt(speedCurve, 1, start), easing: 'linear' as const };
+  const endPoint = { time: Math.max(0, end - start), speed: speedAt(speedCurve, 1, end), easing: 'linear' as const };
+  const merged = [startPoint, ...points, endPoint].sort((a, b) => a.time - b.time);
+  return merged.filter((point, index, all) => index === 0 || point.time - all[index - 1].time > 0.000001);
+}
+
 /**
  * Split a clip without changing its source timing.  The optional id factory
  * keeps the command deterministic in unit tests while the editor can continue
@@ -424,21 +588,28 @@ function generatedClipId() {
 export function splitClipAt(project: Project, clipId: string, at: number, createId: () => string = generatedClipId) {
   const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
   const index = track?.clips.findIndex((clip) => clip.id === clipId) ?? -1;
-  if (!track || index < 0) return false;
+  if (!track || index < 0 || track.locked) return false;
   const clip = track.clips[index];
   const frame = 1 / Math.max(1, project.canvas.fps);
   if (at <= clip.start + frame / 2 || at >= clip.start + clip.duration - frame / 2) return false;
   const firstDuration = at - clip.start;
+  const originalDuration = clip.duration;
+  const originalSourceDuration = sourceTimeAt(clip.speedCurve, clip.speed, originalDuration);
+  const firstSourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, firstDuration));
   const second = {
     ...clip,
     id: createId(),
     start: at,
     duration: clip.duration - firstDuration,
-    sourceStart: clip.sourceStart + firstDuration * clip.speed,
-    sourceDuration: Math.max(frame * clip.speed, clip.sourceDuration - firstDuration * clip.speed),
+    sourceStart: clip.sourceStart + firstSourceDuration,
+    sourceDuration: Math.max(frame * clip.speed, originalSourceDuration - firstSourceDuration),
+    keyframes: remapKeyframes(clip.keyframes, firstDuration, originalDuration, firstDuration),
+    speedCurve: sliceSpeedCurve(clip.speedCurve, firstDuration, originalDuration),
   };
   clip.duration = firstDuration;
-  clip.sourceDuration = Math.max(frame * clip.speed, firstDuration * clip.speed);
+  clip.sourceDuration = firstSourceDuration;
+  clip.keyframes = remapKeyframes(clip.keyframes, 0, firstDuration, 0);
+  clip.speedCurve = sliceSpeedCurve(clip.speedCurve, 0, firstDuration);
   track.clips.splice(index + 1, 0, second);
   project.duration = projectDuration(project);
   return true;
@@ -452,13 +623,19 @@ export function trimClipToPlayhead(project: Project, clipId: string, at: number,
   if (at <= clip.start || at >= clip.start + clip.duration) return false;
   if (edge === 'start') {
     const delta = at - clip.start;
+    const originalDuration = clip.duration;
+    const sourceOffset = sourceTimeAt(clip.speedCurve, clip.speed, delta);
     clip.start = at;
     clip.duration = Math.max(frame, clip.duration - delta);
-    clip.sourceStart += delta * clip.speed;
-    clip.sourceDuration = Math.max(frame * clip.speed, clip.sourceDuration - delta * clip.speed);
+    clip.sourceStart += sourceOffset;
+    clip.sourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, originalDuration) - sourceOffset);
+    clip.keyframes = remapKeyframes(clip.keyframes, delta, originalDuration, delta);
+    clip.speedCurve = sliceSpeedCurve(clip.speedCurve, delta, originalDuration);
   } else {
     clip.duration = Math.max(frame, at - clip.start);
-    clip.sourceDuration = Math.max(frame * clip.speed, clip.duration * clip.speed);
+    clip.sourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, clip.duration));
+    clip.keyframes = remapKeyframes(clip.keyframes, 0, clip.duration, 0);
+    clip.speedCurve = sliceSpeedCurve(clip.speedCurve, 0, clip.duration);
   }
   project.duration = projectDuration(project);
   return true;
@@ -472,6 +649,24 @@ export function rippleDeleteClip(project: Project, clipId: string) {
   track.clips = track.clips.filter((item) => item.id !== clipId);
   for (const item of track.clips) {
     if (item.start >= end) item.start = Math.max(0, item.start - clip.duration);
+  }
+  project.duration = projectDuration(project);
+  return true;
+}
+
+/** Ripple delete across every unlocked track, preserving clips that span the removed range. */
+export function rippleDeleteAcrossTimeline(project: Project, clipId: string) {
+  const sourceTrack = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+  const clip = sourceTrack?.clips.find((item) => item.id === clipId);
+  if (!sourceTrack || !clip || sourceTrack.locked) return false;
+  const end = clip.start + clip.duration;
+  const shift = clip.duration;
+  sourceTrack.clips = sourceTrack.clips.filter((item) => item.id !== clipId);
+  for (const track of project.tracks) {
+    if (track.locked) continue;
+    for (const item of track.clips) {
+      if (item.start >= end - 0.000001) item.start = Math.max(0, item.start - shift);
+    }
   }
   project.duration = projectDuration(project);
   return true;
@@ -503,4 +698,25 @@ export function formatTime(seconds: number, showFrames = false, fps = 30) {
   const frames = Math.floor((safe % 1) * fps);
   const base = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   return showFrames ? `${base}:${String(frames).padStart(2, '0')}` : base;
+}
+
+/**
+ * Parses editor timecodes without accepting ambiguous overflow. Supported
+ * forms are SS, MM:SS, HH:MM:SS and HH:MM:SS:FF.
+ */
+export function parseTimelineTimecode(value: string, fps = 30) {
+  const parts = value.trim().split(':');
+  if (parts.length < 1 || parts.length > 4 || parts.some((part) => !/^\d+$/.test(part))) return null;
+  const numbers = parts.map(Number);
+  const safeFps = Math.max(1, Math.round(fps));
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
+  let frames = 0;
+  if (numbers.length === 4) [hours, minutes, seconds, frames] = numbers;
+  if (numbers.length === 3) [hours, minutes, seconds] = numbers;
+  if (numbers.length === 2) [minutes, seconds] = numbers;
+  if (numbers.length === 1) [seconds] = numbers;
+  if (minutes >= 60 || seconds >= 60 || frames >= safeFps) return null;
+  return hours * 3600 + minutes * 60 + seconds + frames / safeFps;
 }
