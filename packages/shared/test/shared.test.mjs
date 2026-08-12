@@ -8,6 +8,8 @@ import {
   ExportOptionsSchema,
   ExportRangeSchema,
   interpolateKeyframes,
+  mergeProjectThreeWay,
+  AssetSchema,
   ClipSchema,
   ProjectSchema,
   projectDuration,
@@ -84,6 +86,35 @@ test('interpolates keyframes with easing', () => {
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 0, 0), 0);
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 2, 0), 1);
   assert.ok(interpolateKeyframes(keyframes, 'opacity', 1, 0) < 0.5);
+});
+
+test('three-way project merge preserves independent timeline edits and local asset deletion', () => {
+  const base = projectWithClips();
+  base.assets = [AssetSchema.parse({ id: 'asset-a', name: 'Original', type: 'image', path: 'a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt })];
+  const local = structuredClone(base);
+  const remote = structuredClone(base);
+  local.tracks[0].clips[0].transform.scale = 1.25;
+  local.assets = [];
+  remote.tracks[0].clips[0].transform.x = 42;
+  remote.assets[0].thumbnailPath = 'thumbs/a.jpg';
+
+  const result = mergeProjectThreeWay(base, local, remote);
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(result.project.tracks[0].clips[0].transform.scale, 1.25);
+  assert.equal(result.project.tracks[0].clips[0].transform.x, 42);
+  assert.deepEqual(result.project.assets, []);
+});
+
+test('three-way project merge reports competing clip-property edits', () => {
+  const base = projectWithClips();
+  const local = structuredClone(base);
+  const remote = structuredClone(base);
+  local.tracks[0].clips[0].transform.scale = 1.25;
+  remote.tracks[0].clips[0].transform.scale = 1.5;
+
+  const result = mergeProjectThreeWay(base, local, remote);
+  assert.ok(result.conflicts.includes(`tracks[${base.tracks[0].id}].clips[clip-a].transform.scale`));
+  assert.equal(result.project.tracks[0].clips[0].transform.scale, 1.25);
 });
 
 test('integrates speed curves into source time instead of using instantaneous speed', () => {

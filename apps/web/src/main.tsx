@@ -8,6 +8,7 @@ import {
   defaultProject,
   exportDimensions,
   interpolateKeyframes,
+  mergeProjectThreeWay,
   projectDuration,
   parseTimelineTimecode,
   quantizeFrameTime,
@@ -114,6 +115,7 @@ type EditorState = {
   localRevision: number;
   savedRevision: number;
   lastSavedAt: string | null;
+  lastSavedProject: Project | null;
   notice: string;
   history: HistoryState;
   historyGroup: string | null;
@@ -189,12 +191,13 @@ const useEditor = create<EditorState>((set) => ({
   localRevision: 0,
   savedRevision: 0,
   lastSavedAt: null,
+  lastSavedProject: null,
   notice: '',
   history: { past: [], future: [] },
   historyGroup: null,
   setProject: (project, resetHistory = true) => set((state) => resetHistory
-    ? { project, localRevision: project.revision, savedRevision: project.revision, lastSavedAt: project.updatedAt, saveState: 'saved', history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null }
-    : { ...state, project, localRevision: Math.max(state.localRevision, project.revision), savedRevision: Math.max(state.savedRevision, project.revision), lastSavedAt: project.updatedAt }),
+    ? { project, localRevision: project.revision, savedRevision: project.revision, lastSavedAt: project.updatedAt, lastSavedProject: project, saveState: 'saved', history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null }
+    : { ...state, project, localRevision: Math.max(state.localRevision, project.revision), savedRevision: Math.max(state.savedRevision, project.revision), lastSavedAt: project.updatedAt, lastSavedProject: project }),
   setSettings: (settings) => set({ settings }),
   setCurrentTime: (time) => set((state) => ({ currentTime: clamp(time, 0, state.project?.duration ?? 0) })),
   setRangeStart: (rangeStart) => set((state) => ({ rangeStart: rangeStart === null ? null : clamp(rangeStart, 0, state.project?.duration ?? 0) })),
@@ -218,7 +221,24 @@ const useEditor = create<EditorState>((set) => ({
   setZoom: (pxPerSecond) => set({ pxPerSecond: clamp(pxPerSecond, 20, 260) }),
   mutateProject: (recipe, options) => set((state) => {
     if (!state.project) return state;
-    const next = produce(state.project, recipe);
+    let next = produce(state.project, recipe);
+    // A track lock is a project-level contract, not a collection of UI hints.
+    // Restore every clip that belonged to a locked track before accepting a
+    // mutation, including clips a cross-track drag tried to move elsewhere.
+    const lockedTracks = state.project.tracks.filter((track) => track.locked);
+    if (lockedTracks.length) {
+      const lockedClipIds = new Set(lockedTracks.flatMap((track) => track.clips.map((clip) => clip.id)));
+      next = produce(next, (draft) => {
+        for (const track of draft.tracks) track.clips = track.clips.filter((clip) => !lockedClipIds.has(clip.id));
+        for (const original of lockedTracks) {
+          const target = draft.tracks.find((track) => track.id === original.id);
+          if (target) target.clips = structuredClone(original.clips);
+        }
+      });
+    }
+    // Immer returns the original reference for ordinary no-ops.  The equality
+    // check also catches operations rejected by the lock contract above.
+    if (next === state.project || JSON.stringify(next) === JSON.stringify(state.project)) return state;
     const grouped = Boolean(options?.historyGroup && options.historyGroup === state.historyGroup);
     return {
       project: next,
@@ -241,7 +261,9 @@ const useEditor = create<EditorState>((set) => ({
   setSaveState: (saveState) => set({ saveState }),
   applyServerProject: (serverProject) => set((state) => {
     const wasDirty = state.localRevision !== state.savedRevision;
-    const project = wasDirty && state.project ? mergeImportedProject(state.project, serverProject) : serverProject;
+    const project = wasDirty && state.project
+      ? mergeProjectThreeWay(state.lastSavedProject ?? state.project, state.project, serverProject).project
+      : serverProject;
     if (wasDirty) {
       // A server refresh can contain newer asset/proxy metadata without
       // containing the local timeline edit that is still waiting for
@@ -260,6 +282,7 @@ const useEditor = create<EditorState>((set) => ({
       localRevision: serverProject.revision,
       savedRevision: serverProject.revision,
       lastSavedAt: serverProject.updatedAt,
+      lastSavedProject: serverProject,
       saveState: 'saved',
     };
   }),
@@ -272,6 +295,7 @@ const useEditor = create<EditorState>((set) => ({
       localRevision: isLatestLocalSnapshot ? project.revision : Math.max(state.localRevision, project.revision),
       savedRevision: project.revision,
       lastSavedAt: project.updatedAt,
+      lastSavedProject: project,
       saveState: isLatestLocalSnapshot ? 'saved' : 'saving',
     };
   }),
@@ -286,6 +310,13 @@ class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+  }
+}
+
+class ProjectConflictError extends Error {
+  constructor(readonly paths: string[]) {
+    super('This project has edits from another tab that conflict with your local changes. Your edits remain open; reload the project to review and recover them.');
+    this.name = 'ProjectConflictError';
   }
 }
 
@@ -308,24 +339,6 @@ const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
  * edit that is still waiting for autosave.  Reconcile only the asset library
  * and server metadata; the local timeline remains the source of truth.
  */
-function mergeImportedProject(local: Project, server: Project): Project {
-  const localAssets = local.assets;
-  const mergedAssets = server.assets.map((serverAsset) => {
-    const localAsset = localAssets.find((asset) => asset.id === serverAsset.id);
-    return localAsset ? { ...localAsset, ...serverAsset } : serverAsset;
-  });
-  mergedAssets.push(...localAssets.filter((asset) => !server.assets.some((serverAsset) => serverAsset.id === asset.id)));
-  return {
-    ...server,
-    name: local.name,
-    canvas: local.canvas,
-    tracks: local.tracks,
-    markers: local.markers,
-    duration: Math.max(local.duration, projectDuration(local)),
-    assets: mergedAssets,
-  };
-}
-
 function Glyph({ children }: { children: string }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 
 function ConfirmDialog({ title, message, confirmLabel, onConfirm, onClose }: { title: string; message: string; confirmLabel: string; onConfirm: () => void; onClose: () => void }) {
@@ -719,7 +732,11 @@ function Editor({ onBack }: { onBack: () => void }) {
           } catch (error) {
             if (!(error instanceof ApiError) || error.status !== 409 || attempt >= 2) throw error;
             const latest = await api<Project>(`/api/projects/${snapshot.id}`);
-            candidate = mergeImportedProject(candidate, latest);
+            const base = useEditor.getState().lastSavedProject;
+            if (!base) throw error;
+            const merged = mergeProjectThreeWay(base, candidate, latest);
+            if (merged.conflicts.length) throw new ProjectConflictError(merged.conflicts);
+            candidate = merged.project;
           }
         }
         if (!saved) throw new Error('Proje kaydedilemedi');
@@ -2609,6 +2626,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
 
   const beginPreviewTransform = (event: React.PointerEvent<HTMLElement>, clip: Clip, mode: 'move' | 'scale') => {
     if (event.button !== 0) return;
+    if (project.tracks.find((track) => track.clips.some((item) => item.id === clip.id))?.locked) return;
     event.preventDefault();
     event.stopPropagation();
     setSelected(clip.id, project.tracks.find((track) => track.clips.some((item) => item.id === clip.id))?.id ?? null);

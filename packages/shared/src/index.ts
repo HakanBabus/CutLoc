@@ -391,6 +391,74 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+export type ProjectMergeResult = { project: Project; conflicts: string[] };
+
+function jsonEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeProjectValue(base: unknown, local: unknown, remote: unknown, path: string, conflicts: string[]): unknown {
+  if (jsonEqual(local, remote)) return local;
+  if (jsonEqual(local, base)) return remote;
+  if (jsonEqual(remote, base)) return local;
+
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote) && [...base, ...local, ...remote].every((item) => isRecord(item) && typeof item.id === 'string')) {
+    const byId = (items: Record<string, unknown>[]) => new Map(items.map((item) => [item.id as string, item]));
+    const baseById = byId(base as Record<string, unknown>[]);
+    const localById = byId(local as Record<string, unknown>[]);
+    const remoteById = byId(remote as Record<string, unknown>[]);
+    const orderedIds = [...new Set([...baseById.keys(), ...localById.keys(), ...remoteById.keys()])];
+    return orderedIds.flatMap((id) => {
+      const baseItem = baseById.get(id);
+      const localItem = localById.get(id);
+      const remoteItem = remoteById.get(id);
+      // A deletion made on either side is intentional.  In particular this
+      // prevents a server-side metadata refresh from resurrecting a locally
+      // removed asset while the editor is dirty.
+      if (baseItem && (!localItem || !remoteItem)) return [];
+      if (!baseItem) return [localItem ?? remoteItem];
+      return [mergeProjectValue(baseItem, localItem, remoteItem, `${path}[${id}]`, conflicts)];
+    });
+  }
+
+  if (isRecord(base) && isRecord(local) && isRecord(remote)) {
+    const result: Record<string, unknown> = {};
+    for (const key of new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)])) {
+      result[key] = mergeProjectValue(base[key], local[key], remote[key], path ? `${path}.${key}` : key, conflicts);
+    }
+    return result;
+  }
+
+  conflicts.push(path || 'project');
+  // Preserve the local value in the recovery snapshot.  The caller must not
+  // save it automatically when conflicts are present.
+  return local;
+}
+
+/**
+ * Three-way reconciliation for a stale editor tab.  It merges independent
+ * edits but deliberately reports competing edits to the same leaf instead of
+ * silently overwriting the other tab.  Revision/timestamps are server-owned.
+ */
+export function mergeProjectThreeWay(base: Project, local: Project, remote: Project): ProjectMergeResult {
+  const conflicts: string[] = [];
+  const merged = mergeProjectValue(base, local, remote, '', conflicts) as Project;
+  return {
+    project: {
+      ...merged,
+      id: remote.id,
+      revision: remote.revision,
+      createdAt: remote.createdAt,
+      updatedAt: remote.updatedAt,
+    },
+    conflicts,
+  };
+}
+
 export const ShortcutSettingsSchema = z.object({
   togglePlayback: z.string().min(1).max(40).default('Space'),
   undo: z.string().min(1).max(40).default('Ctrl/Cmd+Z'),
