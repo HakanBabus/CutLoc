@@ -449,6 +449,17 @@ export function visualLayerPlan(project: Project): VisualLayerPlanItem[] {
     .filter(({ track }) => !track.hidden);
 }
 
+/**
+ * Adjustment clips affect only visible visual layers below them in the shared
+ * back-to-front stack, and only while the adjustment clip is active.
+ */
+export function adjustmentLayersForVisual(plan: readonly VisualLayerPlanItem[], visual: VisualLayerPlanItem, time: number) {
+  return plan.filter(({ clip, stackOrder }) => clip.adjustment
+    && stackOrder > visual.stackOrder
+    && time >= clip.start
+    && time < clip.start + clip.duration);
+}
+
 export type ProjectMergeResult = { project: Project; conflicts: string[] };
 
 function jsonEqual(left: unknown, right: unknown) {
@@ -474,10 +485,20 @@ function mergeProjectValue(base: unknown, local: unknown, remote: unknown, path:
       const baseItem = baseById.get(id);
       const localItem = localById.get(id);
       const remoteItem = remoteById.get(id);
-      // A deletion made on either side is intentional.  In particular this
-      // prevents a server-side metadata refresh from resurrecting a locally
-      // removed asset while the editor is dirty.
-      if (baseItem && (!localItem || !remoteItem)) return [];
+      if (baseItem && !localItem && remoteItem) {
+        // Deleting a library asset deliberately wins over server-generated
+        // derivative metadata refreshes. Timeline entities, however, must not
+        // silently discard a genuine edit from the other tab.
+        if (path === 'assets' || jsonEqual(remoteItem, baseItem)) return [];
+        conflicts.push(`${path}[${id}]`);
+        return [];
+      }
+      if (baseItem && localItem && !remoteItem) {
+        if (jsonEqual(localItem, baseItem)) return [];
+        conflicts.push(`${path}[${id}]`);
+        return [localItem];
+      }
+      if (baseItem && !localItem && !remoteItem) return [];
       if (!baseItem) return [localItem ?? remoteItem];
       return [mergeProjectValue(baseItem, localItem, remoteItem, `${path}[${id}]`, conflicts)];
     });
@@ -706,8 +727,33 @@ export function quantizeFrameTime(value: number, fps: number, duration = Number.
   return clamp(Math.round(safeValue * safeFps) / safeFps, 0, duration);
 }
 
+/** Wall-clock playback position; FPS is deliberately not part of this clock. */
+export function playbackTime(startProjectTime: number, startWallTimeMs: number, nowMs: number, duration: number) {
+  return clamp(startProjectTime + Math.max(0, nowMs - startWallTimeMs) / 1000, 0, Math.max(0, duration));
+}
+
 export function projectDuration(project: Project) {
   return Math.max(0, ...project.tracks.flatMap((track) => track.clips.map((clip) => clip.start + clip.duration)));
+}
+
+/** Restore immutable locked-track snapshots, except for an explicit unlock. */
+export function enforceLockedTrackInvariants(previous: Project, candidate: Project): Project {
+  const lockedTracks = previous.tracks.filter((track) => track.locked);
+  if (!lockedTracks.length) return candidate;
+  const next = structuredClone(candidate);
+  const lockedClipIds = new Set(lockedTracks.flatMap((track) => track.clips.map((clip) => clip.id)));
+  for (const track of next.tracks) track.clips = track.clips.filter((clip) => !lockedClipIds.has(clip.id));
+  for (const original of lockedTracks) {
+    const previousIndex = previous.tracks.findIndex((track) => track.id === original.id);
+    const nextIndex = next.tracks.findIndex((track) => track.id === original.id);
+    const target = nextIndex >= 0 ? next.tracks[nextIndex] : undefined;
+    if (target && !target.locked) continue;
+    if (nextIndex >= 0) next.tracks.splice(nextIndex, 1);
+    next.tracks.splice(Math.min(previousIndex, next.tracks.length), 0, structuredClone(original));
+  }
+  next.tracks.forEach((track, order) => { track.order = order; });
+  next.duration = projectDuration(next);
+  return next;
 }
 
 function generatedClipId() {

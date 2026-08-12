@@ -5,12 +5,15 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import {
   clamp,
+  adjustmentLayersForVisual,
   defaultProject,
+  enforceLockedTrackInvariants,
   exportDimensions,
   interpolateKeyframes,
   mergeProjectThreeWay,
   projectDuration,
   parseTimelineTimecode,
+  playbackTime,
   quantizeFrameTime,
   retimeClipMotion,
   rippleDeleteAcrossTimeline,
@@ -221,29 +224,23 @@ const useEditor = create<EditorState>((set) => ({
   }),
   setZoom: (pxPerSecond) => set({ pxPerSecond: clamp(pxPerSecond, 20, 260) }),
   mutateProject: (recipe, options) => set((state) => {
-    if (!state.project) return state;
-    let next = produce(state.project, recipe);
+    const previousProject = state.project;
+    if (!previousProject) return state;
+    let next = produce(previousProject, recipe);
     // A track lock is a project-level contract, not a collection of UI hints.
-    // Restore every clip that belonged to a locked track before accepting a
-    // mutation, including clips a cross-track drag tried to move elsewhere.
-    const lockedTracks = state.project.tracks.filter((track) => track.locked);
+    // Keep the complete track snapshot (identity, order, name and content),
+    // while still allowing the track's own lock toggle to unlock it.
+    const lockedTracks = previousProject.tracks.filter((track) => track.locked);
     if (lockedTracks.length) {
-      const lockedClipIds = new Set(lockedTracks.flatMap((track) => track.clips.map((clip) => clip.id)));
-      next = produce(next, (draft) => {
-        for (const track of draft.tracks) track.clips = track.clips.filter((clip) => !lockedClipIds.has(clip.id));
-        for (const original of lockedTracks) {
-          const target = draft.tracks.find((track) => track.id === original.id);
-          if (target) target.clips = structuredClone(original.clips);
-        }
-      });
+      next = enforceLockedTrackInvariants(previousProject, next);
     }
     // Immer returns the original reference for ordinary no-ops.  The equality
     // check also catches operations rejected by the lock contract above.
-    if (next === state.project || JSON.stringify(next) === JSON.stringify(state.project)) return state;
+    if (next === previousProject || JSON.stringify(next) === JSON.stringify(previousProject)) return state;
     const grouped = Boolean(options?.historyGroup && options.historyGroup === state.historyGroup);
     return {
       project: next,
-      history: grouped ? { ...state.history, future: [] } : { past: [...state.history.past.slice(-49), state.project], future: [] },
+      history: grouped ? { ...state.history, future: [] } : { past: [...state.history.past.slice(-49), previousProject], future: [] },
       historyGroup: options?.historyGroup ?? null,
       localRevision: Math.max(state.localRevision, state.savedRevision) + 1,
       saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving',
@@ -2546,8 +2543,9 @@ function normalizeProjectDurations(project: Project): Project {
       }),
     };
   });
-  if (!changed) return project;
   const next = { ...project, tracks };
+  if (Math.abs(project.duration - projectDuration(next)) > 0.000001) changed = true;
+  if (!changed) return project;
   return { ...next, duration: projectDuration(next) };
 }
 
@@ -2598,6 +2596,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSize, setFullscreenSize] = useState({ width: 0, height: 0 });
   const [previewDrag, setPreviewDrag] = useState<{ clipId: string; mode: 'move' | 'scale'; startX: number; startY: number; originX: number; originY: number; originScale: number; historyGroup: string } | null>(null);
+  const playbackStartRef = useRef<{ projectTime: number; wallTime: number } | null>(null);
   const setSettings = useEditor((state) => state.setSettings);
   useEffect(() => {
     const element = viewportRef.current ?? stageRef.current;
@@ -2634,9 +2633,9 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     updateSize();
     return () => window.removeEventListener('resize', updateSize);
   }, [isFullscreen]);
-  const activeClips = visualLayerPlan(project)
+  const visualPlan = visualLayerPlan(project);
+  const activeClips = visualPlan
     .filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
-  const adjustmentClips = activeClips.filter(({ clip }) => clip.adjustment);
   const activeMedia = activeClips.filter(({ clip }) => !clip.adjustment && (clip.type === 'video' || clip.type === 'image'));
   const activeAudio = activeClips.filter(({ clip, track }) => {
     if (track.muted || (clip.type !== 'audio' && clip.type !== 'video')) return false;
@@ -2816,13 +2815,29 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
   };
 
   useEffect(() => {
-    if (!playing) return;
-    const timer = window.setInterval(() => { const next = useEditor.getState().currentTime + 1 / project.canvas.fps; if (next >= project.duration) { setPlaying(false); setCurrentTime(0); } else setCurrentTime(next); }, 1000 / project.canvas.fps);
-    return () => window.clearInterval(timer);
-  }, [playing, project.canvas.fps, project.duration, setCurrentTime, setPlaying]);
+    if (!playing) {
+      playbackStartRef.current = null;
+      return;
+    }
+    const start = { projectTime: useEditor.getState().currentTime, wallTime: performance.now() };
+    playbackStartRef.current = start;
+    let frame = 0;
+    const tick = (now: number) => {
+      const next = playbackTime(start.projectTime, start.wallTime, now, project.duration);
+      if (next >= project.duration) {
+        setPlaying(false);
+        setCurrentTime(0);
+        return;
+      }
+      setCurrentTime(next);
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing, project.duration, setCurrentTime, setPlaying]);
 
   const useProxy = settings?.proxyQuality !== 'high';
-  const adjustmentFilter = (clip: Clip) => adjustmentClips.reduce((filter, item) => ({
+  const adjustmentFilter = (clip: Clip) => adjustmentLayersForVisual(visualPlan, visualPlan.find((item) => item.clip.id === clip.id)!, currentTime).reduce((filter, item) => ({
     brightness: filter.brightness + item.clip.filters.brightness,
     contrast: filter.contrast + item.clip.filters.contrast,
     saturation: filter.saturation + item.clip.filters.saturation,

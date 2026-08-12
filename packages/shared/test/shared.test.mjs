@@ -4,15 +4,18 @@ import {
   formatTime,
   parseTimelineTimecode,
   defaultProject,
+  enforceLockedTrackInvariants,
   exportDimensions,
   ExportOptionsSchema,
   ExportRangeSchema,
   interpolateKeyframes,
   mergeProjectThreeWay,
   AssetSchema,
+  adjustmentLayersForVisual,
   ClipSchema,
   ProjectSchema,
   projectDuration,
+  playbackTime,
   quantizeFrameTime,
   rippleDeleteClip,
   rippleDeleteAcrossTimeline,
@@ -147,6 +150,71 @@ test('three-way project merge reports competing clip-property edits', () => {
   const result = mergeProjectThreeWay(base, local, remote);
   assert.ok(result.conflicts.includes(`tracks[${base.tracks[0].id}].clips[clip-a].transform.scale`));
   assert.equal(result.project.tracks[0].clips[0].transform.scale, 1.25);
+});
+
+test('three-way project merge reports delete-versus-edited clip conflicts without deleting the edit', () => {
+  const base = projectWithClips();
+  const localDelete = structuredClone(base);
+  const remoteEdit = structuredClone(base);
+  localDelete.tracks[0].clips = localDelete.tracks[0].clips.filter((clip) => clip.id !== 'clip-a');
+  remoteEdit.tracks[0].clips[0].transform.scale = 1.5;
+  const deletedVsEdited = mergeProjectThreeWay(base, localDelete, remoteEdit);
+  assert.ok(deletedVsEdited.conflicts.includes(`tracks[${base.tracks[0].id}].clips[clip-a]`));
+
+  const localEdit = structuredClone(base);
+  const remoteDelete = structuredClone(base);
+  localEdit.tracks[0].clips[0].transform.scale = 1.5;
+  remoteDelete.tracks[0].clips = remoteDelete.tracks[0].clips.filter((clip) => clip.id !== 'clip-a');
+  const editedVsDeleted = mergeProjectThreeWay(base, localEdit, remoteDelete);
+  assert.ok(editedVsDeleted.conflicts.includes(`tracks[${base.tracks[0].id}].clips[clip-a]`));
+  assert.equal(editedVsDeleted.project.tracks[0].clips.find((clip) => clip.id === 'clip-a').transform.scale, 1.5);
+});
+
+test('three-way merge accepts deletion only when the other side is unchanged and preserves deleted assets across metadata refreshes', () => {
+  const base = projectWithClips();
+  const local = structuredClone(base);
+  local.tracks[0].clips = local.tracks[0].clips.filter((clip) => clip.id !== 'clip-a');
+  assert.equal(mergeProjectThreeWay(base, local, structuredClone(base)).conflicts.length, 0);
+  const asset = AssetSchema.parse({ id: 'asset-a', name: 'A', type: 'image', path: 'a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt });
+  base.assets = [asset];
+  const deleted = structuredClone(base); deleted.assets = [];
+  const refreshed = structuredClone(base); refreshed.assets[0].thumbnailPath = 'thumb/a.jpg';
+  const result = mergeProjectThreeWay(base, deleted, refreshed);
+  assert.deepEqual(result.assets ?? result.project.assets, []);
+  assert.equal(result.conflicts.length, 0);
+});
+
+test('adjustment targeting and playback clock are stack and wall-clock based', () => {
+  const project = defaultProject('adjustment-targets');
+  project.tracks = project.tracks.slice(0, 3);
+  project.tracks.forEach((track, index) => { track.order = index; track.clips = []; });
+  for (const [index, clip] of [
+    { id: 'background', type: 'image', name: 'Background', start: 0, duration: 2, sourceDuration: 2 },
+    { id: 'adjustment', type: 'image', name: 'Adjustment', start: 0, duration: 2, sourceDuration: 2, adjustment: true },
+    { id: 'logo', type: 'image', name: 'Logo', start: 0, duration: 2, sourceDuration: 2 },
+  ].entries()) project.tracks[index].clips.push(ClipSchema.parse(clip));
+  const plan = visualLayerPlan(project);
+  assert.deepEqual(adjustmentLayersForVisual(plan, plan[0], 1).map(({ clip }) => clip.id), ['adjustment']);
+  assert.deepEqual(adjustmentLayersForVisual(plan, plan[2], 1), []);
+  assert.deepEqual(adjustmentLayersForVisual(plan, plan[0], 3), []);
+  assert.equal(playbackTime(0, 1000, 2000, 10), 1);
+  assert.equal(playbackTime(4, 1000, 2000, 4.5), 4.5);
+});
+
+test('locked tracks reject deletion, rename, reorder and cross-track clip moves without a revision-worthy change', () => {
+  const previous = projectWithClips();
+  previous.tracks[0].locked = true;
+  const candidate = structuredClone(previous);
+  candidate.tracks[0].name = 'Renamed';
+  candidate.tracks[0].clips = [];
+  candidate.tracks.reverse();
+  candidate.tracks[0].clips.push(...previous.tracks[0].clips);
+  candidate.tracks = candidate.tracks.filter((track) => track.id !== previous.tracks[0].id);
+  const next = enforceLockedTrackInvariants(previous, candidate);
+  assert.deepEqual(next.tracks.find((track) => track.id === previous.tracks[0].id), previous.tracks[0]);
+  assert.equal(next.tracks.filter((track) => track.clips.some((clip) => clip.id === 'clip-a')).length, 1);
+  const unlocked = structuredClone(previous); unlocked.tracks[0].locked = false;
+  assert.equal(enforceLockedTrackInvariants(previous, unlocked).tracks[0].locked, false);
 });
 
 test('integrates speed curves into source time instead of using instantaneous speed', () => {
