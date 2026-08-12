@@ -67,9 +67,7 @@ export function interpolateKeyframes(keyframes: readonly Keyframe[], property: K
  */
 export function speedAt(speedCurve: readonly SpeedPoint[] | undefined, baseSpeed: number, time: number) {
   const fallback = clampNumber(baseSpeed, 0.1, 10, 1);
-  const points = [...(speedCurve ?? [])]
-    .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.speed))
-    .sort((a, b) => a.time - b.time);
+  const points = normalizedSpeedPoints(speedCurve);
   if (!points.length) return fallback;
   const safeTime = Math.max(0, Number.isFinite(time) ? time : 0);
   if (safeTime <= points[0].time) return clampNumber(points[0].speed, 0.1, 10, fallback);
@@ -93,7 +91,8 @@ export function sourceTimeAt(speedCurve: readonly SpeedPoint[] | undefined, base
   const safeTime = Math.max(0, Number.isFinite(time) ? time : 0);
   if (safeTime <= 0) return 0;
   if (!speedCurve?.length) return safeTime * clampNumber(baseSpeed, 0.1, 10, 1);
-  const breakpoints = [0, ...speedCurve.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeTime), safeTime]
+  const points = normalizedSpeedPoints(speedCurve);
+  const breakpoints = [0, ...points.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeTime), safeTime]
     .sort((a, b) => a - b)
     .filter((point, index, all) => index === 0 || point - all[index - 1] > 0.000001);
   let total = 0;
@@ -114,6 +113,31 @@ export function sourceTimeAt(speedCurve: readonly SpeedPoint[] | undefined, base
   return Math.max(0, total);
 }
 
+/**
+ * Solve the inverse of `sourceTimeAt` for a source duration.  Project files
+ * store the clip's source length, while the timeline needs the amount of
+ * time required to consume that source through a variable speed curve.
+ */
+export function timelineDurationForSourceDuration(sourceDuration: number, baseSpeed: number, speedCurve?: readonly SpeedPoint[]) {
+  const target = Math.max(0, Number.isFinite(sourceDuration) ? sourceDuration : 0);
+  if (target <= 0) return 0;
+  const fallback = clampNumber(baseSpeed, 0.1, 10, 1);
+  if (!speedCurve?.length) return target / fallback;
+
+  let low = 0;
+  let high = Math.max(0.000001, target / 0.1);
+  // The curve is clamped to a minimum speed of 0.1, so this bound is enough
+  // for valid points.  Keep a deterministic expansion for malformed legacy
+  // data rather than returning an under-sized timeline clip.
+  while (sourceTimeAt(speedCurve, fallback, high) < target && high < 1e7) high *= 2;
+  for (let iteration = 0; iteration < 56; iteration += 1) {
+    const middle = (low + high) / 2;
+    if (sourceTimeAt(speedCurve, fallback, middle) < target) low = middle;
+    else high = middle;
+  }
+  return (low + high) / 2;
+}
+
 export type SpeedCurveSegment = {
   time: number;
   duration: number;
@@ -126,7 +150,8 @@ export type SpeedCurveSegment = {
 export function speedCurveSegments(duration: number, baseSpeed: number, speedCurve?: readonly SpeedPoint[]) {
   const safeDuration = Math.max(0.000001, Number.isFinite(duration) ? duration : 0.000001);
   if (!speedCurve?.length) return [{ time: 0, duration: safeDuration, sourceTime: 0, sourceDuration: safeDuration * clampNumber(baseSpeed, 0.1, 10, 1), speed: clampNumber(baseSpeed, 0.1, 10, 1) }];
-  const knots = [0, ...speedCurve.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeDuration), safeDuration]
+  const points = normalizedSpeedPoints(speedCurve);
+  const knots = [0, ...points.map((point) => point.time).filter((point) => Number.isFinite(point) && point > 0 && point < safeDuration), safeDuration]
     .sort((a, b) => a - b)
     .filter((point, index, all) => index === 0 || point - all[index - 1] > 0.000001);
   const segments: SpeedCurveSegment[] = [];
@@ -146,6 +171,20 @@ export function speedCurveSegments(duration: number, baseSpeed: number, speedCur
     }
   }
   return segments;
+}
+
+function normalizedSpeedPoints(speedCurve: readonly SpeedPoint[] | undefined) {
+  const sorted = [...(speedCurve ?? [])]
+    .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.speed))
+    .map((point) => ({ ...point, time: Math.max(0, point.time), speed: clampNumber(point.speed, 0.1, 10, 1) }))
+    .sort((a, b) => a.time - b.time);
+  const points: SpeedPoint[] = [];
+  for (const point of sorted) {
+    const previous = points.at(-1);
+    if (previous && Math.abs(previous.time - point.time) <= 0.000001) points[points.length - 1] = point;
+    else points.push(point);
+  }
+  return points;
 }
 
 function clampNumber(value: number, min: number, max: number, fallback: number) {
@@ -569,15 +608,85 @@ function remapKeyframes(keyframes: Clip['keyframes'], start: number, end: number
   });
 }
 
-function sliceSpeedCurve(speedCurve: Clip['speedCurve'], start: number, end: number) {
+function sliceSpeedCurve(speedCurve: Clip['speedCurve'], start: number, end: number, baseSpeed: number) {
   if (!speedCurve?.length) return undefined;
-  const points = speedCurve
+  const safeStart = Math.max(0, start);
+  const safeEnd = Math.max(safeStart, end);
+  const points = normalizedSpeedPoints(speedCurve)
     .filter((point) => point.time >= start - 0.000001 && point.time <= end + 0.000001)
-    .map((point) => ({ ...point, time: clamp(point.time - start, 0, Math.max(0, end - start)) }));
-  const startPoint = { time: 0, speed: speedAt(speedCurve, 1, start), easing: 'linear' as const };
-  const endPoint = { time: Math.max(0, end - start), speed: speedAt(speedCurve, 1, end), easing: 'linear' as const };
+    .map((point) => ({ ...point, time: clamp(point.time - safeStart, 0, Math.max(0, safeEnd - safeStart)) }));
+  const startPoint = { time: 0, speed: speedAt(speedCurve, baseSpeed, safeStart), easing: 'linear' as const };
+  const endPoint = { time: Math.max(0, safeEnd - safeStart), speed: speedAt(speedCurve, baseSpeed, safeEnd), easing: 'linear' as const };
   const merged = [startPoint, ...points, endPoint].sort((a, b) => a.time - b.time);
   return merged.filter((point, index, all) => index === 0 || point.time - all[index - 1].time > 0.000001);
+}
+
+function slicedTransition(transition: Clip['transitionIn'], localStart: number, localEnd: number, originalDuration: number, entering: boolean) {
+  if (!transition || transition.type === 'none') return transition;
+  const duration = clamp(transition.duration, 0, originalDuration);
+  const boundary = entering ? duration : originalDuration - duration;
+  const remaining = entering
+    ? boundary - localStart
+    : localEnd - Math.max(localStart, boundary);
+  if (remaining <= 0.000001) return { ...transition, type: 'none' as const, duration: 0 };
+  return { ...transition, duration: Math.min(localEnd - localStart, remaining) };
+}
+
+function slicedFade(value: number | undefined, localStart: number, localEnd: number, originalDuration: number, entering: boolean) {
+  if (value === undefined) return undefined;
+  const duration = clamp(value, 0, originalDuration);
+  const boundary = entering ? duration : originalDuration - duration;
+  const remaining = entering
+    ? boundary - localStart
+    : localEnd - Math.max(localStart, boundary);
+  return remaining <= 0.000001 ? 0 : Math.min(localEnd - localStart, remaining);
+}
+
+/**
+ * Return a clip whose local timeline interval is sliced and rebased to zero.
+ * Source timing is calculated from the integral of the speed curve, while
+ * keyframes, speed knots, fades and transitions are all clipped to the same
+ * interval.  The returned `start` is the original start plus `localStart`;
+ * callers that render a range can rebase it to the range origin afterwards.
+ */
+export function sliceClipForRange(clip: Clip, localStart: number, localEnd: number): Clip {
+  const originalDuration = Math.max(0.000001, Number.isFinite(clip.duration) ? clip.duration : 0.000001);
+  const start = clamp(Number.isFinite(localStart) ? localStart : 0, 0, originalDuration);
+  const end = clamp(Number.isFinite(localEnd) ? localEnd : originalDuration, start, originalDuration);
+  const duration = Math.max(0.000001, end - start);
+  const speed = clampNumber(clip.speed, 0.1, 10, 1);
+  const sourceAtStart = sourceTimeAt(clip.speedCurve, speed, start);
+  const sourceAtEnd = sourceTimeAt(clip.speedCurve, speed, end);
+  return {
+    ...clip,
+    start: clip.start + start,
+    duration,
+    sourceStart: Math.max(0, clip.sourceStart + sourceAtStart),
+    sourceDuration: Math.max(0.000001, sourceAtEnd - sourceAtStart),
+    transitionIn: slicedTransition(clip.transitionIn, start, end, originalDuration, true),
+    transitionOut: slicedTransition(clip.transitionOut, start, end, originalDuration, false),
+    fadeIn: slicedFade(clip.fadeIn, start, end, originalDuration, true),
+    fadeOut: slicedFade(clip.fadeOut, start, end, originalDuration, false),
+    keyframes: remapKeyframes(clip.keyframes, start, end, start),
+    speedCurve: sliceSpeedCurve(clip.speedCurve, start, end, speed),
+  };
+}
+
+/** Trim a clip to absolute project boundaries using the shared range slicer. */
+export function trimClip(project: Project, clipId: string, newStart: number, newEnd: number, sourceClip?: Clip) {
+  const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+  const clip = track?.clips.find((item) => item.id === clipId);
+  if (!track || !clip || track.locked) return false;
+  const base = sourceClip ?? clip;
+  const frame = 1 / Math.max(1, project.canvas.fps);
+  const baseStart = base.start;
+  const baseEnd = base.start + base.duration;
+  const start = clamp(Number.isFinite(newStart) ? newStart : baseStart, baseStart, baseEnd - frame);
+  const end = clamp(Number.isFinite(newEnd) ? newEnd : baseEnd, start + frame, baseEnd);
+  const sliced = sliceClipForRange(base, start - baseStart, end - baseStart);
+  Object.assign(clip, sliced, { start, duration: Math.max(frame, end - start) });
+  project.duration = projectDuration(project);
+  return true;
 }
 
 /**
@@ -594,22 +703,9 @@ export function splitClipAt(project: Project, clipId: string, at: number, create
   if (at <= clip.start + frame / 2 || at >= clip.start + clip.duration - frame / 2) return false;
   const firstDuration = at - clip.start;
   const originalDuration = clip.duration;
-  const originalSourceDuration = sourceTimeAt(clip.speedCurve, clip.speed, originalDuration);
-  const firstSourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, firstDuration));
-  const second = {
-    ...clip,
-    id: createId(),
-    start: at,
-    duration: clip.duration - firstDuration,
-    sourceStart: clip.sourceStart + firstSourceDuration,
-    sourceDuration: Math.max(frame * clip.speed, originalSourceDuration - firstSourceDuration),
-    keyframes: remapKeyframes(clip.keyframes, firstDuration, originalDuration, firstDuration),
-    speedCurve: sliceSpeedCurve(clip.speedCurve, firstDuration, originalDuration),
-  };
-  clip.duration = firstDuration;
-  clip.sourceDuration = firstSourceDuration;
-  clip.keyframes = remapKeyframes(clip.keyframes, 0, firstDuration, 0);
-  clip.speedCurve = sliceSpeedCurve(clip.speedCurve, 0, firstDuration);
+  const first = sliceClipForRange(clip, 0, firstDuration);
+  const second = { ...sliceClipForRange(clip, firstDuration, originalDuration), id: createId(), start: at };
+  Object.assign(clip, first, { start: clip.start, duration: firstDuration });
   track.clips.splice(index + 1, 0, second);
   project.duration = projectDuration(project);
   return true;
@@ -619,26 +715,10 @@ export function trimClipToPlayhead(project: Project, clipId: string, at: number,
   const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
   const clip = track?.clips.find((item) => item.id === clipId);
   if (!track || !clip || track.locked) return false;
-  const frame = 1 / Math.max(1, project.canvas.fps);
   if (at <= clip.start || at >= clip.start + clip.duration) return false;
-  if (edge === 'start') {
-    const delta = at - clip.start;
-    const originalDuration = clip.duration;
-    const sourceOffset = sourceTimeAt(clip.speedCurve, clip.speed, delta);
-    clip.start = at;
-    clip.duration = Math.max(frame, clip.duration - delta);
-    clip.sourceStart += sourceOffset;
-    clip.sourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, originalDuration) - sourceOffset);
-    clip.keyframes = remapKeyframes(clip.keyframes, delta, originalDuration, delta);
-    clip.speedCurve = sliceSpeedCurve(clip.speedCurve, delta, originalDuration);
-  } else {
-    clip.duration = Math.max(frame, at - clip.start);
-    clip.sourceDuration = Math.max(frame * clip.speed, sourceTimeAt(clip.speedCurve, clip.speed, clip.duration));
-    clip.keyframes = remapKeyframes(clip.keyframes, 0, clip.duration, 0);
-    clip.speedCurve = sliceSpeedCurve(clip.speedCurve, 0, clip.duration);
-  }
-  project.duration = projectDuration(project);
-  return true;
+  return edge === 'start'
+    ? trimClip(project, clipId, at, clip.start + clip.duration)
+    : trimClip(project, clipId, clip.start, at);
 }
 
 export function rippleDeleteClip(project: Project, clipId: string) {

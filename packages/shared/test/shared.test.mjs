@@ -18,7 +18,10 @@ import {
   sourceTimeAt,
   speedCurveSegments,
   snapTime,
+  sliceClipForRange,
   splitClipAt,
+  timelineDurationForSourceDuration,
+  trimClip,
   trimClipToPlayhead,
 } from '../dist/index.js';
 
@@ -202,6 +205,60 @@ test('speed curves remain finite and ordered with duplicate or unsorted points',
   assert.equal(segments.every((segment) => segment.duration > 0 && Number.isFinite(segment.sourceDuration)), true);
   assert.equal(segments.every((segment, index) => index === 0 || segment.time >= segments[index - 1].time), true);
   assert.equal(Math.abs(segments.reduce((sum, segment) => sum + segment.sourceDuration, 0) - consumed) < 0.0001, true);
+});
+
+test('inverts variable speed curves without mutating project duration on load', () => {
+  const curve = [
+    { time: 4, speed: 2, easing: 'linear' },
+    { time: 0, speed: 1, easing: 'linear' },
+    { time: 4, speed: 1.5, easing: 'ease-out' },
+  ];
+  const timeline = timelineDurationForSourceDuration(8, 1, curve);
+  assert.equal(Number.isFinite(timeline), true);
+  assert.ok(timeline > 0);
+  assert.ok(Math.abs(sourceTimeAt(curve, 1, timeline) - 8) < 0.000001);
+  assert.ok(Math.abs(timelineDurationForSourceDuration(8, 1, curve) - timeline) < 0.000001);
+});
+
+test('range slicing rebases source, speed curve, keyframes, fades and transitions together', () => {
+  const clip = ClipSchema.parse({
+    id: 'range-clip', type: 'video', name: 'Range', start: 12, duration: 10, sourceStart: 3, sourceDuration: 10,
+    speed: 1, speedCurve: [{ time: 0, speed: 1 }, { time: 10, speed: 2 }],
+    keyframes: [
+      { id: 'opacity-start', property: 'opacity', time: 0, value: 0, easing: 'linear' },
+      { id: 'opacity-end', property: 'opacity', time: 10, value: 1, easing: 'linear' },
+    ],
+    transitionIn: { type: 'fade', duration: 2 },
+    transitionOut: { type: 'fade', duration: 2 },
+    fadeIn: 2,
+    fadeOut: 2,
+  });
+  const sliced = sliceClipForRange(clip, 5, 10);
+  assert.equal(sliced.start, 17);
+  assert.equal(sliced.duration, 5);
+  assert.ok(Math.abs(sliced.sourceStart - (3 + sourceTimeAt(clip.speedCurve, clip.speed, 5))) < 0.000001);
+  assert.ok(Math.abs(sliced.sourceDuration - (sourceTimeAt(clip.speedCurve, clip.speed, 10) - sourceTimeAt(clip.speedCurve, clip.speed, 5))) < 0.000001);
+  assert.equal(sliced.fadeIn, 0);
+  assert.equal(sliced.transitionIn.type, 'none');
+  assert.equal(sliced.fadeOut, 2);
+  assert.equal(sliced.transitionOut.duration, 2);
+  assert.equal(sliced.keyframes.some((keyframe) => keyframe.time === 0), true);
+  assert.equal(sliced.speedCurve?.[0].time, 0);
+  assert.ok(Math.abs(interpolateKeyframes(sliced.keyframes, 'opacity', 0, -1) - interpolateKeyframes(clip.keyframes, 'opacity', 5, -1)) < 0.000001);
+});
+
+test('trimClip uses the same range primitive for a variable-speed pointer boundary', () => {
+  const project = projectWithClips();
+  const clip = project.tracks[0].clips[0];
+  clip.duration = 10;
+  clip.sourceDuration = sourceTimeAt([{ time: 0, speed: 1 }, { time: 10, speed: 2 }], 1, 10);
+  clip.speedCurve = [{ time: 0, speed: 1 }, { time: 10, speed: 2 }];
+  const snapshot = structuredClone(clip);
+  assert.equal(trimClip(project, clip.id, 2, 8, snapshot), true);
+  assert.equal(clip.start, 2);
+  assert.equal(clip.duration, 6);
+  assert.ok(Math.abs(clip.sourceStart - sourceTimeAt(snapshot.speedCurve, snapshot.speed, 2)) < 0.000001);
+  assert.ok(Math.abs(clip.sourceDuration - (sourceTimeAt(snapshot.speedCurve, snapshot.speed, 8) - sourceTimeAt(snapshot.speedCurve, snapshot.speed, 2))) < 0.000001);
 });
 
 test('rippleDeleteAcrossTimeline closes the gap on unlocked tracks', () => {

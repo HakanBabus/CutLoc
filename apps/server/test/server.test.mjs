@@ -324,6 +324,50 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal(purgedResponse.statusCode, 200);
 });
 
+test('portable project bundles include media and reopen on a clean project directory', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Portable bundle fixture' })).json();
+  const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const sourceProject = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  const sourceAsset = sourceProject.assets[0];
+  sourceProject.tracks[0].clips.push({
+    id: 'portable-clip', assetId: sourceAsset.id, type: 'image', name: sourceAsset.name, start: 0, duration: 0.12,
+    sourceStart: 0, sourceDuration: 0.12, speed: 1,
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, keyframes: [],
+  });
+  sourceProject.duration = 0.12;
+  const saved = await jsonRequest('PATCH', `/api/projects/${created.id}`, sourceProject);
+  assert.equal(saved.statusCode, 200);
+
+  const bundleResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/bundle` });
+  assert.equal(bundleResponse.statusCode, 200);
+  assert.equal(bundleResponse.headers['content-type'], 'application/zip');
+  const bundle = Buffer.from(bundleResponse.rawPayload);
+  assert.equal(bundle.subarray(0, 2).toString(), 'PK');
+
+  const importedResponse = await app.inject({
+    method: 'POST',
+    url: '/api/projects/import',
+    headers: { 'content-type': 'application/zip' },
+    payload: bundle,
+  });
+  assert.equal(importedResponse.statusCode, 201, importedResponse.payload);
+  const imported = importedResponse.json();
+  assert.notEqual(imported.id, sourceProject.id);
+  assert.notEqual(imported.assets[0].id, sourceAsset.id);
+  assert.match(imported.assets[0].path, /^media[\\/].+\.png$/);
+  const importedMedia = await app.inject({ method: 'GET', url: `/api/projects/${imported.id}/media/${imported.assets[0].id}` });
+  assert.equal(importedMedia.statusCode, 200);
+  assert.equal(importedMedia.headers['content-type'], 'image/png');
+
+  const exportResponse = await jsonRequest('POST', `/api/projects/${imported.id}/export`, { format: 'mp4', range: { start: 0, end: 0.12 }, fileName: 'portable.mp4' });
+  assert.equal(exportResponse.statusCode, 202);
+  const exportJob = await waitForJob(exportResponse.json().job.id, 30000);
+  assert.equal(exportJob.status, 'completed', exportJob.error ?? 'portable export failed');
+});
+
 test('image upload creates a real JPEG thumbnail and serves it with the correct content type', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Thumbnail fixture' })).json();
   const jpeg = await fsp.readFile(path.join(repoRoot, 'assets', 'screenshots', 'cutloc-editor.jpg'));
