@@ -19,9 +19,13 @@
     "test": "npm --workspace packages/shared run test && npm --workspace apps/server run test",
     "test:shared": "npm --workspace packages/shared run test",
     "test:server": "npm --workspace apps/server run test",
-    "verify": "npm run build && npm test"
+    "test:web": "playwright test",
+    "test:all": "npm test && npm run test:web",
+    "verify": "npm run build && npm test",
+    "verify:all": "npm run build && npm run test:all"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "concurrently": "^10.0.4"
   }
 }

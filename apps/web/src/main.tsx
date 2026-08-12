@@ -16,7 +16,10 @@ import {
   sourceTimeAt,
   speedAt,
   snapTime as snapProjectTime,
+  sliceClipForRange,
   splitClipAt,
+  timelineDurationForSourceDuration,
+  trimClip,
   trimClipToPlayhead,
   type ExportOptions,
   type ExportPreflight,
@@ -409,7 +412,16 @@ function App() {
 
   const importBundle = async (bundle: unknown) => {
     try {
-      const imported = await api<Project>('/api/projects/import', { method: 'POST', body: JSON.stringify(bundle) });
+      let imported: Project;
+      if (typeof File !== 'undefined' && bundle instanceof File) {
+        const language = document.documentElement.lang === 'tr' ? 'tr' : 'en';
+        const response = await fetch('/api/projects/import', { method: 'POST', headers: { 'Accept-Language': language, 'Content-Type': 'application/zip' }, body: bundle });
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        if (!response.ok) throw new Error(body.error || t('dashboard.importFailed'));
+        imported = body as Project;
+      } else {
+        imported = await api<Project>('/api/projects/import', { method: 'POST', body: JSON.stringify(bundle) });
+      }
       setProjects((items) => [imported, ...items]);
       setProject(imported);
       transitionTo('editor');
@@ -568,8 +580,8 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
   }, [language, projects, query, sort]);
   const readBundle = async (file: File) => {
     try {
-      const parsed = JSON.parse(await file.text()) as unknown;
-      onImportBundle(parsed);
+      if (file.name.toLocaleLowerCase().endsWith('.json')) onImportBundle(JSON.parse(await file.text()) as unknown);
+      else onImportBundle(file);
     } catch {
       // Keep malformed files out of the API and give the user a useful local error.
       window.alert(t('dashboard.bundleError'));
@@ -578,7 +590,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
   return <main key={language} className="dashboard">
     <header className="dashboard-header">
       <div className="brand"><div className="brand-mark"><span /></div><div><strong>CUTLOC</strong><small>{t('brand.tagline')}</small></div></div>
-      <div className="header-actions"><span className="offline-pill"><i /> {t('brand.localMode')}</span><button className="secondary-button dashboard-bundle-import" onClick={() => bundleInputRef.current?.click()}>{t('dashboard.openBundle')}</button><input ref={bundleInputRef} className="hidden-input" type="file" accept=".json,.cutloc,.cutloc.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readBundle(file); event.target.value = ''; }} /><ThemeSwitcher /><button className="icon-button" title={t('common.settings')} onClick={onSettings}><Glyph>⚙</Glyph></button></div>
+      <div className="header-actions"><span className="offline-pill"><i /> {t('brand.localMode')}</span><button className="secondary-button dashboard-bundle-import" onClick={() => bundleInputRef.current?.click()}>{t('dashboard.openBundle')}</button><input ref={bundleInputRef} className="hidden-input" type="file" accept=".json,.cutloc,.cutloc.json,application/json,application/zip" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readBundle(file); event.target.value = ''; }} /><ThemeSwitcher /><button className="icon-button" title={t('common.settings')} onClick={onSettings}><Glyph>⚙</Glyph></button></div>
     </header>
     <section className="dashboard-hero">
       <div><p className="eyebrow">{t('dashboard.hero.eyebrow')}</p><h1>{t('dashboard.hero.titleLead')} <em>{t('dashboard.hero.titleAccent')}</em><br />{t('dashboard.hero.titleTail')}</h1><p className="hero-copy">{t('dashboard.hero.copy')}</p><button className="primary-button large" onClick={onCreate}><Glyph>＋</Glyph> {t('dashboard.newProject')}</button></div>
@@ -649,6 +661,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [backPending, setBackPending] = useState(false);
   const [exportStatus, setExportStatus] = useState<ExportStatus>({ progress: 0 });
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>({ ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) });
   const saveTimerRef = useRef<number | null>(null);
@@ -917,7 +930,57 @@ function Editor({ onBack }: { onBack: () => void }) {
     return true;
   };
 
-  const flushPendingSave = async () => {};
+  const flushPendingSave = useCallback(async () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const state = useEditor.getState();
+      if (!state.project) return;
+      const dirty = state.localRevision !== state.savedRevision;
+      if (dirty && (state.saveState === 'offline' || (typeof navigator !== 'undefined' && !navigator.onLine))) {
+        throw new Error(t('editor.saveOffline'));
+      }
+      if (dirty && state.saveState === 'error') throw new Error(t('editor.fixPendingSave'));
+      const inFlight = savePromiseRef.current;
+      if (inFlight) {
+        await inFlight;
+        continue;
+      }
+      if (dirty || state.saveState === 'saving') {
+        await saveProjectNow();
+        continue;
+      }
+      if (state.saveState === 'error') throw new Error(t('editor.fixPendingSave'));
+      return;
+    }
+    throw new Error(t('editor.fixPendingSave'));
+  }, [saveProjectNow, t]);
+
+  const handleBack = useCallback(() => {
+    if (backPending) return;
+    setBackPending(true);
+    void flushPendingSave().then(() => {
+      onBack();
+    }).catch((error: unknown) => {
+      setEditorNotice(error instanceof Error ? error.message : t('editor.fixPendingSave'));
+    }).finally(() => {
+      setBackPending(false);
+    });
+  }, [backPending, flushPendingSave, onBack, setEditorNotice, t]);
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      const state = useEditor.getState();
+      if (state.project && state.localRevision !== state.savedRevision) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
   const ensureProjectSaved = async (): Promise<Project> => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const state = useEditor.getState();
@@ -1078,7 +1141,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   ];
 
   return <div className="editor-shell">
-    <EditorTopbar project={project} onBack={onBack} onExport={() => setShowExport(true)} exporting={exporting} onSettings={() => setShowSettings(true)} onCommands={() => setShowCommandPalette(true)} />
+    <EditorTopbar project={project} onBack={handleBack} backPending={backPending} onExport={() => setShowExport(true)} exporting={exporting} onSettings={() => setShowSettings(true)} onCommands={() => setShowCommandPalette(true)} />
     <div className="editor-body workspace-layout" style={{ '--workspace-rail-width': `${workspaceLayout.railWidth}px`, '--workspace-library-width': `${workspaceLayout.libraryWidth}px`, '--workspace-inspector-width': `${workspaceLayout.inspectorWidth}px`, '--workspace-timeline-height': `${workspaceLayout.timelineHeight}px` } as React.CSSProperties}><ToolRail onOpenSettings={() => setShowSettings(true)} /><AssetPanelPro onImport={importMedia} onOpenSettings={() => setShowSettings(true)} /><PreviewArea project={project} settings={settings} /><Inspector project={project} /><TimelinePro project={project} /><WorkspaceResizers layout={workspaceLayout} onPreview={setWorkspaceLayout} onCommit={persistWorkspaceLayout} /></div>
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
     {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
@@ -1157,7 +1220,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   </section></div>;
 }
 
-function EditorTopbar({ project, onBack, onExport, exporting, onSettings, onCommands }: { project: Project; onBack: () => void; onExport: () => void; exporting: boolean; onSettings: () => void; onCommands: () => void }) {
+function EditorTopbar({ project, onBack, backPending, onExport, exporting, onSettings, onCommands }: { project: Project; onBack: () => void; backPending: boolean; onExport: () => void; exporting: boolean; onSettings: () => void; onCommands: () => void }) {
   const { t } = useI18n();
   const mutateProject = useEditor((state) => state.mutateProject);
   const undo = useEditor((state) => state.undo);
@@ -1174,7 +1237,7 @@ function EditorTopbar({ project, onBack, onExport, exporting, onSettings, onComm
         ? '\u00c7evrimd\u0131\u015f\u0131 - bekliyor'
         : saveTime ? 'Kaydedildi \u00b7 ' + saveTime : 'Kaydedildi';
   const saveTitle = saveState === 'saved' && saveTime ? 'Son ba\u015far\u0131l\u0131 kay\u0131t: ' + saveTime : saveLabel;
-  return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title="Geri al">&#8630;</button><button className="history-button" onClick={redo} title="Yinele">&#8631;</button><button className="topbar-command-button" onClick={onCommands} title={t('command.open')}><span>&#8981;</span><small>{t('command.title')}</small><kbd>&#8984; K</kbd></button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? 'Export\u2026' : 'D\u0131\u015fa aktar'} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title="Ayarlar"><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title="Ayarlar">HK</button></div></header>;
+  return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" disabled={backPending} aria-busy={backPending} onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title="Geri al">&#8630;</button><button className="history-button" onClick={redo} title="Yinele">&#8631;</button><button className="topbar-command-button" onClick={onCommands} title={t('command.open')}><span>&#8981;</span><small>{t('command.title')}</small><kbd>&#8984; K</kbd></button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? 'Export\u2026' : 'D\u0131\u015fa aktar'} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title="Ayarlar"><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title="Ayarlar">HK</button></div></header>;
 }
 // Legacy topbar body removed during merge; the live topbar is above.
 
@@ -2283,7 +2346,7 @@ function waveformBars(seed: string, count = 56) {
 
 function timelineClipDuration(clip: Clip) {
   if (clip.type === 'text' || clip.type === 'subtitle') return clip.duration;
-  return Math.max(0.05, clip.sourceDuration / Math.max(0.25, clip.speed));
+  return Math.max(0.05, timelineDurationForSourceDuration(clip.sourceDuration, clip.speed, clip.speedCurve));
 }
 
 function clipLocalTime(clip: Clip, projectTime: number) {
@@ -3264,7 +3327,7 @@ function Timeline({ project }: { project: Project }) {
 
 type ProTimelineDrag =
   | { kind: 'clip'; clipId: string; trackId: string; startX: number; start: number; selectedClipIds: string[]; selectedClipStarts: Record<string, number>; historyGroup?: string }
-  | { kind: 'trimLeft' | 'trimRight'; clipId: string; trackId: string; startX: number; start: number; duration: number; sourceStart: number; sourceDuration: number; speed: number; historyGroup: string }
+  | { kind: 'trimLeft' | 'trimRight'; clipId: string; trackId: string; startX: number; start: number; duration: number; clipSnapshot: Clip; historyGroup: string }
   | { kind: 'playhead' }
   | { kind: 'marker'; markerId: string; historyGroup?: string };
 
@@ -3353,7 +3416,7 @@ function TimelinePro({ project }: { project: Project }) {
           setSelected(clip.id, track.id);
           const historyGroup = newHistoryGroup();
           dragHistoryGroupRef.current = historyGroup;
-          setDrag({ kind: trimHandle.classList.contains('left') ? 'trimLeft' : 'trimRight', clipId: clip.id, trackId: track.id, startX: event.clientX, start: clip.start, duration: clip.duration, sourceStart: clip.sourceStart, sourceDuration: clip.sourceDuration, speed: clip.speed, historyGroup });
+          setDrag({ kind: trimHandle.classList.contains('left') ? 'trimLeft' : 'trimRight', clipId: clip.id, trackId: track.id, startX: event.clientX, start: clip.start, duration: clip.duration, clipSnapshot: structuredClone(clip), historyGroup });
           root.setPointerCapture(event.pointerId);
           return;
         }
@@ -3458,23 +3521,13 @@ function TimelinePro({ project }: { project: Project }) {
       const delta = (event.clientX - drag.startX) / px;
       const frame = 1 / project.canvas.fps;
       mutateProject((draft) => {
-        const track = draft.tracks.find((item) => item.id === drag.trackId);
-        const clip = track?.clips.find((item) => item.id === drag.clipId);
-        if (!clip || track?.locked) return;
-        if (drag.kind === 'trimLeft') {
-          const nextStart = clamp(Math.round((drag.start + delta) / frame) * frame, 0, drag.start + drag.duration - frame);
-          const consumed = nextStart - drag.start;
-          clip.start = nextStart;
-          clip.duration = Math.max(frame, drag.duration - consumed);
-          clip.sourceStart = Math.max(0, drag.sourceStart + sourceTimeAt(clip.speedCurve, drag.speed, Math.max(0, consumed)));
-          clip.sourceDuration = Math.max(frame * drag.speed, sourceTimeAt(clip.speedCurve, drag.speed, clip.duration));
-        } else {
-          const maxDuration = Math.max(frame, drag.sourceDuration / Math.max(0.25, drag.speed));
-          const nextDuration = clamp(Math.round((drag.duration + delta) / frame) * frame, frame, maxDuration);
-          clip.duration = nextDuration;
-          clip.sourceDuration = Math.max(frame * drag.speed, sourceTimeAt(clip.speedCurve, drag.speed, nextDuration));
-        }
-        draft.duration = projectDuration(draft);
+        const nextStart = drag.kind === 'trimLeft'
+          ? clamp(Math.round((drag.start + delta) / frame) * frame, 0, drag.start + drag.duration - frame)
+          : drag.start;
+        const nextEnd = drag.kind === 'trimRight'
+          ? clamp(Math.round((drag.start + drag.duration + delta) / frame) * frame, drag.start + frame, drag.start + drag.duration)
+          : drag.start + drag.duration;
+        trimClip(draft, drag.clipId, nextStart, nextEnd, drag.clipSnapshot);
       }, { historyGroup: drag.historyGroup });
       return;
     }

@@ -10,6 +10,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { serverT, type ServerTranslationKey, type ServerTranslationValues } from './i18n.js';
 import {
   defaultProject,
@@ -20,6 +21,7 @@ import {
   ExportOptionsSchema,
   JobSchema,
   SettingsSchema,
+  sliceClipForRange,
   sourceTimeAt,
   speedCurveSegments,
   speedAt,
@@ -76,6 +78,14 @@ function activeJobCount() {
 
 type TimelineClip = Project['tracks'][number]['clips'][number];
 type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean; projectRevision?: number };
+type LegacyBundle = { format?: string; version?: number; project?: unknown };
+type PortableBundleManifest = {
+  format: 'cutloc-project';
+  version: 2;
+  exportedAt: string;
+  projectFile: 'project.json';
+  media: Array<{ assetId: string; file: string }>;
+};
 
 const STOCK_MEDIA = [
   { id: 'white', fileName: 'white.png', mimeType: 'image/png', width: 1600, height: 900 },
@@ -422,6 +432,124 @@ function assetFile(projectId: string, asset: Asset) {
   return safeExistingPath(projectPath(projectId), asset.path);
 }
 
+function bundleAssetExtension(asset: Asset) {
+  const extension = path.extname(asset.path).toLowerCase();
+  if (/^\.[a-z0-9]{1,8}$/.test(extension)) return extension;
+  return asset.type === 'video' ? '.mp4' : asset.type === 'audio' ? '.wav' : '.png';
+}
+
+function portableBundleFilePath(value: unknown) {
+  if (typeof value !== 'string' || !/^media\/[A-Za-z0-9._-]+$/.test(value)) throw new Error(message('invalidBundle'));
+  return value;
+}
+
+async function createPortableBundle(project: Project) {
+  const media: PortableBundleManifest['media'] = [];
+  const files: Record<string, Uint8Array> = {
+    'project.json': strToU8(JSON.stringify(project, null, 2)),
+  };
+  for (const [index, asset] of project.assets.entries()) {
+    const source = assetFile(project.id, asset);
+    if (!fs.existsSync(source)) throw new Error(message('bundleMediaMissing', { name: asset.name }));
+    const file = `media/${index}${bundleAssetExtension(asset)}`;
+    media.push({ assetId: asset.id, file });
+    files[file] = new Uint8Array(await fsp.readFile(source));
+  }
+  const manifest: PortableBundleManifest = {
+    format: 'cutloc-project',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    projectFile: 'project.json',
+    media,
+  };
+  files['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
+  return zipSync(files, { level: 6 });
+}
+
+function parsePortableBundle(payload: Buffer) {
+  const files = unzipSync(payload);
+  const manifestFile = files['manifest.json'];
+  const projectFileContent = files['project.json'];
+  if (!manifestFile || !projectFileContent) throw new Error(message('invalidBundle'));
+  const manifest = JSON.parse(strFromU8(manifestFile)) as Partial<PortableBundleManifest>;
+  if (manifest.format !== 'cutloc-project' || manifest.version !== 2 || manifest.projectFile !== 'project.json' || !Array.isArray(manifest.media)) {
+    throw new Error(message('invalidBundle'));
+  }
+  const source = ProjectSchema.parse(JSON.parse(strFromU8(projectFileContent)));
+  const entries = new Map<string, Uint8Array>();
+  const assetFiles = new Map<string, Uint8Array>();
+  for (const entry of manifest.media) {
+    if (!entry || typeof entry.assetId !== 'string' || entries.has(entry.assetId)) throw new Error(message('invalidBundle'));
+    const file = portableBundleFilePath(entry.file);
+    const content = files[file];
+    if (!content) throw new Error(message('bundleMediaMissing', { name: entry.assetId }));
+    entries.set(entry.assetId, content);
+  }
+  for (const asset of source.assets) {
+    if (assetFiles.has(asset.id)) throw new Error(message('invalidBundle'));
+    const content = entries.get(asset.id);
+    if (!content) throw new Error(message('bundleMediaMissing', { name: asset.name }));
+    assetFiles.set(asset.id, content);
+  }
+  if (entries.size !== source.assets.length) throw new Error(message('invalidBundle'));
+  return { source, assetFiles };
+}
+
+function parseLegacyBundle(submitted: unknown) {
+  const raw = (submitted && typeof submitted === 'object' && 'bundle' in submitted
+    ? (submitted as { bundle?: LegacyBundle }).bundle
+    : submitted) as LegacyBundle | undefined;
+  if (!raw || raw.format !== 'cutloc-project' || raw.version !== 1 || !raw.project) throw new Error(message('invalidBundle'));
+  return ProjectSchema.parse(raw.project);
+}
+
+async function importProject(source: Project, sourceFiles?: Map<string, Uint8Array>) {
+  const importedId = id('project');
+  const now = new Date().toISOString();
+  const assetIds = new Set<string>();
+  const assetIdMap = new Map<string, string>();
+  const assets = source.assets.map((asset) => {
+    if (assetIds.has(asset.id)) throw new Error(message('invalidBundle'));
+    assetIds.add(asset.id);
+    const importedAssetId = id('asset');
+    assetIdMap.set(asset.id, importedAssetId);
+    return {
+      ...asset,
+      id: importedAssetId,
+      path: path.join('media', `${importedAssetId}${bundleAssetExtension(asset)}`),
+      proxyPath: undefined,
+      thumbnailPath: undefined,
+      waveformPath: undefined,
+    };
+  });
+  const tracks = source.tracks.map((track) => ({
+    ...track,
+    clips: track.clips.map((clip) => {
+      if (!clip.assetId) return clip;
+      const importedAssetId = assetIdMap.get(clip.assetId);
+      if (!importedAssetId) throw new Error(message('invalidBundle'));
+      return { ...clip, assetId: importedAssetId };
+    }),
+  }));
+  const project = ProjectSchema.parse({ ...source, id: importedId, name: message('bundleSuffix', { name: source.name }), createdAt: now, updatedAt: now, revision: 0, assets, tracks });
+  await ensureProjectFolders(project.id);
+  try {
+    if (sourceFiles) {
+      await Promise.all(source.assets.map(async (sourceAsset, index) => {
+        const content = sourceFiles.get(sourceAsset.id);
+        if (!content) throw new Error(message('bundleMediaMissing', { name: sourceAsset.name }));
+        const target = safeJoin(projectPath(project.id), project.assets[index].path);
+        await fsp.writeFile(target, content);
+      }));
+    }
+    await saveProject(project);
+    return project;
+  } catch (error) {
+    await fsp.rm(projectPath(project.id), { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 function numberOr(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -476,17 +604,8 @@ function visibleRenderClip(clip: TimelineClip, rangeStart: number, rangeEnd: num
   const visibleStart = Math.max(clipStart, rangeStart);
   const visibleEnd = Math.min(clipEnd, rangeEnd);
   if (visibleEnd <= visibleStart) return null;
-  const offset = Math.max(0, visibleStart - clipStart);
-  const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
-  const sourceOffset = sourceTimeAt(clip.speedCurve, speed, offset);
-  const visibleSourceDuration = sourceTimeAt(clip.speedCurve, speed, visibleEnd - visibleStart);
-  return {
-    ...clip,
-    start: visibleStart - rangeStart,
-    duration: visibleEnd - visibleStart,
-    sourceStart: Math.max(0, numberOr(clip.sourceStart, 0) + sourceOffset),
-    sourceDuration: Math.max(0.05, visibleSourceDuration),
-  };
+  const sliced = sliceClipForRange(clip, visibleStart - clipStart, visibleEnd - clipStart);
+  return { ...sliced, start: visibleStart - rangeStart, duration: visibleEnd - visibleStart };
 }
 
 function mergeAdjustmentFilters(base: TimelineClip['filters'], layers: TimelineClip['filters'][]): TimelineClip['filters'] {
@@ -1192,25 +1311,23 @@ async function registerRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/bundle', async (request, reply) => {
+    let project: Project;
     try {
-      const project = await readProject(request.params.projectId);
-      const bundle = { format: 'cutloc-project', version: 1, exportedAt: new Date().toISOString(), project, media: project.assets.map((asset) => ({ assetId: asset.id, name: asset.name, type: asset.type, originalPath: asset.path })) };
-      return reply.header('Content-Type', 'application/json').header('Content-Disposition', `attachment; filename="${safeExportName(project, project.name, 'cutloc.json')}"`).send(bundle);
+      project = await readProject(request.params.projectId);
     } catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+    try {
+      const bundle = await createPortableBundle(project);
+      return reply.header('Content-Type', 'application/zip').header('Content-Length', bundle.byteLength).header('Content-Disposition', `attachment; filename="${safeExportName(project, project.name, 'cutloc')}"`).send(Buffer.from(bundle));
+    } catch (error) { return reply.code(400).send({ error: localizedError(error, 'bundleOpenFailed') }); }
   });
 
-  app.post<{ Body: { bundle?: { format?: string; version?: number; project?: unknown } } | { format?: string; version?: number; project?: unknown } }>('/api/projects/import', async (request, reply) => {
+  app.post<{ Body: unknown }>('/api/projects/import', async (request, reply) => {
     try {
       const submitted = request.body;
-      const raw = ('bundle' in submitted ? submitted.bundle : submitted) as { format?: string; version?: number; project?: unknown } | undefined;
-      if (!raw || raw.format !== 'cutloc-project' || raw.version !== 1 || !raw.project) return reply.code(400).send({ error: message('invalidBundle') });
-      const source = ProjectSchema.parse(raw.project);
-      const importedId = id('project');
-      const now = new Date().toISOString();
-      const assets = source.assets.map((asset) => ({ ...asset, path: path.join('media', `${asset.id}${path.extname(asset.path) || (asset.type === 'video' ? '.mp4' : asset.type === 'audio' ? '.wav' : '.png')}`), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined }));
-      const project = ProjectSchema.parse({ ...source, id: importedId, name: message('bundleSuffix', { name: source.name }), createdAt: now, updatedAt: now, revision: 0, assets });
-      await ensureProjectFolders(project.id);
-      await saveProject(project);
+      const imported = Buffer.isBuffer(submitted)
+        ? parsePortableBundle(submitted)
+        : { source: parseLegacyBundle(submitted), assetFiles: undefined };
+      const project = await importProject(imported.source, imported.assetFiles);
       return reply.code(201).send(project);
     } catch (error) { return reply.code(400).send({ error: localizedError(error, 'bundleOpenFailed') }); }
   });
@@ -1577,7 +1694,8 @@ export async function createServer() {
   await ensureDir(dataDir);
   await ensureDir(projectsDir);
   await loadSettings();
-  const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 });
+  const app = Fastify({ logger: false, bodyLimit: maxUploadBytes });
+  app.addContentTypeParser(['application/zip', 'application/octet-stream'], { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api/') && !isAllowedLocalRequest(request)) {
       return reply.code(403).send({ error: message('localOnly') });
