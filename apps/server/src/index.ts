@@ -56,6 +56,7 @@ type SseClient = { reply: FastifyReply };
 const clients = new Set<SseClient>();
 type InternalJob = Job & { outputPath?: string; absoluteOutputPath?: string; relativeOutputPath?: string };
 const jobs = new Map<string, InternalJob>();
+const reservedExportPaths = new Set<string>();
 const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
 let settings: Settings = defaultSettings();
 const transientKeys = { openai: '', gemini: '' };
@@ -689,7 +690,7 @@ function uniqueOutputPath(exportDir: string, fileName: string) {
   const parsed = path.parse(fileName);
   let candidate = path.join(exportDir, fileName);
   let index = 2;
-  while (fs.existsSync(candidate)) candidate = path.join(exportDir, `${parsed.name}-${index++}${parsed.ext}`);
+  while (fs.existsSync(candidate) || reservedExportPaths.has(candidate)) candidate = path.join(exportDir, `${parsed.name}-${index++}${parsed.ext}`);
   return safeJoin(exportDir, path.relative(exportDir, candidate));
 }
 
@@ -1770,10 +1771,12 @@ async function registerRoutes(app: FastifyInstance) {
         const extension = options.format === 'wav' ? 'wav' : options.format === 'mp3' ? 'mp3' : 'mp4';
         const fileName = safeExportName(project, options.fileName, extension);
         const output = uniqueOutputPath(exportDir, fileName);
+        reservedExportPaths.add(output);
         const audioOnly = options.format === 'mp3' || options.format === 'wav';
         const render = buildExportArgs(project, options, output);
         if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyJobs')), { statusCode: 429 });
         const job = await makeJob(project.id, 'export', async (jobInfo) => {
+          try {
           assertProjectActive(project.id);
           if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
           updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
@@ -1783,6 +1786,7 @@ async function registerRoutes(app: FastifyInstance) {
           jobProgressDuration.delete(jobInfo.id);
           updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName, format: options.format, phase: 'complete' });
           updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
+          } finally { reservedExportPaths.delete(output); }
         });
         updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
         return { preflight, job };
