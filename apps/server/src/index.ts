@@ -17,6 +17,7 @@ import {
   defaultSettings,
   clamp,
   exportDimensions,
+  projectDuration,
   ProjectSchema,
   ExportOptionsSchema,
   JobSchema,
@@ -1684,6 +1685,25 @@ async function registerRoutes(app: FastifyInstance) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
       return reply.code(responseCode).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : statusCode === 415 ? 'mediaValidationFailed' : 'derivativesOutputFailed') });
+    }
+  });
+
+  app.delete<{ Params: { projectId: string; assetId: string } }>('/api/projects/:projectId/media/:assetId', async (request, reply) => {
+    try {
+      const project = await withProjectLock(request.params.projectId, async () => {
+        const current = await readProject(request.params.projectId);
+        const asset = current.assets.find((item) => item.id === request.params.assetId);
+        if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
+        const next = ProjectSchema.parse({ ...current, assets: current.assets.filter((item) => item.id !== asset.id), tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.assetId !== asset.id) })), duration: 0, revision: current.revision + 1, updatedAt: new Date().toISOString() });
+        next.duration = projectDuration(next);
+        await saveProject(next);
+        await Promise.all([asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath].filter((item): item is string => Boolean(item)).map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
+        return next;
+      });
+      return reply.send(project);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : 'projectSaveFailed') });
     }
   });
 
