@@ -26,6 +26,7 @@ import {
   sourceTimeAt,
   speedCurveSegments,
   speedAt,
+  adjustmentLayersForVisual,
   visualLayerPlan,
   type Asset,
   type ExportOptions,
@@ -841,13 +842,11 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
   const { width: outWidth, height: outHeight } = outputDimensions(project, body.aspect, body.resolution);
   const fps = body.fps;
   const audioOnly = body.format === 'mp3' || body.format === 'wav' || request.audioOnly === true;
-  const tracks = [...project.tracks]
-    .filter((track) => !track.hidden)
-    .sort((a, b) => a.order - b.order);
-  const adjustmentClips = tracks.flatMap((track) => track.clips.filter((clip) => clip.adjustment));
+  const visualPlan = visualLayerPlan(project);
+  const visualByClipId = new Map(visualPlan.map((item) => [item.clip.id, item]));
   const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number }> = [];
   const allTextClips: Array<{ clip: TimelineClip; stackOrder: number }> = [];
-  for (const { track, clip, stackOrder: clipStackOrder } of visualLayerPlan(project)) {
+  for (const { track, clip, stackOrder: clipStackOrder } of visualPlan) {
       if (clip.adjustment) continue;
       if (clip.type === 'text' || clip.type === 'subtitle') {
         if (clip.textStyle?.text || clip.subtitle?.text) allTextClips.push({ clip, stackOrder: clipStackOrder });
@@ -871,24 +870,26 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     .map((entry) => {
       const visible = visibleRenderClip(entry.clip, rangeStart, rangeEnd);
       if (!visible) return { ...entry, clip: null, adjustmentSegments: [] as AdjustmentRenderSegment[] };
-      const layers = adjustmentClips
-        .filter((layer) => numberOr(layer.start, 0) < numberOr(entry.clip.start, 0) + numberOr(entry.clip.duration, 0) && numberOr(layer.start, 0) + numberOr(layer.duration, 0) > numberOr(entry.clip.start, 0));
+      const visual = visualByClipId.get(entry.clip.id)!;
+      const layers = visualPlan.filter(({ clip }) => clip.adjustment
+        && numberOr(clip.start, 0) < numberOr(entry.clip.start, 0) + numberOr(entry.clip.duration, 0)
+        && numberOr(clip.start, 0) + numberOr(clip.duration, 0) > numberOr(entry.clip.start, 0));
       const visibleEnd = visible.start + visible.duration;
       const boundaries = [
         visible.start,
         visibleEnd,
         ...layers.flatMap((layer) => [
-          clamp(numberOr(layer.start, 0) - rangeStart, visible.start, visibleEnd),
-          clamp(numberOr(layer.start, 0) + numberOr(layer.duration, 0) - rangeStart, visible.start, visibleEnd),
+          clamp(numberOr(layer.clip.start, 0) - rangeStart, visible.start, visibleEnd),
+          clamp(numberOr(layer.clip.start, 0) + numberOr(layer.clip.duration, 0) - rangeStart, visible.start, visibleEnd),
         ]),
       ].sort((a, b) => a - b).filter((value, index, values) => index === 0 || Math.abs(value - values[index - 1]) > 0.000001);
       const adjustmentSegments = boundaries.slice(0, -1).flatMap((start, index): AdjustmentRenderSegment[] => {
         const end = boundaries[index + 1];
         if (end <= start) return [];
         const midpoint = (start + end) / 2 + rangeStart;
-        const activeLayers = layers.filter((layer) => midpoint >= numberOr(layer.start, 0) && midpoint < numberOr(layer.start, 0) + numberOr(layer.duration, 0));
+        const activeLayers = adjustmentLayersForVisual(visualPlan, visual, midpoint).filter((layer) => layers.includes(layer));
         if (!activeLayers.length) return [];
-        return [{ start: start - visible.start, end: end - visible.start, filters: mergeAdjustmentFilters(EMPTY_FILTERS, activeLayers.map((layer) => layer.filters)) }];
+        return [{ start: start - visible.start, end: end - visible.start, filters: mergeAdjustmentFilters(EMPTY_FILTERS, activeLayers.map(({ clip }) => clip.filters)) }];
       });
       return { ...entry, clip: visible, adjustmentSegments };
     })
@@ -1435,7 +1436,7 @@ async function registerRoutes(app: FastifyInstance) {
           hasAudio: false,
           createdAt: new Date().toISOString(),
         };
-        const updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: Math.max(current.duration, asset.duration) });
+        const updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: projectDuration(current) });
         await saveProject(updated);
         return { asset, project: updated };
       });
@@ -1509,7 +1510,8 @@ async function registerRoutes(app: FastifyInstance) {
       const next = await withProjectLock(request.params.projectId, async () => {
         const current = await readProject(request.params.projectId);
         if (request.body.revision !== undefined && request.body.revision !== current.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409, project: current });
-        const updated = ProjectSchema.parse({ ...current, ...request.body, id: current.id, schemaVersion: 1, revision: current.revision + 1, updatedAt: new Date().toISOString() });
+        const rawUpdated = { ...current, ...request.body, id: current.id, schemaVersion: 1 as const, revision: current.revision + 1, updatedAt: new Date().toISOString() };
+        const updated = ProjectSchema.parse({ ...rawUpdated, duration: projectDuration(rawUpdated as Project) });
         const retainedAssetIds = new Set(updated.assets.map((asset) => asset.id));
         const removedAssetFiles = current.assets
           .filter((asset) => !retainedAssetIds.has(asset.id))
@@ -1623,7 +1625,7 @@ async function registerRoutes(app: FastifyInstance) {
             hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'),
             createdAt: new Date().toISOString(),
           };
-          updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: Math.max(current.duration, asset.duration) });
+          updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: projectDuration(current) });
           await saveProject(updated);
         } catch (error) {
           await fsp.rm(uploadAbsolutePath, { force: true }).catch(() => undefined);
@@ -1705,7 +1707,7 @@ async function registerRoutes(app: FastifyInstance) {
           await replaceMediaWithRollback(uploadPath, finalPath, async () => {
             const index = current.assets.findIndex((item) => item.id === asset.id);
             if (index < 0) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
-            const nextProject = ProjectSchema.parse({ ...current, assets: current.assets.map((item, itemIndex) => itemIndex === index ? updatedAsset : item), duration: Math.max(current.duration, updatedAsset.duration), revision: current.revision + 1, updatedAt: new Date().toISOString() });
+            const nextProject = ProjectSchema.parse({ ...current, assets: current.assets.map((item, itemIndex) => itemIndex === index ? updatedAsset : item), duration: projectDuration(current), revision: current.revision + 1, updatedAt: new Date().toISOString() });
             await saveProject(nextProject);
             savedAsset = updatedAsset;
             savedProject = nextProject;
@@ -1731,8 +1733,8 @@ async function registerRoutes(app: FastifyInstance) {
         const current = await readProject(request.params.projectId);
         const asset = current.assets.find((item) => item.id === request.params.assetId);
         if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
-        const next = ProjectSchema.parse({ ...current, assets: current.assets.filter((item) => item.id !== asset.id), tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.assetId !== asset.id) })), duration: 0, revision: current.revision + 1, updatedAt: new Date().toISOString() });
-        next.duration = projectDuration(next);
+        const rawNext = { ...current, assets: current.assets.filter((item) => item.id !== asset.id), tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.assetId !== asset.id) })), revision: current.revision + 1, updatedAt: new Date().toISOString() };
+        const next = ProjectSchema.parse({ ...rawNext, duration: projectDuration(rawNext as Project) });
         await saveProject(next);
         await Promise.all([asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath].filter((item): item is string => Boolean(item)).map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
         return next;

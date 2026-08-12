@@ -483,6 +483,29 @@ test('removing an asset through project autosave also cleans its source and deri
   assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${created.id}/media/${asset.id}` })).statusCode, 404);
 });
 
+test('media library changes do not extend duration and explicit delete validates after retaining clips', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Duration and delete fixture' })).json();
+  const first = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json();
+  assert.equal(first.project.duration, 0);
+  const second = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'black' })).json();
+  assert.equal(second.project.duration, 0);
+  const project = second.project;
+  const clip = (asset, id, start, duration) => ({ id, assetId: asset.id, type: 'image', name: asset.name, start, duration, sourceStart: 0, sourceDuration: duration, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false }, filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 }, transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, keyframes: [] });
+  project.tracks[0].clips.push(clip(first.asset, 'delete-a', 0, 1));
+  project.tracks[1].clips.push(clip(second.asset, 'keep-b', 2, 3));
+  project.duration = 5;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+  const sourceA = path.join(dataDir, 'projects', created.id, first.asset.path);
+  const sourceB = path.join(dataDir, 'projects', created.id, second.asset.path);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/media/${first.asset.id}` })).statusCode, 200);
+  const after = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  assert.equal(after.duration, 5);
+  assert.equal(after.tracks.flatMap((track) => track.clips).some((item) => item.id === 'delete-a'), false);
+  assert.equal(after.tracks.flatMap((track) => track.clips).some((item) => item.id === 'keep-b'), true);
+  await assert.rejects(fsp.stat(sourceA), { code: 'ENOENT' });
+  assert.equal((await fsp.stat(sourceB)).isFile(), true);
+});
+
 test('derived generation failure does not roll back a committed media import', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Derived failure fixture' })).json();
   const pngBytes = Buffer.from((await app.inject({ method: 'GET', url: '/api/stock/white' })).rawPayload);
