@@ -109,6 +109,39 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
   }
 });
 
+test('two tabs surface delete-versus-edit conflicts without deleting the saved clip', async ({ browser, request }) => {
+  test.setTimeout(60_000);
+  const fixtureName = `Delete edit conflict ${Date.now()}`;
+  const contextA = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const contextB = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const pageA = await contextA.newPage(); const pageB = await contextB.newPage();
+  let projectId;
+  const saved = /All changes saved|T[uÃ¼]m de[gÄŸ]i[ÅŸs]iklikler kaydedildi/i;
+  try {
+    await pageA.goto('/'); await pageA.locator('.primary-button.large').click();
+    await pageA.locator('.project-name-input').fill(fixtureName);
+    await pageA.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await pageA.getByRole('button', { name: /White surface|Beyaz y[uÃ¼]zey/ }).click();
+    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    projectId = (await (await request.get('/api/projects')).json()).find((project) => project.name === fixtureName)?.id;
+    await pageB.goto('/'); await pageB.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
+    await expect(pageB.locator('.timeline-clip')).toHaveCount(1);
+    await pageA.locator('.timeline-clip').click();
+    const scale = pageA.getByRole('spinbutton', { name: 'Scale' });
+    await scale.fill('1.5'); await scale.press('Tab');
+    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await pageB.locator('.timeline-clip').click({ button: 'right' });
+    await pageB.getByRole('menuitem', { name: /^Delete$/i }).click();
+    await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[Ä±i]/i, { timeout: 10_000 });
+    const detail = await (await request.get(`/api/projects/${projectId}`)).json();
+    expect(detail.tracks.flatMap((track) => track.clips)).toHaveLength(1);
+    expect(detail.tracks.flatMap((track) => track.clips)[0].transform.scale).toBe(1.5);
+  } finally {
+    await contextA.close(); await contextB.close();
+    if (projectId) { const deleted = await request.delete(`/api/projects/${projectId}`); if (deleted.ok()) await request.delete(`/api/trash/${(await deleted.json()).trashId}`); }
+  }
+});
+
 test('server refresh cannot resurrect a locally deleted asset', async ({ page, request }) => {
   test.setTimeout(45_000);
   const fixtureName = `Deleted asset refresh ${Date.now()}`;
