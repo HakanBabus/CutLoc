@@ -186,16 +186,17 @@ test('three-way merge accepts deletion only when the other side is unchanged and
 
 test('adjustment targeting and playback clock are stack and wall-clock based', () => {
   const project = defaultProject('adjustment-targets');
-  project.tracks = project.tracks.slice(0, 3);
+  project.tracks = project.tracks.slice(0, 4);
   project.tracks.forEach((track, index) => { track.order = index; track.clips = []; });
   for (const [index, clip] of [
     { id: 'background', type: 'image', name: 'Background', start: 0, duration: 2, sourceDuration: 2 },
     { id: 'adjustment', type: 'image', name: 'Adjustment', start: 0, duration: 2, sourceDuration: 2, adjustment: true },
     { id: 'logo', type: 'image', name: 'Logo', start: 0, duration: 2, sourceDuration: 2 },
+    { id: 'adjustment-top', type: 'image', name: 'Top adjustment', start: 0, duration: 2, sourceDuration: 2, adjustment: true },
   ].entries()) project.tracks[index].clips.push(ClipSchema.parse(clip));
   const plan = visualLayerPlan(project);
-  assert.deepEqual(adjustmentLayersForVisual(plan, plan[0], 1).map(({ clip }) => clip.id), ['adjustment']);
-  assert.deepEqual(adjustmentLayersForVisual(plan, plan[2], 1), []);
+  assert.deepEqual(adjustmentLayersForVisual(plan, plan[0], 1).map(({ clip }) => clip.id), ['adjustment', 'adjustment-top']);
+  assert.deepEqual(adjustmentLayersForVisual(plan, plan[2], 1).map(({ clip }) => clip.id), ['adjustment-top']);
   assert.deepEqual(adjustmentLayersForVisual(plan, plan[0], 3), []);
   assert.equal(playbackTime(0, 1000, 2000, 10), 1);
   assert.equal(playbackTime(4, 1000, 2000, 4.5), 4.5);
