@@ -21,6 +21,7 @@ const app = await createServer();
 after(async () => {
   serverTestHooks.beforeSave = undefined;
   serverTestHooks.beforeDerivedWrite = undefined;
+  serverTestHooks.beforeRelinkMove = undefined;
   await app.close();
   await fsp.rm(dataDir, { recursive: true, force: true });
 });
@@ -270,6 +271,12 @@ test('cross-origin API mutations are rejected', async () => {
   assert.equal(response.statusCode, 403);
 });
 
+test('bracketed IPv6 localhost hosts are accepted', async () => {
+  const response = await app.inject({ method: 'GET', url: '/api/health', headers: { host: '[::1]:4173', origin: 'http://[::1]:5173' } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+});
+
 test('settings validation returns a client error without leaking a server failure', async () => {
   const validResponse = await jsonRequest('PUT', '/api/settings', { language: 'tr', proxyQuality: 'draft', hardwareAcceleration: 'software', experimentalAi: true, aiProvider: 'openai', aiModel: 'test-model', openAiKey: 'temporary-test-key', shortcuts: { togglePlayback: 'P', undo: 'Ctrl/Cmd+U', redo: 'Ctrl/Cmd+Shift+U', split: 'K', setIn: 'J', setOut: 'L', clearRange: 'C', deleteClip: 'Backspace', duplicate: 'Ctrl/Cmd+M', selectAll: 'Ctrl/Cmd+Shift+A' } });
   assert.equal(validResponse.statusCode, 200);
@@ -376,6 +383,16 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal(downloadResponse.statusCode, 200);
   assert.match(downloadResponse.headers['content-disposition'], /attachment/);
   assert.equal(downloadResponse.headers['content-type'], 'video/mp4');
+  const [concurrentA, concurrentB] = await Promise.all([
+    jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', range: { start: 0, end: 0.12 }, fileName: 'same-name.mp4' }),
+    jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', range: { start: 0, end: 0.12 }, fileName: 'same-name.mp4' }),
+  ]);
+  assert.equal(concurrentA.statusCode, 202);
+  assert.equal(concurrentB.statusCode, 202);
+  const [concurrentJobA, concurrentJobB] = await Promise.all([waitForJob(concurrentA.json().job.id), waitForJob(concurrentB.json().job.id)]);
+  assert.equal(concurrentJobA.status, 'completed');
+  assert.equal(concurrentJobB.status, 'completed');
+  assert.notEqual(concurrentJobA.fileName, concurrentJobB.fileName);
   const export4kResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, {
     format: 'mp4',
     aspect: '16:9',
@@ -424,6 +441,16 @@ test('media relink restores the original source when metadata commit fails', asy
   const mediaFiles = await fsp.readdir(path.join(dataDir, 'projects', created.id, 'media'));
   assert.equal(mediaFiles.some((file) => file.endsWith('.backup')), false);
   serverTestHooks.beforeSave = undefined;
+  serverTestHooks.beforeRelinkMove = async () => { throw new Error('forced relink move failure'); };
+  const moveFailureMultipart = multipartFile('file', 'black.png', 'image/png', blackBytes);
+  let moveFailureResponse;
+  try {
+    moveFailureResponse = await app.inject({ method: 'POST', url: '/api/projects/' + created.id + '/media/' + asset.id + '/relink', headers: { 'content-type': 'multipart/form-data; boundary=' + moveFailureMultipart.boundary }, payload: moveFailureMultipart.payload });
+  } finally {
+    serverTestHooks.beforeRelinkMove = undefined;
+  }
+  assert.equal(moveFailureResponse.statusCode, 400);
+  assert.deepEqual(Buffer.from((await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/media/' + asset.id })).rawPayload), whiteBytes);
   const successfulMultipart = multipartFile('file', 'black.png', 'image/png', blackBytes);
   const successfulResponse = await app.inject({
     method: 'POST',
@@ -442,6 +469,38 @@ test('media relink restores the original source when metadata commit fails', asy
   assert.equal((await app.inject({ method: 'DELETE', url: '/api/trash/' + deleted.json().trashId })).statusCode, 200);
 });
 
+test('removing an asset through project autosave also cleans its source and derived files', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Asset cleanup fixture' })).json();
+  const added = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json();
+  const asset = added.asset;
+  const sourcePath = path.join(dataDir, 'projects', created.id, asset.path);
+  assert.equal((await fsp.stat(sourcePath)).isFile(), true);
+
+  const current = added.project;
+  const response = await jsonRequest('PATCH', `/api/projects/${created.id}`, { ...current, assets: [], tracks: current.tracks.map((track) => ({ ...track, clips: [] })), duration: 0, revision: current.revision });
+  assert.equal(response.statusCode, 200);
+  await assert.rejects(fsp.stat(sourcePath), { code: 'ENOENT' });
+  assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${created.id}/media/${asset.id}` })).statusCode, 404);
+});
+
+test('derived generation failure does not roll back a committed media import', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Derived failure fixture' })).json();
+  const pngBytes = Buffer.from((await app.inject({ method: 'GET', url: '/api/stock/white' })).rawPayload);
+  serverTestHooks.beforeDerivedWrite = async (projectId) => {
+    if (projectId === created.id) throw new Error('forced derived failure');
+  };
+  try {
+    const multipart = multipartFile('file', 'committed.png', 'image/png', pngBytes);
+    const response = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media`, headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}` }, payload: multipart.payload });
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.json().project.assets.length, 1);
+    assert.equal((await waitForJob(response.json().job.id)).status, 'failed');
+    assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json().assets.length, 1);
+  } finally {
+    serverTestHooks.beforeDerivedWrite = undefined;
+  }
+});
+
 test('relink validates byte format and updates the stored extension atomically', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Relink format fixture' })).json();
   const added = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
@@ -454,6 +513,9 @@ test('relink validates byte format and updates the stored extension atomically',
   const jpgPath = path.join(dataDir, 'relink-format.jpg');
   assert.equal(spawnSync(ffmpegPath, ['-y', '-i', path.join(dataDir, 'projects', created.id, asset.path), '-frames:v', '1', jpgPath], { encoding: 'utf8' }).status, 0);
   const jpeg = await fsp.readFile(jpgPath);
+  const reverseMismatch = multipartFile('file', 'not-really.png', 'image/png', jpeg);
+  const reverseRejected = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${asset.id}/relink`, headers: { 'content-type': 'multipart/form-data; boundary=' + reverseMismatch.boundary }, payload: reverseMismatch.payload });
+  assert.equal(reverseRejected.statusCode, 415);
   const replacement = multipartFile('file', 'replacement.jpg', 'image/jpeg', jpeg);
   const response = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${asset.id}/relink`, headers: { 'content-type': 'multipart/form-data; boundary=' + replacement.boundary }, payload: replacement.payload });
   assert.equal(response.statusCode, 202);
@@ -648,6 +710,10 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   const createdResponse = await jsonRequest('POST', '/api/projects', { name: 'Fixture proje' });
   assert.equal(createdResponse.statusCode, 201);
   const created = createdResponse.json();
+  const disguisedPngBytes = Buffer.from((await app.inject({ method: 'GET', url: '/api/stock/white' })).rawPayload);
+  const disguisedPng = multipartFile('file', 'disguised.jpg', 'image/jpeg', disguisedPngBytes);
+  const disguisedPngResponse = await app.inject({ method: 'POST', url: '/api/projects/' + created.id + '/media', headers: { 'content-type': `multipart/form-data; boundary=${disguisedPng.boundary}` }, payload: disguisedPng.payload });
+  assert.equal(disguisedPngResponse.statusCode, 415);
   const invalidMultipart = multipartFile('file', 'payload.png', 'image/png', Buffer.from('<!doctype html><script>document.body.innerHTML = "stored"</script>'));
   const invalidUploadResponse = await app.inject({
     method: 'POST',
@@ -701,6 +767,13 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   project.duration = asset.duration;
   const saveResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, project);
   assert.equal(saveResponse.statusCode, 200);
+  const shorter = multipartFile('file', 'short.wav', 'audio/wav', makeWavFixture(0.1));
+  const shorterResponse = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${asset.id}/relink`, headers: { 'content-type': `multipart/form-data; boundary=${shorter.boundary}` }, payload: shorter.payload });
+  assert.equal(shorterResponse.statusCode, 400);
+  const afterShorterReject = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  assert.equal(afterShorterReject.assets.find((item) => item.id === asset.id).duration, asset.duration);
+  const invalidRange = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', range: { start: 0.3, end: 0.1 }, fileName: 'invalid.wav' });
+  assert.equal(invalidRange.statusCode, 400);
   const exportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'mp3', fileName: 'fixture.mp3' });
   assert.equal(exportResponse.statusCode, 202);
   const exportJob = await waitForJob(exportResponse.json().job.id);
@@ -713,4 +786,19 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(wavExportJob.status, 'completed');
   const wavHeader = await fsp.readFile(exportFilePath(created.id, wavExportJob.fileName));
   assert.equal(wavHeader.subarray(0, 4).toString('ascii'), 'RIFF');
+  const latest = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
+  latest.tracks[0].muted = true;
+  assert.equal((await jsonRequest('PATCH', '/api/projects/' + created.id, latest)).statusCode, 200);
+  const mutedResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'muted.wav' });
+  assert.equal(mutedResponse.statusCode, 202);
+  const mutedJob = await waitForJob(mutedResponse.json().job.id);
+  assert.equal(mutedJob.status, 'completed');
+  const mutedBytes = await fsp.readFile(exportFilePath(created.id, mutedJob.fileName));
+  const dataOffset = mutedBytes.indexOf(Buffer.from('data'));
+  assert.notEqual(dataOffset, -1);
+  const sampleStart = dataOffset + 8;
+  const sampleEnd = Math.min(mutedBytes.length, sampleStart + mutedBytes.readUInt32LE(dataOffset + 4));
+  let peak = 0;
+  for (let offset = sampleStart; offset + 1 < sampleEnd; offset += 2) peak = Math.max(peak, Math.abs(mutedBytes.readInt16LE(offset)));
+  assert.equal(peak, 0);
 });

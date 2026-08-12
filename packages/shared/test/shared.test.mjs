@@ -25,6 +25,7 @@ import {
   timelineDurationForSourceDuration,
   trimClip,
   trimClipToPlayhead,
+  visualLayerPlan,
 } from '../dist/index.js';
 
 test('formats timeline time with frames', () => {
@@ -86,6 +87,37 @@ test('interpolates keyframes with easing', () => {
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 0, 0), 0);
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 2, 0), 1);
   assert.ok(interpolateKeyframes(keyframes, 'opacity', 1, 0) < 0.5);
+});
+
+test('rejects broken cross-project references and timeline invariants', () => {
+  const missingAsset = defaultProject('integrity-missing');
+  missingAsset.tracks[0].clips.push(ClipSchema.parse({ id: 'clip-missing', assetId: 'asset-nope', type: 'video', name: 'Missing', start: 0, duration: 1, sourceDuration: 1 }));
+  missingAsset.duration = 1;
+  assert.equal(ProjectSchema.safeParse(missingAsset).success, false);
+
+  const duplicate = defaultProject('integrity-duplicate');
+  duplicate.tracks[1].id = duplicate.tracks[0].id;
+  assert.equal(ProjectSchema.safeParse(duplicate).success, false);
+
+  const outOfBounds = defaultProject('integrity-bounds');
+  outOfBounds.assets.push(AssetSchema.parse({ id: 'asset-a', name: 'Audio', type: 'audio', path: 'a.wav', mimeType: 'audio/wav', size: 1, duration: 2, createdAt: outOfBounds.createdAt }));
+  outOfBounds.tracks[0].clips.push(ClipSchema.parse({ id: 'clip-a', assetId: 'asset-a', type: 'audio', name: 'Audio', start: 0, duration: 2, sourceStart: 1, sourceDuration: 2, keyframes: [{ id: 'kf-a', property: 'volume', time: 3, value: 1 }] }));
+  outOfBounds.duration = 2;
+  assert.equal(ProjectSchema.safeParse(outOfBounds).success, false);
+});
+
+test('uses the same supported speed range for clips and speed points', () => {
+  assert.equal(ClipSchema.safeParse({ id: 'slow', type: 'image', name: 'Slow', start: 0, duration: 1, sourceDuration: 1, speed: 0.2 }).success, false);
+  assert.equal(ClipSchema.safeParse({ id: 'fast', type: 'image', name: 'Fast', start: 0, duration: 1, sourceDuration: 1, speedCurve: [{ time: 0, speed: 4.1 }] }).success, false);
+});
+
+test('visual layer plan preserves general-purpose track and clip ordering', () => {
+  const project = defaultProject('render-order');
+  project.tracks[0].order = 2;
+  project.tracks[1].order = 1;
+  project.tracks[0].clips.push(ClipSchema.parse({ id: 'media-top', type: 'image', name: 'Media', start: 0, duration: 1, sourceDuration: 1 }));
+  project.tracks[1].clips.push(ClipSchema.parse({ id: 'text-bottom', type: 'text', name: 'Text', start: 0, duration: 1, sourceDuration: 1, textStyle: { text: 'Below' } }));
+  assert.deepEqual(visualLayerPlan(project).map(({ clip }) => clip.id), ['text-bottom', 'media-top']);
 });
 
 test('three-way project merge preserves independent timeline edits and local asset deletion', () => {

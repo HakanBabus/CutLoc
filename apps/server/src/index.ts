@@ -26,6 +26,7 @@ import {
   sourceTimeAt,
   speedCurveSegments,
   speedAt,
+  visualLayerPlan,
   type Asset,
   type ExportOptions,
   type Job,
@@ -121,7 +122,8 @@ function isAllowedWebOrigin(origin: string | undefined) {
 function isAllowedLocalRequest(request: FastifyRequest) {
   const host = request.headers.host;
   if (host) {
-    const hostname = host.replace(/^\[/, '').split(']')[0].split(':')[0].toLowerCase();
+    const closingBracket = host.startsWith('[') ? host.indexOf(']') : -1;
+    const hostname = (closingBracket > 0 ? host.slice(1, closingBracket) : host.split(':')[0]).toLowerCase();
     if (!isLocalHostname(hostname)) return false;
   }
   return isAllowedWebOrigin(request.headers.origin);
@@ -162,6 +164,7 @@ type ProjectLifecycle = { state: ProjectLifecycleState; generation: number };
 type ServerTestHooks = {
   beforeSave?: (project: Project) => void | Promise<void>;
   beforeDerivedWrite?: (projectId: string) => void | Promise<void>;
+  beforeRelinkMove?: (sourcePath: string, targetPath: string) => void | Promise<void>;
 };
 
 // These hooks are intentionally narrow and are only used by deterministic
@@ -268,8 +271,15 @@ async function probeMedia(file: string) {
   return await new Promise<Record<string, unknown>>((resolve) => {
     const child = spawn(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file]);
     let out = '';
+    const maxProbeOutputBytes = 4 * 1024 * 1024;
     const timeout = setTimeout(() => child.kill(), Math.min(maxFfmpegRuntimeMs, 5 * 60 * 1000));
-    child.stdout.on('data', (chunk) => { out += chunk.toString(); });
+    child.stdout.on('data', (chunk) => {
+      out += chunk.toString();
+      if (Buffer.byteLength(out) > maxProbeOutputBytes) {
+        out = '';
+        child.kill();
+      }
+    });
     child.once('close', () => {
       clearTimeout(timeout);
       try {
@@ -384,8 +394,9 @@ async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
     if (jobs.get(job.id)?.status === 'cancelled') child.kill();
     const timeout = setTimeout(() => child.kill(), maxFfmpegRuntimeMs);
     let stderr = '';
+    const maxStderrChars = 64 * 1024;
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      stderr = (stderr + chunk.toString()).slice(-maxStderrChars);
       const match = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr.slice(-500));
       if (match) {
         const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
@@ -516,6 +527,7 @@ async function replaceMediaWithRollback(sourcePath: string, targetPath: string, 
       await fsp.rename(previousTargetPath, backupPath);
       oldMoved = true;
     }
+    await serverTestHooks.beforeRelinkMove?.(sourcePath, targetPath);
     await fsp.rename(sourcePath, targetPath);
     newMoved = true;
     await commit();
@@ -833,13 +845,12 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     .filter((track) => !track.hidden)
     .sort((a, b) => a.order - b.order);
   const adjustmentClips = tracks.flatMap((track) => track.clips.filter((clip) => clip.adjustment));
-  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number }> = [];
-  const allTextClips: TimelineClip[] = [];
-  for (const track of tracks) {
-    for (const clip of track.clips) {
+  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number }> = [];
+  const allTextClips: Array<{ clip: TimelineClip; stackOrder: number }> = [];
+  for (const { track, clip, stackOrder: clipStackOrder } of visualLayerPlan(project)) {
       if (clip.adjustment) continue;
       if (clip.type === 'text' || clip.type === 'subtitle') {
-        if (clip.textStyle?.text || clip.subtitle?.text) allTextClips.push(clip);
+        if (clip.textStyle?.text || clip.subtitle?.text) allTextClips.push({ clip, stackOrder: clipStackOrder });
         continue;
       }
       if (!clip.assetId) continue;
@@ -848,12 +859,11 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       const file = assetFile(project.id, asset);
       if (!fs.existsSync(file)) throw new Error(message('mediaFileMissingNamed', { name: asset.name }));
       if (numberOr(clip.duration, 0) <= 0) continue;
-      allTimelineClips.push({ clip, asset, trackMuted: track.muted, trackVolume: clamp(numberOr(track.volume, 1), 0, 2) });
-    }
+      allTimelineClips.push({ clip, asset, trackMuted: track.muted, trackVolume: clamp(numberOr(track.volume, 1), 0, 2), stackOrder: clipStackOrder });
   }
   if (!allTimelineClips.length && !allTextClips.length) throw new Error(message('timelineNeedsClip'));
 
-  const fullDuration = Math.max(0.1, numberOr(project.duration, 0), ...allTimelineClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))), ...allTextClips.map((clip) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))));
+  const fullDuration = Math.max(0.1, numberOr(project.duration, 0), ...allTimelineClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))), ...allTextClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))));
   const rangeStart = clamp(numberOr(body.range?.start, 0), 0, Math.max(0, fullDuration - 0.001));
   const rangeEnd = clamp(numberOr(body.range?.end, fullDuration), rangeStart + 0.001, fullDuration);
   const projectDuration = Math.max(0.1, rangeEnd - rangeStart);
@@ -882,16 +892,18 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       });
       return { ...entry, clip: visible, adjustmentSegments };
     })
-    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; adjustmentSegments: AdjustmentRenderSegment[] } => Boolean(entry.clip));
-  const textClips = allTextClips.map((clip) => visibleRenderClip(clip, rangeStart, rangeEnd)).filter((clip): clip is TimelineClip => Boolean(clip));
+    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number; adjustmentSegments: AdjustmentRenderSegment[] } => Boolean(entry.clip));
+  const textClips = allTextClips
+    .map((entry) => ({ ...entry, clip: visibleRenderClip(entry.clip, rangeStart, rangeEnd) }))
+    .filter((entry): entry is { clip: TimelineClip; stackOrder: number } => Boolean(entry.clip));
   if (!clips.length && !textClips.length) throw new Error('Selected range does not contain media or text');
   const inputArgs: string[] = [];
-  const videoClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; adjustmentSegments: AdjustmentRenderSegment[] }> = [];
+  const videoClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; stackOrder: number; adjustmentSegments: AdjustmentRenderSegment[] }> = [];
   const audioClips: Array<{ clip: TimelineClip; asset: Asset; inputIndex: number; duration: number; trackMuted: boolean; trackVolume: number }> = [];
   const filterLines: string[] = [];
 
   for (const entry of clips) {
-    const { clip, asset, trackMuted, trackVolume, adjustmentSegments } = entry;
+    const { clip, asset, trackMuted, trackVolume, stackOrder: clipStackOrder, adjustmentSegments } = entry;
     const clipDuration = Math.max(0, numberOr(clip.duration, 0));
     if (clipDuration <= 0) continue;
     const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
@@ -910,7 +922,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     if (isImage) inputArgs.push('-loop', '1', '-framerate', String(fps), '-i', inputPath);
     else inputArgs.push('-ss', ffmpegNumber(Math.min(sourceStart, Math.max(0, asset.duration - 0.05))), '-t', ffmpegNumber(sourceDuration), '-i', inputPath);
 
-    if (wantsVideo) videoClips.push({ clip, asset, inputIndex, duration: clipDuration, adjustmentSegments });
+    if (wantsVideo) videoClips.push({ clip, asset, inputIndex, duration: clipDuration, stackOrder: clipStackOrder, adjustmentSegments });
     if (wantsAudio) audioClips.push({ clip, asset, inputIndex, duration: clipDuration, trackMuted, trackVolume });
   }
 
@@ -918,7 +930,40 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     const baseDuration = ffmpegNumber(projectDuration);
     filterLines.push(`color=c=${ffmpegColor(project.canvas.background)}:s=${outWidth}x${outHeight}:r=${ffmpegNumber(fps)}:d=${baseDuration}[base]`);
     let current = '[base]';
-    videoClips.forEach(({ clip, inputIndex, duration, adjustmentSegments }, index) => {
+    let nextTextIndex = 0;
+    const appendTextClip = ({ clip }: { clip: TimelineClip; stackOrder: number }, index: number) => {
+      const style = clip.textStyle ?? { text: clip.subtitle?.text ?? clip.name, fontFamily: 'Arial', fontSize: 42, fontWeight: 700, fontStyle: 'normal', textDecoration: 'none', letterSpacing: 0, lineHeight: 1.2, padding: 4, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' as const };
+      const transform = clip.transform;
+      const text = ffmpegText(style.text);
+      const fontSize = Math.max(8, Math.round(numberOr(style.fontSize, 42) * Math.max(0.05, numberOr(transform.scale, 1))));
+      const fontColor = ffmpegColor(style.color);
+      const strokeColor = ffmpegColor(style.stroke);
+      const textStart = ffmpegNumber(clip.start);
+      const textEnd = ffmpegNumber(clip.start + clip.duration);
+      const localTime = `(t-${textStart})`;
+      const x = keyframeExpression(clip, 'x', numberOr(transform.x, 0), localTime);
+      const y = keyframeExpression(clip, 'y', numberOr(transform.y, 0), localTime);
+      const textEnter = clamp(numberOr(clip.transitionIn?.duration, 0), 0, clip.duration);
+      const textLeave = clamp(numberOr(clip.transitionOut?.duration, 0), 0, clip.duration);
+      const usesTextFadeIn = clip.transitionIn?.type !== 'none' && clip.transitionIn?.type !== 'slide' && clip.transitionIn?.type !== 'zoom' && textEnter > 0;
+      const usesTextFadeOut = clip.transitionOut?.type !== 'none' && clip.transitionOut?.type !== 'slide' && clip.transitionOut?.type !== 'zoom' && textLeave > 0;
+      const alphaExpressions: string[] = [keyframeExpression(clip, 'opacity', clamp(numberOr(transform.opacity, 1), 0, 1), localTime)];
+      const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, clip.duration);
+      const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, clip.duration);
+      if (usesTextFadeIn) alphaExpressions.push(`if(lt(t,${textStart}+${ffmpegNumber(textEnter)}),(t-${textStart})/${ffmpegNumber(textEnter)},1)`);
+      else if (fadeIn > 0) alphaExpressions.push(`if(lt(t,${textStart}+${ffmpegNumber(fadeIn)}),(t-${textStart})/${ffmpegNumber(fadeIn)},1)`);
+      if (usesTextFadeOut) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(textLeave)}),(${textEnd}-t)/${ffmpegNumber(textLeave)},1)`);
+      else if (fadeOut > 0) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(fadeOut)}),(${textEnd}-t)/${ffmpegNumber(fadeOut)},1)`);
+      const textAlpha = alphaExpressions.reduce((value, expression) => `(${value})*(${expression})`, '1').replaceAll(',', '\\,');
+      const draw = [`drawtext=font='${ffmpegFont(style.fontFamily)}'`, `text='${text}'`, `fontsize=${fontSize}`, `fontcolor=${fontColor}`, `x=(w-text_w)/2+${ffmpegExpression(x)}`, `y=(h-text_h)/2+${ffmpegExpression(y)}`, `enable='between(t,${textStart},${textEnd})'`, `alpha='${textAlpha}'`];
+      if (style.background !== 'transparent') draw.push('box=1', `boxcolor=${ffmpegColor(style.background)}`, `boxborderw=${Math.max(0, Math.round(style.padding))}`);
+      if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(style.strokeWidth)}`, `bordercolor=${strokeColor}`);
+      if (style.shadow) draw.push('shadowx=2', 'shadowy=2', 'shadowcolor=0x00000099');
+      const next = `[text${index}]`;
+      filterLines.push(`${current}${draw.join(':')}${next}`);
+      current = next;
+    };
+    videoClips.forEach(({ clip, inputIndex, duration, stackOrder: clipStackOrder, adjustmentSegments }, index) => {
       const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
       const transform = clip.transform;
       const segments = speedCurveSegments(duration, speed, clip.speedCurve);
@@ -980,6 +1025,10 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       filters.push(`setpts=PTS-STARTPTS+${ffmpegNumber(Math.max(0, numberOr(clip.start, 0)))}/TB`);
       const label = `[v${index}]`;
       filterLines.push(`${timedVideo}${filters.length ? filters.join(',') : 'null'}${label}`);
+      while (nextTextIndex < textClips.length && textClips[nextTextIndex].stackOrder < clipStackOrder) {
+        appendTextClip(textClips[nextTextIndex], nextTextIndex);
+        nextTextIndex += 1;
+      }
       // Overlay expressions run on the main timeline clock, while the media
       // branch above runs clip-local. Convert the clock before evaluating
       // position keyframes and slide transitions.
@@ -992,32 +1041,9 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       filterLines.push(`${current}${label}overlay=x=(main_w-overlay_w)/2+${ffmpegExpression(x)}+${ffmpegExpression(transitionX)}:y=(main_h-overlay_h)/2+${ffmpegExpression(y)}+${ffmpegExpression(transitionY)}:eof_action=pass:shortest=0:format=auto${next}`);
       current = next;
     });
-    for (const [index, clip] of textClips.entries()) {
-      const style = clip.textStyle ?? { text: clip.subtitle?.text ?? clip.name, fontFamily: 'Arial', fontSize: 42, fontWeight: 700, fontStyle: 'normal', textDecoration: 'none', letterSpacing: 0, lineHeight: 1.2, padding: 4, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' as const };
-      const transform = clip.transform;
-      const text = ffmpegText(style.text);
-      const fontSize = Math.max(8, Math.round(numberOr(style.fontSize, 42)));
-      const fontColor = ffmpegColor(style.color);
-      const strokeColor = ffmpegColor(style.stroke);
-      const x = numberOr(transform.x, 0);
-      const y = numberOr(transform.y, 0);
-      const textStart = ffmpegNumber(clip.start);
-      const textEnd = ffmpegNumber(clip.start + clip.duration);
-      const textEnter = clamp(numberOr(clip.transitionIn?.duration, 0), 0, clip.duration);
-      const textLeave = clamp(numberOr(clip.transitionOut?.duration, 0), 0, clip.duration);
-      const usesTextFadeIn = clip.transitionIn?.type !== 'none' && clip.transitionIn?.type !== 'slide' && clip.transitionIn?.type !== 'zoom' && textEnter > 0;
-      const usesTextFadeOut = clip.transitionOut?.type !== 'none' && clip.transitionOut?.type !== 'slide' && clip.transitionOut?.type !== 'zoom' && textLeave > 0;
-      const alphaExpressions: string[] = [];
-      if (usesTextFadeIn) alphaExpressions.push(`if(lt(t,${textStart}+${ffmpegNumber(textEnter)}),(t-${textStart})/${ffmpegNumber(textEnter)},1)`);
-      if (usesTextFadeOut) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(textLeave)}),(${textEnd}-t)/${ffmpegNumber(textLeave)},1)`);
-      const textAlpha = alphaExpressions.length ? alphaExpressions.reduce((current, expression) => `(${current})*(${expression})`, '1').replaceAll(',', '\\,') : null;
-      const draw = [`drawtext=font='${ffmpegFont(style.fontFamily)}'`, `text='${text}'`, `fontsize=${fontSize}`, `fontcolor=${fontColor}`, `x=(w-text_w)/2+${ffmpegNumber(x)}`, `y=(h-text_h)/2+${ffmpegNumber(y)}`, `enable='between(t,${textStart},${textEnd})'`];
-      if (textAlpha) draw.push(`alpha='${textAlpha}'`);
-      if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(style.strokeWidth)}`, `bordercolor=${strokeColor}`);
-      if (style.shadow) draw.push('shadowx=2', 'shadowy=2', 'shadowcolor=0x00000099');
-      const next = `[text${index}]`;
-      filterLines.push(`${current}${draw.join(':')}${next}`);
-      current = next;
+    while (nextTextIndex < textClips.length) {
+      appendTextClip(textClips[nextTextIndex], nextTextIndex);
+      nextTextIndex += 1;
     }
     // The output always has a video stream, even when a project currently only
     // contains audio.  This makes the export action useful while a user is
@@ -1108,6 +1134,9 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
     }
     if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { fps: options.fps }) });
     if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: message('preflightLargeOutput') });
+    if (project.tracks.some((track) => track.clips.some((clip) => clip.textStyle && (Math.abs(clip.transform.rotation) > 0.001 || clip.textStyle.letterSpacing !== 0 || clip.textStyle.textDecoration !== 'none')))) {
+      warnings.push({ code: 'TEXT_RENDER_APPROXIMATION', message: message('preflightTextLimit') });
+    }
     return { ok: errors.length === 0, errors, warnings, estimatedBytes };
   } catch (error) {
     errors.push({ code: 'INVALID_TIMELINE', message: error instanceof Error ? error.message : message('preflightInvalidTimeline') });
@@ -1268,12 +1297,13 @@ function transitionOffsetExpression(transition: NonNullable<TimelineClip['transi
 }
 
 function transitionScaleExpression(clip: TimelineClip, duration: number) {
-  const amount = 0.18 * clamp(numberOr(clip.transitionIn?.intensity, 1), 0.1, 2);
+  const enterAmount = 0.18 * clamp(numberOr(clip.transitionIn?.intensity, 1), 0.1, 2);
+  const leaveAmount = 0.18 * clamp(numberOr(clip.transitionOut?.intensity, 1), 0.1, 2);
   const entering = clip.transitionIn?.type === 'zoom' ? transitionProgressExpression(clip.transitionIn, duration, true) : null;
   const leaving = clip.transitionOut?.type === 'zoom' ? transitionProgressExpression(clip.transitionOut, duration, false) : null;
   const parts = ['1'];
-  if (entering) parts.push(`-(1-(${entering}))*${ffmpegNumber(amount)}`);
-  if (leaving) parts.push(`+(1-(${leaving}))*${ffmpegNumber(amount)}`);
+  if (entering) parts.push(`-(1-(${entering}))*${ffmpegNumber(enterAmount)}`);
+  if (leaving) parts.push(`+(1-(${leaving}))*${ffmpegNumber(leaveAmount)}`);
   return parts.length === 1 ? '1' : parts.join('');
 }
 
@@ -1480,7 +1510,13 @@ async function registerRoutes(app: FastifyInstance) {
         const current = await readProject(request.params.projectId);
         if (request.body.revision !== undefined && request.body.revision !== current.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409, project: current });
         const updated = ProjectSchema.parse({ ...current, ...request.body, id: current.id, schemaVersion: 1, revision: current.revision + 1, updatedAt: new Date().toISOString() });
+        const retainedAssetIds = new Set(updated.assets.map((asset) => asset.id));
+        const removedAssetFiles = current.assets
+          .filter((asset) => !retainedAssetIds.has(asset.id))
+          .flatMap((asset) => [asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath])
+          .filter((item): item is string => Boolean(item));
         await saveProject(updated);
+        await Promise.all(removedAssetFiles.map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
         return updated;
       });
       return next;
@@ -1771,25 +1807,31 @@ async function registerRoutes(app: FastifyInstance) {
         const extension = options.format === 'wav' ? 'wav' : options.format === 'mp3' ? 'mp3' : 'mp4';
         const fileName = safeExportName(project, options.fileName, extension);
         const output = uniqueOutputPath(exportDir, fileName);
+        const reservedFileName = path.basename(output);
         reservedExportPaths.add(output);
-        const audioOnly = options.format === 'mp3' || options.format === 'wav';
-        const render = buildExportArgs(project, options, output);
-        if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyJobs')), { statusCode: 429 });
-        const job = await makeJob(project.id, 'export', async (jobInfo) => {
-          try {
-          assertProjectActive(project.id);
-          if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
-          updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
-          jobProgressDuration.set(jobInfo.id, render.duration);
-          await runFfmpeg(render.args, jobInfo, output);
-          assertProjectActive(project.id);
-          jobProgressDuration.delete(jobInfo.id);
-          updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName, format: options.format, phase: 'complete' });
-          updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
-          } finally { reservedExportPaths.delete(output); }
-        });
-        updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
-        return { preflight, job };
+        try {
+          const audioOnly = options.format === 'mp3' || options.format === 'wav';
+          const render = buildExportArgs(project, options, output);
+          if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyJobs')), { statusCode: 429 });
+          const job = await makeJob(project.id, 'export', async (jobInfo) => {
+            try {
+              assertProjectActive(project.id);
+              if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
+              updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
+              jobProgressDuration.set(jobInfo.id, render.duration);
+              await runFfmpeg(render.args, jobInfo, output);
+              assertProjectActive(project.id);
+              jobProgressDuration.delete(jobInfo.id);
+              updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName: reservedFileName, format: options.format, phase: 'complete' });
+              updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
+            } finally { reservedExportPaths.delete(output); }
+          });
+          updateJob(job.id, { fileName: reservedFileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
+          return { preflight, job };
+        } catch (error) {
+          reservedExportPaths.delete(output);
+          throw error;
+        }
       });
       if (!result.job) return reply.code(400).send({ error: result.preflight.errors.map((item) => item.message).join(' '), preflight: result.preflight });
       return reply.code(202).send({ job: publicJob(result.job), preflight: result.preflight });

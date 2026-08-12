@@ -36,5 +36,11 @@ jobs:
       - name: Run shared and server tests
         run: npm test
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser regression tests
+        run: npm run test:web
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high

@@ -242,7 +242,7 @@ export type Crop = z.infer<typeof CropSchema>;
 
 export const SpeedPointSchema = z.object({
   time: z.number().nonnegative(),
-  speed: z.number().min(0.1).max(10),
+  speed: z.number().min(0.25).max(4),
   easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']).default('linear'),
 });
 export type SpeedPoint = z.infer<typeof SpeedPointSchema>;
@@ -369,7 +369,7 @@ export const TrackSchema = z.object({
 });
 export type Track = z.infer<typeof TrackSchema>;
 
-export const ProjectSchema = z.object({
+const ProjectBaseSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string(),
   name: z.string(),
@@ -389,7 +389,65 @@ export const ProjectSchema = z.object({
   tracks: z.array(TrackSchema).default([]),
   markers: z.array(z.object({ id: z.string(), time: z.number().nonnegative(), label: z.string() })).default([]),
 });
+
+/**
+ * Zod validates each field's shape; this second pass enforces relationships
+ * that must hold across a complete timeline before it reaches the editor or
+ * is persisted by the server.
+ */
+export const ProjectSchema = ProjectBaseSchema.superRefine((project, context) => {
+  const seen = new Map<string, string>();
+  const register = (id: string, path: Array<string | number>, kind: string) => {
+    const previous = seen.get(id);
+    if (previous) context.addIssue({ code: z.ZodIssueCode.custom, path, message: `Duplicate id ${id} (${previous}, ${kind})` });
+    else seen.set(id, kind);
+  };
+
+  project.assets.forEach((asset, assetIndex) => register(asset.id, ['assets', assetIndex, 'id'], 'asset'));
+  project.markers.forEach((marker, markerIndex) => {
+    register(marker.id, ['markers', markerIndex, 'id'], 'marker');
+    if (marker.time > project.duration + 0.000001) context.addIssue({ code: z.ZodIssueCode.custom, path: ['markers', markerIndex, 'time'], message: 'Marker exceeds project duration' });
+  });
+
+  const assets = new Map(project.assets.map((asset) => [asset.id, asset]));
+  let requiredDuration = 0;
+  project.tracks.forEach((track, trackIndex) => {
+    register(track.id, ['tracks', trackIndex, 'id'], 'track');
+    track.clips.forEach((clip, clipIndex) => {
+      const clipPath: Array<string | number> = ['tracks', trackIndex, 'clips', clipIndex];
+      register(clip.id, [...clipPath, 'id'], 'clip');
+      requiredDuration = Math.max(requiredDuration, clip.start + clip.duration);
+      const needsAsset = !clip.adjustment && ['video', 'audio', 'image'].includes(clip.type);
+      const asset = clip.assetId ? assets.get(clip.assetId) : undefined;
+      if (needsAsset && !asset) context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'assetId'], message: 'Clip references a missing asset' });
+      if (asset && asset.type !== 'image' && asset.duration > 0 && clip.sourceStart + clip.sourceDuration > asset.duration + 0.000001) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'sourceDuration'], message: 'Clip source range exceeds asset duration' });
+      }
+      clip.keyframes.forEach((keyframe, keyframeIndex) => {
+        register(keyframe.id, [...clipPath, 'keyframes', keyframeIndex, 'id'], 'keyframe');
+        if (keyframe.time > clip.duration + 0.000001) context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'keyframes', keyframeIndex, 'time'], message: 'Keyframe exceeds clip duration' });
+      });
+      clip.speedCurve?.forEach((point, pointIndex) => {
+        if (point.time > clip.duration + 0.000001) context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'speedCurve', pointIndex, 'time'], message: 'Speed point exceeds clip duration' });
+      });
+      if ((clip.fadeIn ?? 0) > clip.duration + 0.000001) context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'fadeIn'], message: 'Fade exceeds clip duration' });
+      if ((clip.fadeOut ?? 0) > clip.duration + 0.000001) context.addIssue({ code: z.ZodIssueCode.custom, path: [...clipPath, 'fadeOut'], message: 'Fade exceeds clip duration' });
+    });
+  });
+  if (project.duration + 0.000001 < requiredDuration) context.addIssue({ code: z.ZodIssueCode.custom, path: ['duration'], message: 'Project duration is shorter than its timeline' });
+});
 export type Project = z.infer<typeof ProjectSchema>;
+
+export type VisualLayerPlanItem = { clip: Clip; track: Track; trackIndex: number; stackOrder: number };
+
+/** Shared back-to-front visual ordering for browser preview and FFmpeg export. */
+export function visualLayerPlan(project: Project): VisualLayerPlanItem[] {
+  let stackOrder = 0;
+  return [...project.tracks]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((track, trackIndex) => track.clips.map((clip) => ({ clip, track, trackIndex, stackOrder: stackOrder++ })))
+    .filter(({ track }) => !track.hidden);
+}
 
 export type ProjectMergeResult = { project: Project; conflicts: string[] };
 

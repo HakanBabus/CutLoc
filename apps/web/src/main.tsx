@@ -22,6 +22,7 @@ import {
   timelineDurationForSourceDuration,
   trimClip,
   trimClipToPlayhead,
+  visualLayerPlan,
   type ExportOptions,
   type ExportPreflight,
   type ExportJobResult,
@@ -624,8 +625,8 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
       <div className="hero-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><div className="orbit-card card-one">◒<small>timeline</small></div><div className="orbit-card card-two">✦<small>effects</small></div><div className="orbit-card card-three">▣<small>export</small></div><div className="hero-core"><b>CL</b><span>LOCAL<br />FIRST</span></div></div>
     </section>
     <section className="dashboard-command-strip" aria-label={t('dashboard.quickStart')}>
-      <button className="command-card command-primary" onClick={() => mediaFileRef.current?.click()}><span className="command-icon">＋</span><span><strong>{t('dashboard.command.new')}</strong><small>{t('dashboard.command.newHint')}</small></span><b>↗</b></button>
-      <button className="command-card" onClick={onCreate}><span className="command-icon">▣</span><span><strong>{t('dashboard.command.media')}</strong><small>{t('dashboard.command.mediaHint')}</small></span><b>↗</b></button>
+      <button className="command-card command-primary" onClick={onCreate}><span className="command-icon">＋</span><span><strong>{t('dashboard.command.new')}</strong><small>{t('dashboard.command.newHint')}</small></span><b>↗</b></button>
+      <button className="command-card" onClick={() => mediaFileRef.current?.click()}><span className="command-icon">▣</span><span><strong>{t('dashboard.command.media')}</strong><small>{t('dashboard.command.mediaHint')}</small></span><b>↗</b></button>
       {projects[0] ? <button className="command-card" onClick={() => onOpen(projects[0].id)}><span className="command-icon">▶</span><span><strong>{t('dashboard.command.continue')}</strong><small>{projects[0].name} · {formatTime(projects[0].duration)}</small></span><b>↗</b></button> : <div className="command-card command-muted"><span className="command-icon">⌁</span><span><strong>{t('dashboard.command.local')}</strong><small>{t('dashboard.command.localHint')}</small></span></div>}
     </section>
     <input ref={mediaFileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" aria-label="Medya dosyasi sec" onChange={(event) => { const file = event.target.files?.[0]; if (file) onStartWithMedia(file); event.target.value = ''; }} />
@@ -716,7 +717,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       if (beforeSave.localRevision === beforeSave.savedRevision && beforeSave.saveState === 'saved') return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setSaveState('offline');
-        throw new Error('\u00c7evrimd\u0131\u015f\u0131 oldu\u011funuz i\u00e7in proje kaydedilemedi.');
+        throw new Error(t('editor.saveOffline'));
       }
       const keepClipId = beforeSave.selectedClipId;
       const keepClipIds = beforeSave.selectedClipIds;
@@ -739,7 +740,7 @@ function Editor({ onBack }: { onBack: () => void }) {
             candidate = merged.project;
           }
         }
-        if (!saved) throw new Error('Proje kaydedilemedi');
+        if (!saved) throw new Error(t('editor.projectSaveFailed'));
         const isLatestLocalSnapshot = useEditor.getState().project === snapshot;
         acknowledgeSaved(saved, snapshot);
         if (isLatestLocalSnapshot) {
@@ -751,7 +752,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       } catch (error) {
         const offline = typeof navigator !== 'undefined' && !navigator.onLine || error instanceof TypeError;
         setSaveState(offline ? 'offline' : 'error');
-        setEditorNotice(offline ? '\u00c7evrimd\u0131\u015f\u0131: de\u011fi\u015fiklikler yerelde bekliyor.' : error instanceof Error ? `Kaydetme hatas\u0131: ${error.message}` : 'Kaydetme hatas\u0131');
+        setEditorNotice(offline ? t('editor.saveOffline') : error instanceof Error ? t('editor.saveErrorWithReason', { reason: error.message }) : t('common.saveError'));
         throw error;
       }
     })();
@@ -762,7 +763,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       if (savePromiseRef.current === promise) savePromiseRef.current = null;
     });
     return promise;
-  }, [acknowledgeSaved, setEditorNotice, setSaveState]);
+  }, [acknowledgeSaved, setEditorNotice, setSaveState, t]);
   useEffect(() => {
     if (!project || saveState !== 'saving' || localRevision === savedRevision) return;
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
@@ -864,6 +865,8 @@ function Editor({ onBack }: { onBack: () => void }) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') { event.preventDefault(); setShowCommandPalette((visible) => !visible); return; }
       const tag = (event.target as HTMLElement).tagName;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLocaleLowerCase() === 'm') { event.preventDefault(); useEditor.getState().setPanel('media'); }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'e') { event.preventDefault(); setShowExport(true); }
       if (matchesShortcut(event, shortcutValue(settings, 'undo'))) { event.preventDefault(); undo(); }
       if (matchesShortcut(event, shortcutValue(settings, 'redo')) || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y')) { event.preventDefault(); redo(); }
       if (matchesShortcut(event, shortcutValue(settings, 'selectAll'))) {
@@ -1122,7 +1125,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       setExportStatus({ progress: 0, status: 'saving', message: 'Proje kayd\u0131 backend taraf\u0131ndan do\u011frulan\u0131yor' });
       const confirmedProject = await ensureProjectSaved();
       const requestBody = { ...options, projectRevision: confirmedProject.revision };
-      setExportStatus({ progress: 0, status: 'preflight', message: 'Export \u00f6n kontrol\u00fc yap\u0131l\u0131yor' });
+      setExportStatus({ progress: 0, status: 'preflight', message: t('export.preflightRunning') });
       const preflight = await api<ExportPreflight>('/api/projects/' + confirmedProject.id + '/export/preflight', { method: 'POST', body: JSON.stringify(requestBody) });
       if (!preflight.ok) throw new Error(preflight.errors.map((item) => item.message).join(' '));
       const currentProject = useEditor.getState().project ?? project;
@@ -1141,12 +1144,12 @@ function Editor({ onBack }: { onBack: () => void }) {
       }).then(setSettings).catch(() => undefined);
       const response = await api<{ job: { id: string } }>('/api/projects/' + confirmedProject.id + '/export', { method: 'POST', body: JSON.stringify(requestBody) });
       const jobId = response.job.id;
-      setExportStatus({ jobId, progress: 0, status: 'queued', message: 'Export kuyru\u011fa al\u0131nd\u0131' });
+      setExportStatus({ jobId, progress: 0, status: 'queued', message: t('export.queued') });
       await watchExportJob(jobId);
       return preflight;
     } catch (error) {
       setExporting(false);
-      setExportStatus({ progress: 0, status: 'failed', error: error instanceof Error ? error.message : 'Export ba\u015flat\u0131lamad\u0131' });
+      setExportStatus({ progress: 0, status: 'failed', error: error instanceof Error ? error.message : t('export.failedToStart') });
       throw error;
     }
   };
@@ -1171,7 +1174,7 @@ function Editor({ onBack }: { onBack: () => void }) {
     <div className="editor-body workspace-layout" style={{ '--workspace-rail-width': `${workspaceLayout.railWidth}px`, '--workspace-library-width': `${workspaceLayout.libraryWidth}px`, '--workspace-inspector-width': `${workspaceLayout.inspectorWidth}px`, '--workspace-timeline-height': `${workspaceLayout.timelineHeight}px` } as React.CSSProperties}><ToolRail onOpenSettings={() => setShowSettings(true)} /><AssetPanelPro onImport={importMedia} onOpenSettings={() => setShowSettings(true)} /><PreviewArea project={project} settings={settings} /><Inspector project={project} /><TimelinePro project={project} /><WorkspaceResizers layout={workspaceLayout} onPreview={setWorkspaceLayout} onCommit={persistWorkspaceLayout} /></div>
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
     {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
-    <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts')}</span></div>
+    <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'offline' ? t('editor.saveOffline') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts')}</span></div>
     {showCommandPalette && <CommandPalette actions={commandActions} onClose={() => setShowCommandPalette(false)} />}
     {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} />}
     {showExport && <ExportModal project={project} settings={settings} rangeStart={rangeStart} rangeEnd={rangeEnd} exporting={exporting} status={exportStatus} onStart={startExport} onAddFirstAsset={addFirstAssetToTimeline} onClose={() => setShowExport(false)} />}
@@ -1198,14 +1201,14 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState<ExportPreflight | null>(null);
   const done = status.status === 'completed';
-  const statusLabel = status.status === 'queued' ? 'Kuyrukta'
-    : status.status === 'running' ? '\u00c7al\u0131\u015f\u0131yor'
-      : status.status === 'reconnecting' ? 'Yeniden ba\u011flan\u0131yor'
-        : status.status === 'completed' ? 'Tamamland\u0131'
-          : status.status === 'failed' ? 'Ba\u015far\u0131s\u0131z'
-            : status.status === 'cancelled' ? '\u0130ptal edildi'
-              : status.status === 'saving' ? 'Kaydediliyor\u2026'
-                : status.status === 'preflight' ? '\u00d6n kontrol' : 'Haz\u0131rlan\u0131yor';
+  const statusLabel = status.status === 'queued' ? t('export.status.queued')
+    : status.status === 'running' ? t('export.status.running')
+      : status.status === 'reconnecting' ? t('export.status.reconnecting')
+        : status.status === 'completed' ? t('export.status.completed')
+          : status.status === 'failed' ? t('export.status.failed')
+            : status.status === 'cancelled' ? t('export.status.cancelled')
+              : status.status === 'saving' ? t('export.status.saving')
+                : status.status === 'preflight' ? t('export.status.preflight') : t('export.preparing');
   const hasTimelineClips = project.tracks.some((track) => track.clips.length > 0);
   const canvasHint = `${project.canvas.width} × ${project.canvas.height}`;
   const outputSize = exportDimensions(aspect, resolution, { width: project.canvas.width, height: project.canvas.height });
@@ -1260,14 +1263,14 @@ function EditorTopbar({ project, onBack, backPending, onExport, exporting, onSet
   const language = useEditor((state) => state.settings?.language ?? 'tr');
   const saveTime = lastSavedAt ? new Date(lastSavedAt).toLocaleTimeString(language === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' }) : '';
   const saveLabel = saveState === 'saving'
-    ? 'Kaydediliyor\u2026'
+    ? t('common.saving')
     : saveState === 'error'
-      ? 'Kaydetme hatas\u0131'
+      ? t('common.saveError')
       : saveState === 'offline'
-        ? '\u00c7evrimd\u0131\u015f\u0131 - bekliyor'
-        : saveTime ? 'Kaydedildi \u00b7 ' + saveTime : 'Kaydedildi';
-  const saveTitle = saveState === 'saved' && saveTime ? 'Son ba\u015far\u0131l\u0131 kay\u0131t: ' + saveTime : saveLabel;
-  return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" disabled={backPending} aria-busy={backPending} onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title="Geri al">&#8630;</button><button className="history-button" onClick={redo} title="Yinele">&#8631;</button><button className="topbar-command-button" onClick={onCommands} title={t('command.open')}><span>&#8981;</span><small>{t('command.title')}</small><kbd>&#8984; K</kbd></button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? 'Export\u2026' : 'D\u0131\u015fa aktar'} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title="Ayarlar"><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title="Ayarlar">HK</button></div></header>;
+        ? t('editor.status.offlinePending')
+        : saveTime ? `${t('common.saved')} · ${saveTime}` : t('common.saved');
+  const saveTitle = saveState === 'saved' && saveTime ? t('editor.status.lastSavedAt', { time: saveTime }) : saveLabel;
+  return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" disabled={backPending} aria-busy={backPending} onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title={t('common.undo')}>&#8630;</button><button className="history-button" onClick={redo} title={t('common.redo')}>&#8631;</button><button className="topbar-command-button" onClick={onCommands} title={t('command.open')}><span>&#8981;</span><small>{t('command.title')}</small><kbd>&#8984; K</kbd></button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? t('common.exporting') : t('common.export')} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title={t('common.settings')}><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title={t('common.settings')}>HK</button></div></header>;
 }
 // Legacy topbar body removed during merge; the live topbar is above.
 
@@ -2419,17 +2422,33 @@ function clipVisualValues(clip: Clip, projectTime: number) {
   if (clip.transitionOut?.type !== 'none' && leave > 0 && remaining < leave) {
     applyMotion(clip.transitionOut, clamp(remaining / leave, 0, 1), false);
   }
+  const usesTransitionFadeIn = clip.transitionIn?.type === 'fade' || clip.transitionIn?.type === 'dissolve';
+  const usesTransitionFadeOut = clip.transitionOut?.type === 'fade' || clip.transitionOut?.type === 'dissolve';
+  const visualFadeIn = !usesTransitionFadeIn && (clip.fadeIn ?? 0) > 0 ? clamp(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1) : 1;
+  const visualFadeOut = !usesTransitionFadeOut && (clip.fadeOut ?? 0) > 0 ? clamp(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1) : 1;
+  const audioFadeIn = (clip.fadeIn ?? 0) > 0 ? clamp(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1) : 1;
+  const audioFadeOut = (clip.fadeOut ?? 0) > 0 ? clamp(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1) : 1;
   return {
     localTime,
     x: interpolateKeyframes(clip.keyframes, 'x', localTime, clip.transform.x) + transitionX,
     y: interpolateKeyframes(clip.keyframes, 'y', localTime, clip.transform.y) + transitionY,
     scale: interpolateKeyframes(clip.keyframes, 'scale', localTime, clip.transform.scale) * transitionScale,
     rotation: interpolateKeyframes(clip.keyframes, 'rotation', localTime, clip.transform.rotation),
-    opacity: clamp(interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity) * transitionOpacity, 0, 1),
-    volume: clamp(interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume), 0, 2),
+    opacity: clamp(interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity) * transitionOpacity * visualFadeIn * visualFadeOut, 0, 1),
+    volume: clamp(interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume) * audioFadeIn * audioFadeOut, 0, 2),
     speed: clipSpeedAt(clip, localTime),
     wipe,
   };
+}
+
+function previewChromaMatrix(color: string, similarity: number) {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  const rgb = match ? [0, 2, 4].map((offset) => Number.parseInt(match[1].slice(offset, offset + 2), 16)) : [0, 255, 0];
+  const dominant = rgb.indexOf(Math.max(...rgb));
+  const alpha = [1, 1, 1];
+  alpha[dominant] = -2;
+  const bias = 2 * (1 - clamp(similarity, 0, 1));
+  return `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  ${alpha[0]} ${alpha[1]} ${alpha[2]} 0 ${bias}`;
 }
 
 function motionProgress(value: number, easing: TransitionEasing = 'ease-in-out') {
@@ -2566,6 +2585,8 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
   // as another clip was selected in the timeline.
   const mediaRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioGainNodesRef = useRef(new WeakMap<HTMLMediaElement, GainNode>());
   const canvasRef = useRef<HTMLDivElement>(null);
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -2613,9 +2634,8 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     updateSize();
     return () => window.removeEventListener('resize', updateSize);
   }, [isFullscreen]);
-  const activeClips = project.tracks
-    .flatMap((track, trackIndex) => track.clips.map((clip) => ({ clip, track, trackIndex })))
-    .filter(({ clip, track }) => !track.hidden && currentTime >= clip.start && currentTime < clip.start + clip.duration);
+  const activeClips = visualLayerPlan(project)
+    .filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
   const adjustmentClips = activeClips.filter(({ clip }) => clip.adjustment);
   const activeMedia = activeClips.filter(({ clip }) => !clip.adjustment && (clip.type === 'video' || clip.type === 'image'));
   const activeAudio = activeClips.filter(({ clip, track }) => {
@@ -2623,7 +2643,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
     return Boolean(asset?.hasAudio);
   });
-  const texts = activeClips.filter(({ clip }) => !clip.adjustment && clip.textStyle).map(({ clip }) => ({ clip, style: clip.textStyle! }));
+  const texts = activeClips.filter(({ clip }) => !clip.adjustment && clip.textStyle).map(({ clip, trackIndex }) => ({ clip, style: clip.textStyle!, trackIndex }));
   const activeSelected = selectedClipId ? activeClips.find(({ clip }) => clip.id === selectedClipId && (clip.adjustment || clip.type === 'video' || clip.type === 'image' || clip.type === 'text')) : undefined;
   const activeSelectedVisual = activeSelected ? clipVisualValues(activeSelected.clip, currentTime) : null;
   const activeSelectedAsset = activeSelected?.clip.assetId ? project.assets.find((item) => item.id === activeSelected.clip.assetId) : undefined;
@@ -2671,7 +2691,25 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     const values = clipVisualValues(clip, currentTime);
     const target = Math.max(0, clipSourceTime(clip, currentTime - clip.start) + clip.sourceStart);
     audio.playbackRate = clamp(values.speed, 0.25, 4);
-    audio.volume = clamp(values.volume * trackVolume, 0, 1);
+    const requestedGain = clamp(values.volume * trackVolume, 0, 4);
+    try {
+      const AudioContextConstructor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioContextConstructor) {
+        const context = audioContextRef.current ?? new AudioContextConstructor();
+        audioContextRef.current = context;
+        let gainNode = audioGainNodesRef.current.get(audio);
+        if (!gainNode) {
+          gainNode = context.createGain();
+          context.createMediaElementSource(audio).connect(gainNode).connect(context.destination);
+          audioGainNodesRef.current.set(audio, gainNode);
+        }
+        gainNode.gain.value = requestedGain;
+        audio.volume = 1;
+        if (playing && context.state === 'suspended') void context.resume().catch(() => undefined);
+      } else audio.volume = clamp(requestedGain, 0, 1);
+    } catch {
+      audio.volume = clamp(requestedGain, 0, 1);
+    }
     if (Math.abs(audio.currentTime - target) > 0.18 || audio.readyState < 2) audio.currentTime = target;
     if (playing) void audio.play().catch(() => undefined); else audio.pause();
   };
@@ -2798,6 +2836,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     <div className="preview-toolbar"><div className="preview-breadcrumb"><span>{t('preview.canvas')}</span><select className="preview-aspect-select" aria-label={t('preview.aspect')} value={aspect} onChange={(event) => setAspect(event.target.value as CanvasAspect)}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · {t('preview.portrait')}</option><option value="1:1">1:1 · {t('preview.square')}</option><option value="4:5">4:5 · Instagram</option><option value="3:2">3:2 · {t('preview.classic')}</option><option value="21:9">21:9 · {t('preview.cinematic')}</option></select><select className="preview-fit-select" aria-label={t('preview.framing')} title={t('preview.framingHint')} value={previewFraming} onChange={(event) => changePreviewFraming(event.target.value as typeof previewFraming)}><option value="clip">{t('preview.clipFraming')}</option><option value="fit">{t('preview.fitMedia')}</option><option value="fill">{t('preview.fillMedia')}</option><option value="smart">{t('preview.smartFraming')}</option></select></div><div className="preview-tools" aria-label={t('preview.view')}><button className={showSafeArea ? 'active' : ''} aria-label={t('preview.safeArea')} aria-pressed={showSafeArea} title={t('preview.safeArea')} onClick={() => setShowSafeArea((value) => !value)}>◫</button><button aria-label={t('preview.fullscreen')} title={t('preview.fullscreen')} onClick={toggleFullscreen}>⛶</button></div></div>
      <div className="preview-inline-zoom" aria-label={t('preview.zoom')}><button aria-label={t('preview.zoomOut')} onClick={() => setPreviewZoom((value) => clamp(value - 10, 50, 250))}>−</button><output>{previewZoom}%</output><button aria-label={t('preview.zoomIn')} onClick={() => setPreviewZoom((value) => clamp(value + 10, 50, 250))}>+</button><button onClick={() => setPreviewZoom(100)}>{t('preview.fitZoom')}</button></div>
      <div ref={stageRef} className="preview-stage"><div ref={viewportRef} className="preview-canvas-viewport"><div className="preview-canvas-pad" style={{ width: canvasPadSize.width, height: canvasPadSize.height }}><div ref={fullscreenRef} className="preview-fullscreen-shell" style={{ ['--canvas-ratio' as string]: canvasRatio }}><div ref={canvasRef} className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`} style={{ width: canvasDisplaySize.width, height: canvasDisplaySize.height, aspectRatio: `${project.canvas.width}/${project.canvas.height}`, ['--canvas-ratio' as string]: canvasRatio, background: project.canvas.background }} onPointerMove={updatePreviewTransform} onPointerUp={finishPreviewTransform} onPointerCancel={finishPreviewTransform}>
+     <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}><defs>{activeMedia.flatMap(({ clip }) => clip.filters.chromaKey ? [<filter key={clip.id} id={`preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`} colorInterpolationFilters="sRGB"><feColorMatrix type="matrix" values={previewChromaMatrix(clip.filters.chromaKey.color, clip.filters.chromaKey.similarity)} /><feComponentTransfer><feFuncA type="gamma" amplitude="1" exponent={Math.max(0.2, 1 - clip.filters.chromaKey.blend)} offset="0" /></feComponentTransfer></filter>] : [])}</defs></svg>
      {activeMedia.map(({ clip, trackIndex }) => {
       const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
       if (!asset) return null;
@@ -2815,7 +2854,11 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
       const cropHeight = crop ? clamp(Math.min(crop.height, 1 - cropY), 0.01, 1) : 1;
       const innerWidth = crop ? frameBounds.width / cropWidth : fullBounds.width;
       const innerHeight = crop ? frameBounds.height / cropHeight : fullBounds.height;
-      const mediaFilter = `brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${filter.hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${filter.temperature > 0 ? ` sepia(${Math.abs(filter.temperature) * 0.35})` : ''}`;
+      const temperatureFilter = Math.abs(filter.temperature) > 0.001
+        ? ` sepia(${Math.abs(filter.temperature) * 0.35}) saturate(${1 + Math.abs(filter.temperature) * 0.4}) hue-rotate(${filter.temperature > 0 ? -12 : 180}deg)`
+        : '';
+      const chromaFilter = clip.filters.chromaKey ? ` url(#preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')})` : '';
+      const mediaFilter = `${chromaFilter} brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${filter.hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${temperatureFilter}`;
       const mediaFrameStyle: React.CSSProperties = {
         position: 'absolute',
         left: '50%',
@@ -2865,7 +2908,7 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
       const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
        return <audio key={`audio-${clip.id}`} ref={(element) => { audioRefs.current[clip.id] = element; if (element) syncAudio(clip, element, track.volume ?? 1); }} src={mediaUrl} preload="auto" onLoadedMetadata={(event) => syncAudio(clip, event.currentTarget, track.volume ?? 1)} />;
     })}
-    {texts.map(({ clip, style }) => { const visual = clipVisualValues(clip, currentTime); const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale); const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id)); return <div key={clip.id} className={`preview-text preview-layer ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} role="button" tabIndex={isFullscreen ? -1 : 0} aria-label={t('preview.selectAria', { name: style.text || clip.name })} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} style={{ left: '50%', top: '50%', bottom: 'auto', width: bounds.width * canvasScale, zIndex: 100 + (clip.start || 0), pointerEvents: isFullscreen ? 'none' : 'auto', transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`, opacity: visual.opacity, fontFamily: style.fontFamily, fontSize: Math.max(1, style.fontSize * canvasScale), color: style.color, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecoration: style.textDecoration, letterSpacing: `${style.letterSpacing * canvasScale}px`, lineHeight: style.lineHeight, padding: `${style.padding * canvasScale}px`, background: style.background, clipPath: transitionClipPath(visual.wipe), WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`, textShadow: style.shadow ? '0 2px 8px #000' : 'none', textAlign: style.align }}>{style.text}</div>; })}
+    {texts.map(({ clip, style, trackIndex }) => { const visual = clipVisualValues(clip, currentTime); const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale); const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id)); return <div key={clip.id} className={`preview-text preview-layer ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} role="button" tabIndex={isFullscreen ? -1 : 0} aria-label={t('preview.selectAria', { name: style.text || clip.name })} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} style={{ left: '50%', top: '50%', bottom: 'auto', width: bounds.width * canvasScale, zIndex: trackIndex + 1, pointerEvents: isFullscreen ? 'none' : 'auto', transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`, opacity: visual.opacity, fontFamily: style.fontFamily, fontSize: Math.max(1, style.fontSize * canvasScale), color: style.color, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecoration: style.textDecoration, letterSpacing: `${style.letterSpacing * canvasScale}px`, lineHeight: style.lineHeight, padding: `${style.padding * canvasScale}px`, background: style.background, clipPath: transitionClipPath(visual.wipe), WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`, textShadow: style.shadow ? '0 2px 8px #000' : 'none', textAlign: style.align }}>{style.text}</div>; })}
     {!isFullscreen && activeSelected && activeSelectedVisual && <div className="preview-transform-box" style={{ zIndex: 300, left: '50%', top: '50%', width: selectedBounds.width * canvasScale, height: selectedBounds.height * canvasScale, transform: `translate(-50%, -50%) translate(${activeSelectedVisual.x * canvasScale}px, ${activeSelectedVisual.y * canvasScale}px) rotate(${activeSelectedVisual.rotation}deg) scale(${activeSelectedVisual.scale})` }}><span className="preview-transform-label">{t(activeSelected.clip.adjustment ? 'preview.type.adjustment' : activeSelected.clip.type === 'text' ? 'preview.type.text' : activeSelected.clip.type === 'image' ? 'preview.type.image' : 'preview.type.video')}</span><button className="preview-scale-handle" aria-label={t('preview.resizeAria')} onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} /></div>}
     {!isFullscreen && showSafeArea && <div className="safe-area" />}
           </div>

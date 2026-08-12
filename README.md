@@ -177,7 +177,7 @@ http://127.0.0.1:4173
 | `npm start` | Build and start the production-style local server |
 | `npm audit --omit=dev --audit-level=high` | Check production dependency advisories |
 
-The current automated baseline does not include a registered browser test script. The web smoke path remains a manual release check; this distinction keeps the public documentation honest about what CI actually runs.
+The automated baseline includes Playwright browser regressions through `npm run test:web`; `npm run verify:all` combines build, shared/server tests, and those browser checks. GitHub CI installs Chromium and runs the same browser suite.
 
 ## Local data
 
