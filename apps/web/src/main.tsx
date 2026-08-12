@@ -239,14 +239,28 @@ const useEditor = create<EditorState>((set) => ({
     return { project: next, history: { past: [...state.history.past, state.project], future: state.history.future.slice(1) }, historyGroup: null, localRevision: Math.max(state.localRevision, state.savedRevision) + 1, saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving' };
   }),
   setSaveState: (saveState) => set({ saveState }),
-  applyServerProject: (project) => set((state) => {
+  applyServerProject: (serverProject) => set((state) => {
     const wasDirty = state.localRevision !== state.savedRevision;
+    const project = wasDirty && state.project ? mergeImportedProject(state.project, serverProject) : serverProject;
+    if (wasDirty) {
+      // A server refresh can contain newer asset/proxy metadata without
+      // containing the local timeline edit that is still waiting for
+      // autosave.  It must never advance savedRevision: only a successful
+      // acknowledgement of our own PATCH may do that.
+      return {
+        project,
+        localRevision: state.localRevision,
+        savedRevision: state.savedRevision,
+        lastSavedAt: state.lastSavedAt,
+        saveState: 'saving',
+      };
+    }
     return {
       project,
-      localRevision: wasDirty ? Math.max(state.localRevision, project.revision) + 1 : project.revision,
-      savedRevision: project.revision,
-      lastSavedAt: project.updatedAt,
-      saveState: wasDirty ? 'saving' : 'saved',
+      localRevision: serverProject.revision,
+      savedRevision: serverProject.revision,
+      lastSavedAt: serverProject.updatedAt,
+      saveState: 'saved',
     };
   }),
   acknowledgeSaved: (project, snapshot) => set((state) => {
@@ -796,7 +810,7 @@ function Editor({ onBack }: { onBack: () => void }) {
           const currentProject = useEditor.getState().project;
           if (currentProject === snapshot) {
             // A server acknowledgement must not erase the local undo/redo stack.
-            setProject(saved, false);
+            useEditor.getState().acknowledgeSaved(saved, snapshot);
             const survivingClipIds = keepClipIds.filter((id) => saved!.tracks.some((track) => track.clips.some((clip) => clip.id === id)));
             if (survivingClipIds.length) useEditor.getState().setSelectedMany(survivingClipIds, keepTrackId);
             else if (keepClipId && saved.tracks.some((track) => track.clips.some((clip) => clip.id === keepClipId))) useEditor.getState().setSelected(keepClipId, keepTrackId);
@@ -894,13 +908,9 @@ function Editor({ onBack }: { onBack: () => void }) {
       const response = await fetch(`/api/projects/${project.id}/media`, { method: 'POST', body: form });
       if (!response.ok) throw new Error((await response.json()).error || t('editor.mediaImportFailed'));
       const result = await response.json() as { asset: Asset; project: Project };
-      const serverProject = result.project;
-      // Importing populates the library only.  Reconcile the new asset without
-      // hydrating the whole server snapshot: that would reset the playhead,
-      // selection and local timeline edits while a proxy is being prepared.
-      const localProject = useEditor.getState().project;
-      const mergedProject = localProject ? mergeImportedProject(localProject, serverProject) : serverProject;
-      applyServerProject(mergedProject);
+      // Importing populates the library only.  The central reconciliation path
+      // keeps the local timeline authoritative while a proxy is prepared.
+      applyServerProject(result.project);
       // The media endpoint already persisted the asset; only local edits remain pending.
       setEditorNotice(t('editor.mediaImported', { name: result.asset.name }));
     } catch (error) { setExportMessage(error instanceof Error ? error.message : t('editor.mediaImportFailed')); }
@@ -994,9 +1004,8 @@ function Editor({ onBack }: { onBack: () => void }) {
       const confirmed = await api<Project>(`/api/projects/${state.project.id}`);
       const latestState = useEditor.getState();
       if (confirmed.revision !== latestState.savedRevision) {
-        const localProject = latestState.project;
-        if (!localProject) throw new Error('Proje bulunamad\u0131.');
-        applyServerProject(mergeImportedProject(localProject, confirmed));
+        if (!latestState.project) throw new Error('Proje bulunamad\u0131.');
+        applyServerProject(confirmed);
         continue;
       }
       return confirmed;
@@ -1544,10 +1553,11 @@ function AssetPanelEnhanced({ onImport, onOpenSettings }: { onImport: (file: Fil
   const [assetView, setAssetView] = useState<'grid' | 'list'>('list');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; asset: Asset } | null>(null);
 
+  const applyServerProject = useEditor((state) => state.applyServerProject);
   const refreshProject = async () => {
     try {
       const fresh = await api<Project>(`/api/projects/${project.id}`);
-      useEditor.getState().setProject(normalizeProjectDurations(fresh));
+      applyServerProject(normalizeProjectDurations(fresh));
     } catch {
       // Keep the current in-memory project when a refresh races with a save.
     } finally {
@@ -1926,6 +1936,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
   const { t, locale, formatNumber } = useI18n();
   const panel = useEditor((state) => state.panel);
   const project = useEditor((state) => state.project)!;
+  const applyServerProject = useEditor((state) => state.applyServerProject);
   const currentTime = useEditor((state) => state.currentTime);
   const selectedClipIds = useEditor((state) => state.selectedClipIds);
   const mutateProject = useEditor((state) => state.mutateProject);
@@ -1961,14 +1972,13 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
       const job = JSON.parse((event as MessageEvent).data) as { projectId?: string; kind?: string; status?: string };
       if (job.projectId !== project.id || job.kind !== 'proxy' || !['completed', 'failed', 'cancelled'].includes(job.status ?? '')) return;
       void api<Project>(`/api/projects/${project.id}`).then((fresh) => {
-        const local = useEditor.getState().project;
-        if (local) useEditor.getState().setProject(mergeImportedProject(local, fresh), false);
+        applyServerProject(fresh);
         void refreshMediaHealth();
       }).catch(() => void refreshMediaHealth());
     };
     events.addEventListener('job', onJob);
     return () => { events.removeEventListener('job', onJob); events.close(); };
-  }, [project.id]);
+  }, [applyServerProject, project.id]);
   const derivedMissingAssets = useMemo(() => project.assets.filter((asset) => mediaHealth[asset.id]?.status === 'derived-missing' && mediaHealth[asset.id]?.sourceExists), [mediaHealth, project.assets]);
   const visibleAssets = useMemo(() => project.assets.filter((asset) => {
     const query = search.trim().toLocaleLowerCase(locale);
@@ -2029,9 +2039,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
     setStockBusyId(stock.id);
     try {
       const result = await api<{ asset: Asset; project: Project }>(`/api/projects/${project.id}/stock`, { method: 'POST', body: JSON.stringify({ stockId: stock.id }) });
-      const localProject = useEditor.getState().project;
-      const mergedProject = localProject ? mergeImportedProject(localProject, result.project) : result.project;
-      useEditor.getState().setProject(mergedProject, false);
+      applyServerProject(result.project);
       addAsset(result.asset, useEditor.getState().currentTime);
       setNotice(t('library.stockAdded', { name: stock.name }));
     } catch (error) {
@@ -2076,8 +2084,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
         await waitForDerivedJob(result.job.id);
         repaired += 1;
         const fresh = await api<Project>(`/api/projects/${project.id}`);
-        const local = useEditor.getState().project;
-        if (local) useEditor.getState().setProject(mergeImportedProject(local, fresh), false);
+        applyServerProject(fresh);
         await refreshMediaHealth();
       }
       setNotice(t('library.rebuildDone', { count: repaired }));
@@ -2096,8 +2103,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
     form.append('file', file);
     try {
       const result = await api<{ project: Project }>(`/api/projects/${project.id}/media/${asset.id}/relink`, { method: 'POST', body: form });
-      const local = useEditor.getState().project;
-      if (local) useEditor.getState().setProject(mergeImportedProject(local, result.project), false);
+      applyServerProject(result.project);
       setNotice(t('library.relinked', { name: asset.name }));
       window.setTimeout(() => void refreshMediaHealth(), 900);
     } catch (error) { setNotice(error instanceof Error ? error.message : t('library.relinkFailed')); }
@@ -2105,7 +2111,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
   const title = t(panelTitle(panel));
   const panelMenuItems: ContextMenuItem[] = [
     { label: t('library.menu.import'), icon: '+', onSelect: () => fileRef.current?.click() },
-    { label: t('library.menu.refresh'), icon: '↻', onSelect: () => { void api<Project>(`/api/projects/${project.id}`).then((fresh) => { const local = useEditor.getState().project; if (local) useEditor.getState().setProject(mergeImportedProject(local, fresh), false); }); } },
+    { label: t('library.menu.refresh'), icon: '↻', onSelect: () => { void api<Project>(`/api/projects/${project.id}`).then((fresh) => applyServerProject(fresh)); } },
     { label: bulkRebuildBusy ? t('library.menu.rebuilding') : t('library.menu.rebuildMissing', { count: derivedMissingAssets.length }), icon: '⟳', disabled: bulkRebuildBusy || derivedMissingAssets.length === 0, onSelect: () => { void rebuildAllDerived(); } },
     { label: t('library.menu.settings'), icon: '⚙', onSelect: onOpenSettings },
   ];

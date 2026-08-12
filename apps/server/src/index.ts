@@ -155,7 +155,33 @@ async function readProject(projectId: string): Promise<Project> {
   return ProjectSchema.parse(JSON.parse(raw));
 }
 
+type ProjectLifecycleState = 'active' | 'deleting' | 'deleted';
+type ProjectLifecycle = { state: ProjectLifecycleState; generation: number };
+type ServerTestHooks = {
+  beforeSave?: (project: Project) => void | Promise<void>;
+  beforeDerivedWrite?: (projectId: string) => void | Promise<void>;
+};
+
+// These hooks are intentionally narrow and are only used by deterministic
+// filesystem-race regression tests. They do not alter the HTTP contract.
+export const serverTestHooks: ServerTestHooks = {};
+const projectLifecycles = new Map<string, ProjectLifecycle>();
+
+function lifecycleFor(projectId: string): ProjectLifecycle {
+  return projectLifecycles.get(projectId) ?? { state: 'active', generation: 0 };
+}
+
+function assertProjectActive(projectId: string, expectedGeneration?: number) {
+  const lifecycle = lifecycleFor(projectId);
+  if (lifecycle.state !== 'active' || (expectedGeneration !== undefined && lifecycle.generation !== expectedGeneration)) {
+    throw Object.assign(new Error(message('projectNotFound')), { statusCode: 404 });
+  }
+  return lifecycle;
+}
+
 async function saveProject(project: Project) {
+  await serverTestHooks.beforeSave?.(project);
+  assertProjectActive(project.id);
   const dir = projectPath(project.id);
   await ensureDir(dir);
   const file = projectFile(project.id);
@@ -174,14 +200,16 @@ const projectLocks = new Map<string, Promise<void>>();
 /** Serialize read/modify/write operations for one project. Proxy generation and
  * editor autosaves can finish at the same time, so the lock must cover the
  * read as well as the final atomic write. */
-async function withProjectLock<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+async function withProjectLock<T>(projectId: string, task: () => Promise<T>, options: { allowInactive?: boolean } = {}): Promise<T> {
   const previous = projectLocks.get(projectId) ?? Promise.resolve();
+  const queuedLifecycle = lifecycleFor(projectId);
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const queued = previous.then(() => gate);
   projectLocks.set(projectId, queued);
   await previous;
   try {
+    if (!options.allowInactive) assertProjectActive(projectId, queuedLifecycle.generation);
     return await task();
   } finally {
     release();
@@ -285,6 +313,37 @@ function updateJob(jobId: string, patch: Partial<InternalJob>) {
   publish('job', publicJob(next));
 }
 
+async function cancelProjectJobs(projectId: string) {
+  const terminations: Promise<void>[] = [];
+  for (const job of jobs.values()) {
+    if (job.projectId !== projectId || !['queued', 'running'].includes(job.status)) continue;
+    const process = jobProcesses.get(job.id);
+    if (process) {
+      terminations.push(new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve();
+        };
+        const timeout = setTimeout(finish, 5000);
+        timeout.unref?.();
+        process.once('close', finish);
+        process.once('error', finish);
+        try {
+          if (process.exitCode === null) process.kill();
+          else finish();
+        } catch {
+          finish();
+        }
+      }));
+    }
+    updateJob(job.id, { status: 'cancelled', message: message('cancelledMessage') });
+  }
+  await Promise.all(terminations);
+}
+
 function pruneJobs() {
   if (jobs.size <= maxJobHistory) return;
   const removable = Array.from(jobs.values())
@@ -294,6 +353,7 @@ function pruneJobs() {
 }
 
 async function makeJob(projectId: string, kind: Job['kind'], runner: (job: InternalJob) => Promise<void>) {
+  assertProjectActive(projectId);
   const now = new Date().toISOString();
   const job: Job = { id: id('job'), projectId, kind, status: 'queued', progress: 0, createdAt: now, updatedAt: now };
   jobs.set(job.id, job);
@@ -301,7 +361,10 @@ async function makeJob(projectId: string, kind: Job['kind'], runner: (job: Inter
   publish('job', publicJob(job));
   // A cancelled process can still reject while its child is being reaped.  Do
   // not turn that expected rejection into a misleading "failed" state.
-  void runner(job).catch((error: unknown) => {
+  void (async () => {
+    assertProjectActive(projectId);
+    await runner(job);
+  })().catch((error: unknown) => {
     const current = jobs.get(job.id);
     if (current?.status === 'cancelled') return;
     updateJob(job.id, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
@@ -310,11 +373,13 @@ async function makeJob(projectId: string, kind: Job['kind'], runner: (job: Inter
 }
 
 async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
+  if (jobs.get(job.id)?.status === 'cancelled') throw new Error(message('cancelled'));
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
   return await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true });
     jobProcesses.set(job.id, child);
+    if (jobs.get(job.id)?.status === 'cancelled') child.kill();
     const timeout = setTimeout(() => child.kill(), maxFfmpegRuntimeMs);
     let stderr = '';
     child.stderr.on('data', (chunk) => {
@@ -368,6 +433,7 @@ async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
 const jobProgressDuration = new Map<string, number>();
 
 async function queueDerivedMediaJob(projectId: string, asset: Asset) {
+  assertProjectActive(projectId);
   const sourcePath = assetFile(projectId, asset);
   if (!fs.existsSync(sourcePath)) throw Object.assign(new Error(message('sourceMissing')), { statusCode: 404 });
   if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyMediaJobs')), { statusCode: 429 });
@@ -377,7 +443,10 @@ async function queueDerivedMediaJob(projectId: string, asset: Asset) {
       ? { width: 1280, crf: 26, preset: 'faster' }
       : { width: 960, crf: 30, preset: 'veryfast' };
   return makeJob(projectId, 'proxy', async (jobInfo) => {
+    assertProjectActive(projectId);
     updateJob(jobInfo.id, { status: 'running', message: message('derivativesPreparing') });
+    await serverTestHooks.beforeDerivedWrite?.(projectId);
+    assertProjectActive(projectId);
     const proxyDir = path.join(projectPath(projectId), 'proxies');
     const thumbnailDir = path.join(projectPath(projectId), 'thumbnails');
     const waveformDir = path.join(projectPath(projectId), 'waveforms');
@@ -391,18 +460,22 @@ async function queueDerivedMediaJob(projectId: string, asset: Asset) {
     let thumbnailRelative: string | undefined;
     let waveformRelative: string | undefined;
     if (asset.type === 'video') {
+      assertProjectActive(projectId);
       await runFfmpeg(['-i', sourcePath, '-vf', `scale=${quality.width}:-2:force_original_aspect_ratio=decrease`, '-c:v', 'libx264', '-preset', quality.preset, '-crf', String(quality.crf), '-c:a', 'aac', '-b:a', '128k', proxyPath], jobInfo, proxyPath);
       proxyRelative = path.relative(projectPath(projectId), proxyPath);
     }
     if (asset.type === 'video' || asset.type === 'image') {
+      assertProjectActive(projectId);
       const thumbnailInput = asset.type === 'video' ? ['-ss', '0.2', '-i', sourcePath] : ['-i', sourcePath];
       await runFfmpeg([...thumbnailInput, '-frames:v', '1', '-vf', 'scale=480:-2', thumbnailPath], jobInfo, thumbnailPath);
       thumbnailRelative = path.relative(projectPath(projectId), thumbnailPath);
     }
     if (asset.hasAudio || asset.type === 'audio') {
+      assertProjectActive(projectId);
       await runFfmpeg(['-i', sourcePath, '-filter_complex', 'showwavespic=s=900x120:colors=80e6c4:scale=sqrt', '-frames:v', '1', waveformPath], jobInfo, waveformPath);
       waveformRelative = path.relative(projectPath(projectId), waveformPath);
     }
+    assertProjectActive(projectId);
     await withProjectLock(projectId, async () => {
       const updated = await readProject(projectId);
       const index = updated.assets.findIndex((item) => item.id === asset.id);
@@ -432,6 +505,27 @@ function assetFile(projectId: string, asset: Asset) {
   return safeExistingPath(projectPath(projectId), asset.path);
 }
 
+async function replaceMediaWithRollback(sourcePath: string, targetPath: string, commit: () => Promise<void>) {
+  const backupPath = targetPath + '.' + process.pid + '.' + crypto.randomUUID() + '.backup';
+  let oldMoved = false;
+  let newMoved = false;
+  try {
+    if (fs.existsSync(targetPath)) {
+      await fsp.rename(targetPath, backupPath);
+      oldMoved = true;
+    }
+    await fsp.rename(sourcePath, targetPath);
+    newMoved = true;
+    await commit();
+    if (oldMoved) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+  } catch (error) {
+    if (newMoved || fs.existsSync(targetPath)) await fsp.rm(targetPath, { force: true }).catch(() => undefined);
+    if (oldMoved && fs.existsSync(backupPath)) await fsp.rename(backupPath, targetPath).catch(() => undefined);
+    throw error;
+  } finally {
+    await fsp.rm(sourcePath, { force: true }).catch(() => undefined);
+  }
+}
 function bundleAssetExtension(asset: Asset) {
   const extension = path.extname(asset.path).toLowerCase();
   if (/^\.[a-z0-9]{1,8}$/.test(extension)) return extension;
@@ -1236,14 +1330,19 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       const source = trashPath(request.params.trashId);
       const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(path.join(source, 'project.json'), 'utf8')));
-      const target = projectPath(project.id);
-      if (fs.existsSync(target)) return reply.code(409).send({ error: message('projectAlreadyExists') });
-      await ensureDir(projectsDir);
-      await fsp.rename(source, target);
-      return reply.send(project);
+      const restored = await withProjectLock(project.id, async () => {
+        const target = projectPath(project.id);
+        if (fs.existsSync(target)) throw Object.assign(new Error(message('projectAlreadyExists')), { statusCode: 409 });
+        await ensureDir(projectsDir);
+        await fsp.rename(source, target);
+        const previous = lifecycleFor(project.id);
+        projectLifecycles.set(project.id, { state: 'active', generation: previous.generation + 1 });
+        return project;
+      }, { allowInactive: true });
+      return reply.send(restored);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 404;
-      return reply.code(statusCode === 400 ? 400 : 404).send({ error: localizedError(error, 'projectRestoreFailed') });
+      return reply.code(statusCode === 400 || statusCode === 409 ? statusCode : 404).send({ error: localizedError(error, 'projectRestoreFailed') });
     }
   });
 
@@ -1270,38 +1369,38 @@ async function registerRoutes(app: FastifyInstance) {
     const item = STOCK_MEDIA.find((entry) => entry.id === request.body?.stockId);
     if (!item) return reply.code(400).send({ error: message('invalidStock') });
     try {
-      const project = await readProject(request.params.projectId);
-      const source = path.join(stockDir, item.fileName);
-      if (!fs.existsSync(source)) return reply.code(404).send({ error: message('stockFileNotFound') });
-      const assetId = id('asset');
-      const relativePath = path.join('media', `${assetId}.png`);
-      const target = safeJoin(projectPath(project.id), relativePath);
-      await ensureDir(path.dirname(target));
-      await fsp.copyFile(source, target);
-      const stat = await fsp.stat(target);
-      const asset: Asset = {
-        id: assetId,
-        name: localizedStock(item).name,
-        type: 'image',
-        mimeType: item.mimeType,
-        path: relativePath,
-        thumbnailPath: relativePath,
-        size: stat.size,
-        duration: 5,
-        width: item.width,
-        height: item.height,
-        hasAudio: false,
-        createdAt: new Date().toISOString(),
-      };
-      const next = await withProjectLock(project.id, async () => {
-        const current = await readProject(project.id);
+      const result = await withProjectLock(request.params.projectId, async () => {
+        const current = await readProject(request.params.projectId);
+        const source = path.join(stockDir, item.fileName);
+        if (!fs.existsSync(source)) throw Object.assign(new Error(message('stockFileNotFound')), { statusCode: 404 });
+        const assetId = id('asset');
+        const relativePath = path.join('media', assetId + '.png');
+        const target = safeJoin(projectPath(current.id), relativePath);
+        await ensureDir(path.dirname(target));
+        await fsp.copyFile(source, target);
+        const stat = await fsp.stat(target);
+        const asset: Asset = {
+          id: assetId,
+          name: localizedStock(item).name,
+          type: 'image',
+          mimeType: item.mimeType,
+          path: relativePath,
+          thumbnailPath: relativePath,
+          size: stat.size,
+          duration: 5,
+          width: item.width,
+          height: item.height,
+          hasAudio: false,
+          createdAt: new Date().toISOString(),
+        };
         const updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: Math.max(current.duration, asset.duration) });
         await saveProject(updated);
-        return updated;
+        return { asset, project: updated };
       });
-      return reply.code(201).send({ asset, project: next });
+      return reply.code(201).send(result);
     } catch (error) {
-      return reply.code(400).send({ error: localizedError(error, 'stockAddFailed') });
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'stockAddFailed') });
     }
   });
 
@@ -1374,37 +1473,63 @@ async function registerRoutes(app: FastifyInstance) {
       });
       return next;
     } catch (error) {
-      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && Number(error.statusCode) === 409 ? 409 : 400;
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       const conflictProject = statusCode === 409 && typeof error === 'object' && error !== null && 'project' in error ? error.project : undefined;
-      return reply.code(statusCode).send({ error: localizedError(error, 'projectSaveFailed'), ...(conflictProject ? { project: conflictProject } : {}) });
+      const responseCode = statusCode === 404 || statusCode === 409 ? statusCode : 400;
+      return reply.code(responseCode).send({ error: localizedError(error, responseCode === 404 ? 'projectNotFound' : 'projectSaveFailed'), ...(conflictProject ? { project: conflictProject } : {}) });
     }
   });
 
   app.post<{ Params: { projectId: string } }>('/api/projects/:projectId/duplicate', async (request, reply) => {
     try {
-      const original = await readProject(request.params.projectId);
-      const copy = ProjectSchema.parse({ ...original, id: id('project'), name: `${original.name} kopya`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revision: 0 });
-      await copyProjectFolder(original.id, copy.id);
-      await saveProject(copy);
+      const copy = await withProjectLock(request.params.projectId, async () => {
+        const original = await readProject(request.params.projectId);
+        const duplicated = ProjectSchema.parse({ ...original, id: id('project'), name: original.name + ' kopya', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revision: 0 });
+        await copyProjectFolder(original.id, duplicated.id);
+        await saveProject(duplicated);
+        return duplicated;
+      });
       return reply.code(201).send(copy);
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return reply.code(404).send({ error: message('projectNotFound') });
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : undefined;
+      if (statusCode === 404 || (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) return reply.code(404).send({ error: message('projectNotFound') });
       return reply.code(400).send({ error: message('projectCopyFailed') });
     }
   });
 
   app.delete<{ Params: { projectId: string } }>('/api/projects/:projectId', async (request, reply) => {
-    const target = projectPath(request.params.projectId);
-    if (!fs.existsSync(target)) return reply.code(404).send({ error: message('projectNotFound') });
-    const trash = path.join(dataDir, 'trash', `${request.params.projectId}-${Date.now()}`);
-    await ensureDir(path.dirname(trash));
-    await fsp.rename(target, trash);
-    return { ok: true, trashId: path.basename(trash) };
+    try {
+      const result = await withProjectLock(request.params.projectId, async () => {
+        const lifecycle = lifecycleFor(request.params.projectId);
+        if (lifecycle.state !== 'active') throw Object.assign(new Error(message('projectNotFound')), { statusCode: 404 });
+        const deletingLifecycle = { state: 'deleting' as const, generation: lifecycle.generation + 1 };
+        projectLifecycles.set(request.params.projectId, deletingLifecycle);
+        await cancelProjectJobs(request.params.projectId);
+        const target = projectPath(request.params.projectId);
+        if (!fs.existsSync(target)) {
+          projectLifecycles.set(request.params.projectId, { state: 'deleted', generation: deletingLifecycle.generation });
+          throw Object.assign(new Error(message('projectNotFound')), { statusCode: 404 });
+        }
+        const trash = path.join(dataDir, 'trash', request.params.projectId + '-' + Date.now());
+        await ensureDir(path.dirname(trash));
+        try {
+          await fsp.rename(target, trash);
+        } catch (error) {
+          projectLifecycles.set(request.params.projectId, lifecycle);
+          throw error;
+        }
+        projectLifecycles.set(request.params.projectId, { state: 'deleted', generation: deletingLifecycle.generation });
+        return { ok: true, trashId: path.basename(trash) };
+      }, { allowInactive: true });
+      return result;
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'projectNotFound') });
+    }
   });
 
   app.register(multipart, { limits: { fileSize: maxUploadBytes, files: 1 } });
   app.post<{ Params: { projectId: string } }>('/api/projects/:projectId/media', async (request, reply) => {
-    const project = await readProject(request.params.projectId);
     let part: Awaited<ReturnType<FastifyRequest['file']>> | undefined;
     try {
       part = await request.file();
@@ -1419,57 +1544,62 @@ async function registerRoutes(app: FastifyInstance) {
     if (!expected || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) {
       return reply.code(415).send({ error: message('unsupportedMedia') });
     }
-    const assetId = id('asset');
-    const uploadRelativePath = path.join('media', `${assetId}.upload`);
-    const uploadAbsolutePath = safeJoin(projectPath(project.id), uploadRelativePath);
-    await ensureDir(path.dirname(uploadAbsolutePath));
     try {
-      await pipeline(part.file, fs.createWriteStream(uploadAbsolutePath));
-    } catch {
-      await fsp.rm(uploadAbsolutePath, { force: true });
-      return reply.code(400).send({ error: message('uploadFailed') });
-    }
-    const probed = await probeMedia(uploadAbsolutePath);
-    const detectedType = detectedMediaType(probed);
-    if (detectedType !== expected.type) {
-      await fsp.rm(uploadAbsolutePath, { force: true });
-      return reply.code(415).send({ error: message('contentMismatch') });
-    }
-    const relativePath = path.join('media', `${assetId}${expected.storedExtension}`);
-    const absolutePath = safeJoin(projectPath(project.id), relativePath);
-    try {
-      await fsp.rename(uploadAbsolutePath, absolutePath);
-    } catch {
-      await fsp.rm(uploadAbsolutePath, { force: true });
-      return reply.code(400).send({ error: 'Medya kaydedilemedi' });
-    }
-    const stat = await fsp.stat(absolutePath);
-    const asset: Asset = {
-      id: assetId,
-      name: part.filename,
-      type: expected.type,
-      mimeType: expected.mimeType,
-      path: relativePath,
-      size: stat.size,
-      duration: Number(probed.duration ?? 0),
-      width: Number(probed.width ?? 0) || undefined,
-      height: Number(probed.height ?? 0) || undefined,
-      fps: Number(probed.fps ?? 0) || undefined,
-      hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'),
-      createdAt: new Date().toISOString(),
-    };
-    const next = await withProjectLock(project.id, async () => {
-      const current = await readProject(project.id);
-      const updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: Math.max(current.duration, asset.duration) });
-      await saveProject(updated);
-      return updated;
-    });
-    try {
-      const job = await queueDerivedMediaJob(project.id, asset);
-      return reply.code(201).send({ asset, job: publicJob(job), project: next });
+      const result = await withProjectLock(request.params.projectId, async () => {
+        const current = await readProject(request.params.projectId);
+        const assetId = id('asset');
+        const uploadRelativePath = path.join('media', assetId + '.upload');
+        const uploadAbsolutePath = safeJoin(projectPath(current.id), uploadRelativePath);
+        const relativePath = path.join('media', assetId + expected.storedExtension);
+        const absolutePath = safeJoin(projectPath(current.id), relativePath);
+        let asset: Asset;
+        let updated: Project;
+        try {
+          await ensureDir(path.dirname(uploadAbsolutePath));
+          await pipeline(part!.file, fs.createWriteStream(uploadAbsolutePath));
+          const probed = await probeMedia(uploadAbsolutePath);
+          if (detectedMediaType(probed) !== expected.type) throw Object.assign(new Error(message('contentMismatch')), { statusCode: 415 });
+          await fsp.rename(uploadAbsolutePath, absolutePath);
+          const stat = await fsp.stat(absolutePath);
+          asset = {
+            id: assetId,
+            name: part!.filename,
+            type: expected.type,
+            mimeType: expected.mimeType,
+            path: relativePath,
+            size: stat.size,
+            duration: Number(probed.duration ?? 0),
+            width: Number(probed.width ?? 0) || undefined,
+            height: Number(probed.height ?? 0) || undefined,
+            fps: Number(probed.fps ?? 0) || undefined,
+            hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'),
+            createdAt: new Date().toISOString(),
+          };
+          updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: Math.max(current.duration, asset.duration) });
+          await saveProject(updated);
+        } catch (error) {
+          await fsp.rm(uploadAbsolutePath, { force: true }).catch(() => undefined);
+          await fsp.rm(absolutePath, { force: true }).catch(() => undefined);
+          throw error;
+        }
+        try {
+          const job = await queueDerivedMediaJob(current.id, asset);
+          return { asset, project: updated, job };
+        } catch (jobError) {
+          return { asset, project: updated, jobError };
+        }
+      });
+      if (!result.job) {
+        const jobError = result.jobError;
+        const statusCode = typeof jobError === 'object' && jobError !== null && 'statusCode' in jobError ? Number(jobError.statusCode) : 400;
+        const responseCode = [404, 429].includes(statusCode) ? statusCode : 400;
+        return reply.code(responseCode).send({ asset: result.asset, project: result.project, error: localizedError(jobError, 'derivativesPrepareFailed') });
+      }
+      return reply.code(201).send({ asset: result.asset, job: publicJob(result.job), project: result.project });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 429 ? 429 : 400).send({ asset, project: next, error: localizedError(error, 'derivativesPrepareFailed') });
+      const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
+      return reply.code(responseCode).send({ error: localizedError(error, statusCode === 415 ? 'contentMismatch' : statusCode === 404 ? 'projectNotFound' : 'derivativesPrepareFailed') });
     }
   });
 
@@ -1488,10 +1618,12 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { projectId: string; assetId: string } }>('/api/projects/:projectId/media/:assetId/rebuild-derived', async (request, reply) => {
     try {
-      const project = await readProject(request.params.projectId);
-      const asset = project.assets.find((item) => item.id === request.params.assetId);
-      if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
-      const job = await queueDerivedMediaJob(project.id, asset);
+      const job = await withProjectLock(request.params.projectId, async () => {
+        const project = await readProject(request.params.projectId);
+        const asset = project.assets.find((item) => item.id === request.params.assetId);
+        if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
+        return queueDerivedMediaJob(project.id, asset);
+      });
       return reply.code(202).send({ job: publicJob(job) });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
@@ -1500,39 +1632,50 @@ async function registerRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { projectId: string; assetId: string } }>('/api/projects/:projectId/media/:assetId/relink', async (request, reply) => {
-    const project = await readProject(request.params.projectId);
-    const asset = project.assets.find((item) => item.id === request.params.assetId);
-    if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
     let part: Awaited<ReturnType<FastifyRequest['file']>> | undefined;
     try { part = await request.file(); } catch { return reply.code(400).send({ error: message('fileUnreadable') }); }
     if (!part) return reply.code(400).send({ error: message('fileMissing') });
     const extension = path.extname(part.filename).toLowerCase();
     const expected = mediaExtensionInfo[extension];
     const declaredMimeType = String(part.mimetype || '').toLowerCase().split(';')[0];
-    if (!expected || expected.type !== asset.type || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) return reply.code(415).send({ error: message('relinkTypeMismatch') });
-    const uploadPath = safeJoin(projectPath(project.id), path.join('media', `${asset.id}.relink`));
-    await ensureDir(path.dirname(uploadPath));
-    try { await pipeline(part.file, fs.createWriteStream(uploadPath)); } catch { await fsp.rm(uploadPath, { force: true }); return reply.code(400).send({ error: message('relinkSaveFailed') }); }
-    const probed = await probeMedia(uploadPath);
-    if (detectedMediaType(probed) !== expected.type) { await fsp.rm(uploadPath, { force: true }); return reply.code(415).send({ error: message('mediaValidationFailed') }); }
-    const finalPath = assetFile(project.id, asset);
-    try { if (fs.existsSync(finalPath)) await fsp.rm(finalPath, { force: true }); await fsp.rename(uploadPath, finalPath); } catch { await fsp.rm(uploadPath, { force: true }); return reply.code(400).send({ error: message('mediaPathFailed') }); }
-    const stat = await fsp.stat(finalPath);
-    const updatedAsset: Asset = { ...asset, name: part.filename, mimeType: expected.mimeType, size: stat.size, duration: Number(probed.duration ?? 0), width: Number(probed.width ?? 0) || undefined, height: Number(probed.height ?? 0) || undefined, fps: Number(probed.fps ?? 0) || undefined, hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined };
-    const next = await withProjectLock(project.id, async () => {
-      const current = await readProject(project.id);
-      const index = current.assets.findIndex((item) => item.id === asset.id);
-      if (index < 0) throw new Error(message('mediaNotFound'));
-      current.assets[index] = updatedAsset;
-      current.duration = Math.max(current.duration, updatedAsset.duration);
-      const saved = ProjectSchema.parse({ ...current, revision: current.revision + 1, updatedAt: new Date().toISOString() });
-      await saveProject(saved);
-      return saved;
-    });
     try {
-      const job = await queueDerivedMediaJob(project.id, updatedAsset);
-      return reply.code(202).send({ project: next, asset: updatedAsset, job: publicJob(job) });
-    } catch (error) { return reply.code(400).send({ project: next, asset: updatedAsset, error: localizedError(error, 'derivativesOutputFailed') }); }
+      const result = await withProjectLock(request.params.projectId, async () => {
+        const current = await readProject(request.params.projectId);
+        const asset = current.assets.find((item) => item.id === request.params.assetId);
+        if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
+        if (!expected || expected.type !== asset.type || (declaredMimeType && declaredMimeType !== 'application/octet-stream' && declaredMimeType !== expected.mimeType)) throw Object.assign(new Error(message('relinkTypeMismatch')), { statusCode: 415 });
+        const uploadPath = safeJoin(projectPath(current.id), path.join('media', asset.id + '.relink'));
+        try {
+          await ensureDir(path.dirname(uploadPath));
+          await pipeline(part!.file, fs.createWriteStream(uploadPath));
+          const probed = await probeMedia(uploadPath);
+          if (detectedMediaType(probed) !== expected.type) throw Object.assign(new Error(message('mediaValidationFailed')), { statusCode: 415 });
+          const finalPath = assetFile(current.id, asset);
+          let savedAsset: Asset;
+          let savedProject: Project;
+          const stat = await fsp.stat(uploadPath);
+          const updatedAsset: Asset = { ...asset, name: part!.filename, mimeType: expected.mimeType, size: stat.size, duration: Number(probed.duration ?? 0), width: Number(probed.width ?? 0) || undefined, height: Number(probed.height ?? 0) || undefined, fps: Number(probed.fps ?? 0) || undefined, hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined };
+          await replaceMediaWithRollback(uploadPath, finalPath, async () => {
+            const index = current.assets.findIndex((item) => item.id === asset.id);
+            if (index < 0) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
+            const nextProject = ProjectSchema.parse({ ...current, assets: current.assets.map((item, itemIndex) => itemIndex === index ? updatedAsset : item), duration: Math.max(current.duration, updatedAsset.duration), revision: current.revision + 1, updatedAt: new Date().toISOString() });
+            await saveProject(nextProject);
+            savedAsset = updatedAsset;
+            savedProject = nextProject;
+          });
+          const job = await queueDerivedMediaJob(current.id, savedAsset!);
+          return { asset: savedAsset!, project: savedProject!, job };
+        } catch (error) {
+          await fsp.rm(uploadPath, { force: true }).catch(() => undefined);
+          throw error;
+        }
+      });
+      return reply.code(202).send({ project: result.project, asset: result.asset, job: publicJob(result.job) });
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
+      return reply.code(responseCode).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : statusCode === 415 ? 'mediaValidationFailed' : 'derivativesOutputFailed') });
+    }
   });
 
   app.get<{ Params: { projectId: string; assetId: string }; Querystring: { proxy?: string; waveform?: string; thumbnail?: string } }>('/api/projects/:projectId/media/:assetId', async (request, reply) => {
@@ -1570,60 +1713,58 @@ async function registerRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { projectId: string }; Body: ExportRequest }>('/api/projects/:projectId/export/preflight', async (request, reply) => {
-    let project: Project;
-    try { project = await readProject(request.params.projectId); }
-    catch { return reply.code(404).send({ error: message('projectNotFound') }); }
-    if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) {
-      return reply.code(409).send({ error: 'Proje revizyonu g\u00fcncel de\u011fil; \u00f6nce kaydedin.' });
-    }
-    const exportDir = path.join(projectPath(project.id), 'exports');
-    await ensureDir(exportDir);
     try {
-      const options = normalizeExportOptions(project, request.body ?? {});
-      return exportPreflight(project, options, exportDir);
+      return await withProjectLock(request.params.projectId, async () => {
+        const project = await readProject(request.params.projectId);
+        if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409 });
+        const exportDir = path.join(projectPath(project.id), 'exports');
+        await ensureDir(exportDir);
+        const options = normalizeExportOptions(project, request.body ?? {});
+        return exportPreflight(project, options, exportDir);
+      });
     } catch (error) {
-      return reply.code(400).send({ error: localizedError(error, 'exportSettingsInvalid') });
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 || statusCode === 409 ? statusCode : 400).send({ error: localizedError(error, 'exportSettingsInvalid') });
     }
   });
 
   app.post<{ Params: { projectId: string }; Body: ExportRequest }>('/api/projects/:projectId/export', async (request, reply) => {
-    let project: Project;
     try {
-      project = await readProject(request.params.projectId);
-    if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) {
-      return reply.code(409).send({ error: 'Proje revizyonu g\u00fcncel de\u011fil; \u00f6nce kaydedin.' });
-    }
-    } catch {
-      return reply.code(404).send({ error: message('projectNotFound') });
-    }
-    const exportDir = path.join(projectPath(project.id), 'exports');
-    await ensureDir(exportDir);
-    let options: ExportOptions;
-    try { options = normalizeExportOptions(project, request.body ?? {}); }
-    catch (error) { return reply.code(400).send({ error: localizedError(error, 'exportSettingsInvalid') }); }
-    const preflight = await exportPreflight(project, options, exportDir);
-    if (!preflight.ok) return reply.code(400).send({ error: preflight.errors.map((item) => item.message).join(' '), preflight });
-    const extension = options.format === 'wav' ? 'wav' : options.format === 'mp3' ? 'mp3' : 'mp4';
-    const fileName = safeExportName(project, options.fileName, extension);
-    const output = uniqueOutputPath(exportDir, fileName);
-    const audioOnly = options.format === 'mp3' || options.format === 'wav';
-    let render: ReturnType<typeof buildExportArgs>;
-    try {
-      render = buildExportArgs(project, options, output);
+      const result = await withProjectLock(request.params.projectId, async () => {
+        const project = await readProject(request.params.projectId);
+        if (request.body?.projectRevision !== undefined && request.body.projectRevision !== project.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409 });
+        const exportDir = path.join(projectPath(project.id), 'exports');
+        await ensureDir(exportDir);
+        const options = normalizeExportOptions(project, request.body ?? {});
+        const preflight = await exportPreflight(project, options, exportDir);
+        if (!preflight.ok) return { preflight, job: undefined };
+        const extension = options.format === 'wav' ? 'wav' : options.format === 'mp3' ? 'mp3' : 'mp4';
+        const fileName = safeExportName(project, options.fileName, extension);
+        const output = uniqueOutputPath(exportDir, fileName);
+        const audioOnly = options.format === 'mp3' || options.format === 'wav';
+        const render = buildExportArgs(project, options, output);
+        if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyJobs')), { statusCode: 429 });
+        const job = await makeJob(project.id, 'export', async (jobInfo) => {
+          assertProjectActive(project.id);
+          if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
+          updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
+          jobProgressDuration.set(jobInfo.id, render.duration);
+          await runFfmpeg(render.args, jobInfo, output);
+          assertProjectActive(project.id);
+          jobProgressDuration.delete(jobInfo.id);
+          updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName, format: options.format, phase: 'complete' });
+          updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
+        });
+        updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
+        return { preflight, job };
+      });
+      if (!result.job) return reply.code(400).send({ error: result.preflight.errors.map((item) => item.message).join(' '), preflight: result.preflight });
+      return reply.code(202).send({ job: publicJob(result.job), preflight: result.preflight });
     } catch (error) {
-      return reply.code(400).send({ error: localizedError(error, 'exportPrepareFailed') });
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      const responseCode = [404, 409, 429].includes(statusCode) ? statusCode : 400;
+      return reply.code(responseCode).send({ error: localizedError(error, statusCode === 429 ? 'tooManyJobs' : statusCode === 409 ? 'revisionConflict' : statusCode === 404 ? 'projectNotFound' : 'exportPrepareFailed') });
     }
-    if (activeJobCount() >= maxConcurrentJobs) return reply.code(429).send({ error: message('tooManyJobs') });
-    const job = await makeJob(project.id, 'export', async (jobInfo) => {
-      updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
-      jobProgressDuration.set(jobInfo.id, render.duration);
-      await runFfmpeg(render.args, jobInfo, output);
-      jobProgressDuration.delete(jobInfo.id);
-      updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName, format: options.format, phase: 'complete' });
-      updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
-    });
-    updateJob(job.id, { fileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
-    return reply.code(202).send({ job: publicJob(job), preflight });
   });
 
   app.get<{ Params: { jobId: string } }>('/api/jobs/:jobId/download', async (request, reply) => {

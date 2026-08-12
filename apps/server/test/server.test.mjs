@@ -14,11 +14,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-server-test-'));
 process.env.DATA_DIR = dataDir;
-const { createServer } = await import('../dist/index.js');
+const { createServer, serverTestHooks } = await import('../dist/index.js');
 const { serverT } = await import('../dist/i18n.js');
 const app = await createServer();
 
 after(async () => {
+  serverTestHooks.beforeSave = undefined;
+  serverTestHooks.beforeDerivedWrite = undefined;
   await app.close();
   await fsp.rm(dataDir, { recursive: true, force: true });
 });
@@ -184,10 +186,78 @@ test('project CRUD and revision conflicts work in an isolated data directory', a
   assert.equal(purgedResponse.statusCode, 200);
 });
 
+test('project PATCH and DELETE serialize without recreating the active project', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Patch delete race' })).json();
+  let releaseSave;
+  let enteredSave;
+  const saveEntered = new Promise((resolve) => { enteredSave = resolve; });
+  const release = new Promise((resolve) => { releaseSave = resolve; });
+  serverTestHooks.beforeSave = async (project) => {
+    if (project.id !== created.id || project.name !== 'race-save') return;
+    enteredSave();
+    await release;
+  };
+  let trashId;
+  try {
+    const patchPromise = jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'race-save', revision: 0 });
+    await saveEntered;
+    const deletePromise = app.inject({ method: 'DELETE', url: '/api/projects/' + created.id });
+    releaseSave();
+    const [saveResponse, deleteResponse] = await Promise.all([patchPromise, deletePromise]);
+    assert.equal(saveResponse.statusCode, 200);
+    assert.equal(deleteResponse.statusCode, 200);
+    trashId = deleteResponse.json().trashId;
+    const staleSaveResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'must stay deleted', revision: 0 });
+    assert.equal(staleSaveResponse.statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/projects' })).json().some((project) => project.id === created.id), false);
+    assert.equal((await fsp.stat(path.join(dataDir, 'trash', trashId, 'project.json'))).isFile(), true);
+  } finally {
+    releaseSave?.();
+    serverTestHooks.beforeSave = undefined;
+    if (trashId) await app.inject({ method: 'DELETE', url: '/api/trash/' + trashId });
+  }
+});
 test('unknown projects return a safe not-found response', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/projects/project_does_not_exist' });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error, serverT('en', 'projectNotFound'));
+});
+
+test('derived media jobs are cancelled by DELETE before they can recreate a project', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Derived delete race' })).json();
+  const added = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const asset = added.json().asset;
+  let releaseDerived;
+  let enteredDerived;
+  const derivedEntered = new Promise((resolve) => { enteredDerived = resolve; });
+  const release = new Promise((resolve) => { releaseDerived = resolve; });
+  serverTestHooks.beforeDerivedWrite = async (projectId) => {
+    if (projectId !== created.id) return;
+    enteredDerived();
+    await release;
+  };
+  let trashId;
+  try {
+    const rebuildPromise = jsonRequest('POST', '/api/projects/' + created.id + '/media/' + asset.id + '/rebuild-derived', {});
+    await Promise.race([derivedEntered, new Promise((_, reject) => setTimeout(() => reject(new Error('derived test hook timeout')), 5000))]);
+    const deleteResponse = await app.inject({ method: 'DELETE', url: '/api/projects/' + created.id });
+    assert.equal(deleteResponse.statusCode, 200);
+    trashId = deleteResponse.json().trashId;
+    releaseDerived();
+    const rebuildResponse = await rebuildPromise;
+    assert.equal(rebuildResponse.statusCode, 202);
+    const job = await waitForJob(rebuildResponse.json().job.id);
+    assert.equal(job.status, 'cancelled');
+    assert.equal((await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/projects' })).json().some((project) => project.id === created.id), false);
+    assert.equal((await fsp.stat(path.join(dataDir, 'trash', trashId, 'project.json'))).isFile(), true);
+  } finally {
+    releaseDerived?.();
+    serverTestHooks.beforeDerivedWrite = undefined;
+    if (trashId) await app.inject({ method: 'DELETE', url: '/api/trash/' + trashId });
+  }
 });
 
 test('unknown project duplication returns a safe not-found response', async () => {
@@ -324,6 +394,53 @@ test('stock media is enumerated, copied into a project, and served without path 
   assert.equal(purgedResponse.statusCode, 200);
 });
 
+test('media relink restores the original source when metadata commit fails', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Relink rollback fixture' })).json();
+  const added = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const asset = added.json().asset;
+  const whiteResponse = await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/media/' + asset.id });
+  const blackResponse = await app.inject({ method: 'GET', url: '/api/stock/black' });
+  assert.equal(whiteResponse.statusCode, 200);
+  assert.equal(blackResponse.statusCode, 200);
+  const whiteBytes = Buffer.from(whiteResponse.rawPayload);
+  const blackBytes = Buffer.from(blackResponse.rawPayload);
+  assert.notDeepEqual(whiteBytes, blackBytes);
+  serverTestHooks.beforeSave = async (project) => {
+    if (project.id === created.id && project.assets.some((item) => item.name === 'black.png')) throw new Error('forced relink metadata failure');
+  };
+  const failedMultipart = multipartFile('file', 'black.png', 'image/png', blackBytes);
+  const failedResponse = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + created.id + '/media/' + asset.id + '/relink',
+    headers: { 'content-type': 'multipart/form-data; boundary=' + failedMultipart.boundary },
+    payload: failedMultipart.payload,
+  });
+  assert.equal(failedResponse.statusCode, 400);
+  const afterFailure = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
+  assert.equal(afterFailure.assets[0].name, asset.name);
+  const preservedResponse = await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/media/' + asset.id });
+  assert.deepEqual(Buffer.from(preservedResponse.rawPayload), whiteBytes);
+  const mediaFiles = await fsp.readdir(path.join(dataDir, 'projects', created.id, 'media'));
+  assert.equal(mediaFiles.some((file) => file.endsWith('.backup')), false);
+  serverTestHooks.beforeSave = undefined;
+  const successfulMultipart = multipartFile('file', 'black.png', 'image/png', blackBytes);
+  const successfulResponse = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + created.id + '/media/' + asset.id + '/relink',
+    headers: { 'content-type': 'multipart/form-data; boundary=' + successfulMultipart.boundary },
+    payload: successfulMultipart.payload,
+  });
+  assert.equal(successfulResponse.statusCode, 202);
+  const relinkJob = await waitForJob(successfulResponse.json().job.id);
+  assert.equal(relinkJob.status, 'completed');
+  const relinkedProject = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
+  assert.equal(relinkedProject.assets[0].name, 'black.png');
+  const replacedResponse = await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/media/' + asset.id });
+  assert.deepEqual(Buffer.from(replacedResponse.rawPayload), blackBytes);
+  const deleted = await app.inject({ method: 'DELETE', url: '/api/projects/' + created.id });
+  assert.equal((await app.inject({ method: 'DELETE', url: '/api/trash/' + deleted.json().trashId })).statusCode, 200);
+});
 test('portable project bundles include media and reopen on a clean project directory', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Portable bundle fixture' })).json();
   const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
