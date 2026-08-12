@@ -895,7 +895,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
     const isImage = asset.type === 'image' || clip.type === 'image';
     const wantsVideo = !audioOnly && (clip.type === 'video' || clip.type === 'image') && (asset.type === 'video' || asset.type === 'image');
-    const wantsAudio = asset.hasAudio && (clip.type === 'video' || clip.type === 'audio') && (audioOnly || !trackMuted);
+    const wantsAudio = asset.hasAudio && (clip.type === 'video' || clip.type === 'audio') && !trackMuted;
     if (!wantsVideo && !wantsAudio) continue;
 
     const sourceStart = Math.max(0, numberOr(clip.sourceStart, 0));
@@ -1041,8 +1041,8 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     if (renderedSegments.length > 1) filterLines.push(`${renderedSegments.join('')}concat=n=${renderedSegments.length}:v=0:a=1,asetpts=PTS-STARTPTS${timedAudio}`);
     else filterLines.push(`${renderedSegments[0]}asetpts=PTS-STARTPTS${timedAudio}`);
     const filters: string[] = [];
-    const volume = Math.max(0, Math.min(2, numberOr(clip.volume, 1))) * clamp(trackVolume, 0, 2);
-    const volumeExpression = keyframeExpression(clip, 'volume', volume);
+    const clipVolume = Math.max(0, Math.min(2, numberOr(clip.volume, 1)));
+    const volumeExpression = `(${keyframeExpression(clip, 'volume', clipVolume)})*${ffmpegNumber(clamp(trackVolume, 0, 2))}`;
     if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}`);
     const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
     const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);

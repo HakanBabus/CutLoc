@@ -1225,6 +1225,10 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   });
   const submit = async () => {
     setError('');
+    if (scope === 'range' && (rangeStart === null || rangeEnd === null || rangeEnd <= rangeStart)) {
+      setError('Set a valid In–Out range before exporting this scope.');
+      return;
+    }
     try { setPreflight(await onStart(options())); }
     catch (submitError) { setError(submitError instanceof Error ? submitError.message : t('export.failedToStart')); }
   };
