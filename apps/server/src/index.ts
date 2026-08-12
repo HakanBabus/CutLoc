@@ -505,13 +505,13 @@ function assetFile(projectId: string, asset: Asset) {
   return safeExistingPath(projectPath(projectId), asset.path);
 }
 
-async function replaceMediaWithRollback(sourcePath: string, targetPath: string, commit: () => Promise<void>) {
-  const backupPath = targetPath + '.' + process.pid + '.' + crypto.randomUUID() + '.backup';
+async function replaceMediaWithRollback(sourcePath: string, targetPath: string, commit: () => Promise<void>, previousTargetPath = targetPath) {
+  const backupPath = previousTargetPath + '.' + process.pid + '.' + crypto.randomUUID() + '.backup';
   let oldMoved = false;
   let newMoved = false;
   try {
-    if (fs.existsSync(targetPath)) {
-      await fsp.rename(targetPath, backupPath);
+    if (fs.existsSync(previousTargetPath)) {
+      await fsp.rename(previousTargetPath, backupPath);
       oldMoved = true;
     }
     await fsp.rename(sourcePath, targetPath);
@@ -520,7 +520,7 @@ async function replaceMediaWithRollback(sourcePath: string, targetPath: string, 
     if (oldMoved) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
   } catch (error) {
     if (newMoved || fs.existsSync(targetPath)) await fsp.rm(targetPath, { force: true }).catch(() => undefined);
-    if (oldMoved && fs.existsSync(backupPath)) await fsp.rename(backupPath, targetPath).catch(() => undefined);
+    if (oldMoved && fs.existsSync(backupPath)) await fsp.rename(backupPath, previousTargetPath).catch(() => undefined);
     throw error;
   } finally {
     await fsp.rm(sourcePath, { force: true }).catch(() => undefined);
@@ -1192,6 +1192,16 @@ const mediaExtensionInfo: Record<string, MediaExtensionInfo> = {
 
 const imageProbeFormats = new Set(['png_pipe', 'jpeg_pipe', 'gif', 'webp_pipe', 'bmp_pipe', 'tiff', 'image2', 'image2pipe']);
 const containerProbeFormats = new Set(['wav', 'mp3', 'mp4', 'mov', 'm4a', '3gp', '3g2', 'mj2', 'matroska', 'webm', 'avi', 'ogg', 'oga', 'flac', 'aac', 'image2']);
+const expectedProbeFormats: Record<string, readonly string[]> = {
+  '.png': ['png_pipe'], '.jpg': ['jpeg_pipe'], '.jpeg': ['jpeg_pipe'], '.gif': ['gif'], '.webp': ['webp_pipe'], '.bmp': ['bmp_pipe'], '.tif': ['tiff'], '.tiff': ['tiff'],
+  '.mp3': ['mp3'], '.wav': ['wav'], '.m4a': ['m4a', 'mov', 'mp4'], '.aac': ['aac'], '.ogg': ['ogg'], '.oga': ['ogg', 'oga'], '.flac': ['flac'], '.opus': ['ogg', 'opus'],
+  '.mp4': ['mp4', 'mov'], '.m4v': ['m4v', 'mov', 'mp4'], '.mov': ['mov', 'mp4'], '.mkv': ['matroska', 'webm'], '.webm': ['webm', 'matroska'], '.avi': ['avi'],
+};
+
+function matchesExpectedMediaFormat(extension: string, probed: Record<string, unknown>) {
+  const formats = String(probed.formatName ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return expectedProbeFormats[extension]?.some((format) => formats.includes(format)) ?? false;
+}
 
 function detectedMediaType(probed: Record<string, unknown>): UploadedMediaType | undefined {
   const formats = String(probed.formatName ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
@@ -1558,7 +1568,7 @@ async function registerRoutes(app: FastifyInstance) {
           await ensureDir(path.dirname(uploadAbsolutePath));
           await pipeline(part!.file, fs.createWriteStream(uploadAbsolutePath));
           const probed = await probeMedia(uploadAbsolutePath);
-          if (detectedMediaType(probed) !== expected.type) throw Object.assign(new Error(message('contentMismatch')), { statusCode: 415 });
+          if (detectedMediaType(probed) !== expected.type || !matchesExpectedMediaFormat(extension, probed)) throw Object.assign(new Error(message('contentMismatch')), { statusCode: 415 });
           await fsp.rename(uploadAbsolutePath, absolutePath);
           const stat = await fsp.stat(absolutePath);
           asset = {
@@ -1589,13 +1599,7 @@ async function registerRoutes(app: FastifyInstance) {
           return { asset, project: updated, jobError };
         }
       });
-      if (!result.job) {
-        const jobError = result.jobError;
-        const statusCode = typeof jobError === 'object' && jobError !== null && 'statusCode' in jobError ? Number(jobError.statusCode) : 400;
-        const responseCode = [404, 429].includes(statusCode) ? statusCode : 400;
-        return reply.code(responseCode).send({ asset: result.asset, project: result.project, error: localizedError(jobError, 'derivativesPrepareFailed') });
-      }
-      return reply.code(201).send({ asset: result.asset, job: publicJob(result.job), project: result.project });
+      return reply.code(201).send({ asset: result.asset, ...(result.job ? { job: publicJob(result.job) } : { warning: localizedError(result.jobError, 'derivativesPrepareFailed') }), project: result.project });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
@@ -1649,12 +1653,17 @@ async function registerRoutes(app: FastifyInstance) {
           await ensureDir(path.dirname(uploadPath));
           await pipeline(part!.file, fs.createWriteStream(uploadPath));
           const probed = await probeMedia(uploadPath);
-          if (detectedMediaType(probed) !== expected.type) throw Object.assign(new Error(message('mediaValidationFailed')), { statusCode: 415 });
-          const finalPath = assetFile(current.id, asset);
+          if (detectedMediaType(probed) !== expected.type || !matchesExpectedMediaFormat(extension, probed)) throw Object.assign(new Error(message('mediaValidationFailed')), { statusCode: 415 });
+          const finalRelativePath = path.join('media', asset.id + expected.storedExtension);
+          const finalPath = safeJoin(projectPath(current.id), finalRelativePath);
+          const previousPath = assetFile(current.id, asset);
           let savedAsset: Asset;
           let savedProject: Project;
           const stat = await fsp.stat(uploadPath);
-          const updatedAsset: Asset = { ...asset, name: part!.filename, mimeType: expected.mimeType, size: stat.size, duration: Number(probed.duration ?? 0), width: Number(probed.width ?? 0) || undefined, height: Number(probed.height ?? 0) || undefined, fps: Number(probed.fps ?? 0) || undefined, hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined };
+          const replacementDuration = Number(probed.duration ?? 0);
+          const hasOutOfBoundsSourceRange = replacementDuration > 0 && current.tracks.some((track) => track.clips.some((clip) => clip.assetId === asset.id && clip.sourceStart + clip.sourceDuration > replacementDuration + 0.000001));
+          if (hasOutOfBoundsSourceRange) throw Object.assign(new Error(message('mediaValidationFailed')), { statusCode: 400 });
+          const updatedAsset: Asset = { ...asset, name: part!.filename, path: finalRelativePath, mimeType: expected.mimeType, size: stat.size, duration: replacementDuration, width: Number(probed.width ?? 0) || undefined, height: Number(probed.height ?? 0) || undefined, fps: Number(probed.fps ?? 0) || undefined, hasAudio: Boolean(probed.hasAudio ?? expected.type === 'audio'), proxyPath: undefined, thumbnailPath: undefined, waveformPath: undefined };
           await replaceMediaWithRollback(uploadPath, finalPath, async () => {
             const index = current.assets.findIndex((item) => item.id === asset.id);
             if (index < 0) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
@@ -1662,15 +1671,15 @@ async function registerRoutes(app: FastifyInstance) {
             await saveProject(nextProject);
             savedAsset = updatedAsset;
             savedProject = nextProject;
-          });
-          const job = await queueDerivedMediaJob(current.id, savedAsset!);
-          return { asset: savedAsset!, project: savedProject!, job };
+          }, previousPath);
+          try { return { asset: savedAsset!, project: savedProject!, job: await queueDerivedMediaJob(current.id, savedAsset!) }; }
+          catch (jobError) { return { asset: savedAsset!, project: savedProject!, jobError }; }
         } catch (error) {
           await fsp.rm(uploadPath, { force: true }).catch(() => undefined);
           throw error;
         }
       });
-      return reply.code(202).send({ project: result.project, asset: result.asset, job: publicJob(result.job) });
+      return reply.code(202).send({ project: result.project, asset: result.asset, ...(result.job ? { job: publicJob(result.job) } : { warning: localizedError(result.jobError, 'derivativesOutputFailed') }) });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;

@@ -441,6 +441,30 @@ test('media relink restores the original source when metadata commit fails', asy
   const deleted = await app.inject({ method: 'DELETE', url: '/api/projects/' + created.id });
   assert.equal((await app.inject({ method: 'DELETE', url: '/api/trash/' + deleted.json().trashId })).statusCode, 200);
 });
+
+test('relink validates byte format and updates the stored extension atomically', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Relink format fixture' })).json();
+  const added = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
+  const asset = added.json().asset;
+  const source = Buffer.from((await app.inject({ method: 'GET', url: '/api/projects/' + created.id + '/media/' + asset.id })).rawPayload);
+  const mismatched = multipartFile('file', 'not-really.jpg', 'image/jpeg', source);
+  const rejected = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${asset.id}/relink`, headers: { 'content-type': 'multipart/form-data; boundary=' + mismatched.boundary }, payload: mismatched.payload });
+  assert.equal(rejected.statusCode, 415);
+
+  const jpgPath = path.join(dataDir, 'relink-format.jpg');
+  assert.equal(spawnSync(ffmpegPath, ['-y', '-i', path.join(dataDir, 'projects', created.id, asset.path), '-frames:v', '1', jpgPath], { encoding: 'utf8' }).status, 0);
+  const jpeg = await fsp.readFile(jpgPath);
+  const replacement = multipartFile('file', 'replacement.jpg', 'image/jpeg', jpeg);
+  const response = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${asset.id}/relink`, headers: { 'content-type': 'multipart/form-data; boundary=' + replacement.boundary }, payload: replacement.payload });
+  assert.equal(response.statusCode, 202);
+  if (response.json().job) assert.equal((await waitForJob(response.json().job.id)).status, 'completed');
+  const project = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
+  assert.match(project.assets[0].path, /\.jpg$/);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${created.id}/media/${asset.id}` })).headers['content-type'], 'image/jpeg');
+  await fsp.rm(jpgPath, { force: true });
+  const deleted = await app.inject({ method: 'DELETE', url: '/api/projects/' + created.id });
+  assert.equal((await app.inject({ method: 'DELETE', url: '/api/trash/' + deleted.json().trashId })).statusCode, 200);
+});
 test('portable project bundles include media and reopen on a clean project directory', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Portable bundle fixture' })).json();
   const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
