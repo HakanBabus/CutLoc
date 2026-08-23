@@ -38,6 +38,42 @@ test('dashboard quick cards and advertised editor shortcuts execute their labele
   }
 });
 
+test('an active CLI session makes an open web project read-only and shows its owner', async ({ page, request }) => {
+  const createdResponse = await request.post('/api/projects', { data: { name: `CLI web lock ${Date.now()}` } });
+  expect(createdResponse.ok()).toBeTruthy();
+  const created = await createdResponse.json();
+  let token;
+  let trashId;
+  try {
+    await page.goto('/');
+    await page.locator('article').filter({ hasText: created.name }).getByRole('button').first().click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+
+    const leaseResponse = await request.post(`/api/projects/${created.id}/access`, {
+      data: { ownerId: 'playwright-cli', ownerLabel: 'Playwright AI CLI', client: 'cli', ttlMs: 15_000, force: false },
+    });
+    expect(leaseResponse.ok()).toBeTruthy();
+    token = (await leaseResponse.json()).token;
+    const lock = page.getByRole('alert');
+    await expect(lock).toBeVisible();
+    await expect(lock).toContainText('Playwright AI CLI');
+    await expect(page.locator('.project-name-input').click({ timeout: 1_000 })).rejects.toThrow();
+
+    const blockedSave = await request.patch(`/api/projects/${created.id}`, { data: { name: 'must not save', revision: created.revision } });
+    expect(blockedSave.status()).toBe(423);
+    await request.delete(`/api/projects/${created.id}/access`, { headers: { 'x-cutloc-access-token': token } });
+    token = undefined;
+    await expect(lock).toBeHidden();
+    await page.locator('.project-name-input').fill('Web access returned');
+    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|Tüm değişiklikler kaydedildi/i);
+  } finally {
+    if (token) await request.delete(`/api/projects/${created.id}/access`, { headers: { 'x-cutloc-access-token': token } });
+    const deleted = await request.delete(`/api/projects/${created.id}`);
+    if (deleted.ok()) trashId = (await deleted.json()).trashId;
+    if (trashId) await request.delete(`/api/trash/${trashId}`);
+  }
+});
+
 test('two tabs merge independent edits and surface same-property conflicts', async ({ browser, request }) => {
   test.setTimeout(60_000);
   const fixtureName = `Multi tab conflict ${Date.now()}`;

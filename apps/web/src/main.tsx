@@ -35,6 +35,7 @@ import {
   type CanvasAspect,
   type Clip,
   type Project,
+  type ProjectAccessLease,
   type Settings,
   type ShortcutSettings,
   type Track,
@@ -689,10 +690,53 @@ function Editor({ onBack }: { onBack: () => void }) {
   const [backPending, setBackPending] = useState(false);
   const [exportStatus, setExportStatus] = useState<ExportStatus>({ progress: 0 });
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>({ ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) });
+  const [projectAccess, setProjectAccess] = useState<ProjectAccessLease | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const savePromiseRef = useRef<Promise<void> | null>(null);
   const exportWatchCleanupRef = useRef<(() => void) | null>(null);
+  const projectAccessRef = useRef<ProjectAccessLease | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    const events = new EventSource('/api/events');
+    const applyAccess = (lease: ProjectAccessLease | null) => {
+      if (disposed) return;
+      const wasLocked = Boolean(projectAccessRef.current);
+      projectAccessRef.current = lease;
+      setProjectAccess(lease);
+      if (lease) {
+        if (saveTimerRef.current !== null) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        useEditor.getState().setPlaying(false);
+      } else if (wasLocked) {
+        void api<Project>(`/api/projects/${project.id}`).then(applyServerProject).catch(() => undefined);
+      }
+    };
+    const refresh = () => {
+      void api<{ lease: ProjectAccessLease | null }>(`/api/projects/${project.id}/access`)
+        .then((result) => applyAccess(result.lease))
+        .catch(() => undefined);
+    };
+    const onAccess = (event: Event) => {
+      try {
+        const update = JSON.parse((event as MessageEvent).data) as { projectId?: string; lease?: ProjectAccessLease | null };
+        if (update.projectId === project.id) applyAccess(update.lease ?? null);
+      } catch { /* polling remains available when an event is malformed */ }
+    };
+    events.addEventListener('project-access', onAccess);
+    const poll = window.setInterval(refresh, 3_000);
+    refresh();
+    return () => {
+      disposed = true;
+      window.clearInterval(poll);
+      events.removeEventListener('project-access', onAccess);
+      events.close();
+      projectAccessRef.current = null;
+    };
+  }, [applyServerProject, project.id]);
 
   useEffect(() => {
     if (settings?.workspaceLayout) setWorkspaceLayout({ ...DEFAULT_WORKSPACE_LAYOUT, ...settings.workspaceLayout });
@@ -711,6 +755,7 @@ function Editor({ onBack }: { onBack: () => void }) {
       const beforeSave = useEditor.getState();
       const snapshot = beforeSave.project;
       if (!snapshot) return;
+      if (projectAccessRef.current) throw new Error(t('editor.access.cliCopy', { owner: projectAccessRef.current.ownerLabel }));
       if (beforeSave.localRevision === beforeSave.savedRevision && beforeSave.saveState === 'saved') return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setSaveState('offline');
@@ -762,7 +807,7 @@ function Editor({ onBack }: { onBack: () => void }) {
     return promise;
   }, [acknowledgeSaved, setEditorNotice, setSaveState, t]);
   useEffect(() => {
-    if (!project || saveState !== 'saving' || localRevision === savedRevision) return;
+    if (!project || projectAccess || saveState !== 'saving' || localRevision === savedRevision) return;
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
@@ -774,7 +819,7 @@ function Editor({ onBack }: { onBack: () => void }) {
         saveTimerRef.current = null;
       }
     };
-  }, [localRevision, project, saveProjectNow, saveState, savedRevision]);
+  }, [localRevision, project, projectAccess, saveProjectNow, saveState, savedRevision]);
   useEffect(() => {
     const onOffline = () => setSaveState('offline');
     const onOnline = () => {
@@ -859,6 +904,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (projectAccessRef.current) { event.preventDefault(); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') { event.preventDefault(); setShowCommandPalette((visible) => !visible); return; }
       const tag = (event.target as HTMLElement).tagName;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
@@ -1172,6 +1218,7 @@ function Editor({ onBack }: { onBack: () => void }) {
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
     {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
     <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'offline' ? t('editor.saveOffline') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts')}</span></div>
+    {projectAccess && <div className="cli-access-lock" role="alert" aria-live="assertive"><section><span className="cli-access-badge">CLI</span><h2>{t('editor.access.cliTitle')}</h2><p>{t('editor.access.cliCopy', { owner: projectAccess.ownerLabel })}</p><small>{t('editor.access.cliHint')}</small></section></div>}
     {showCommandPalette && <CommandPalette actions={commandActions} onClose={() => setShowCommandPalette(false)} />}
     {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} />}
     {showExport && <ExportModal project={project} settings={settings} rangeStart={rangeStart} rangeEnd={rangeEnd} exporting={exporting} status={exportStatus} onStart={startExport} onAddFirstAsset={addFirstAssetToTimeline} onClose={() => setShowExport(false)} />}

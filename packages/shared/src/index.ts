@@ -438,6 +438,16 @@ export const ProjectSchema = ProjectBaseSchema.superRefine((project, context) =>
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+export const ProjectAccessLeaseSchema = z.object({
+  projectId: z.string().min(1),
+  ownerId: z.string().min(1).max(120),
+  ownerLabel: z.string().min(1).max(120),
+  client: z.literal('cli'),
+  acquiredAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+});
+export type ProjectAccessLease = z.infer<typeof ProjectAccessLeaseSchema>;
+
 export type VisualLayerPlanItem = { clip: Clip; track: Track; trackIndex: number; stackOrder: number };
 
 /** Shared back-to-front visual ordering for browser preview and FFmpeg export. */

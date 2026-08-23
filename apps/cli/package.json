@@ -1,0 +1,21 @@
+{
+  "name": "@cutloc/cli",
+  "private": true,
+  "version": "0.0.2",
+  "type": "module",
+  "bin": {
+    "cutloc": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@cutloc/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.3"
+  }
+}

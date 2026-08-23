@@ -14,6 +14,7 @@ import {
   adjustmentLayersForVisual,
   ClipSchema,
   ProjectSchema,
+  ProjectAccessLeaseSchema,
   projectDuration,
   playbackTime,
   quantizeFrameTime,
@@ -90,6 +91,15 @@ test('interpolates keyframes with easing', () => {
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 0, 0), 0);
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 2, 0), 1);
   assert.ok(interpolateKeyframes(keyframes, 'opacity', 1, 0) < 0.5);
+});
+
+test('project access leases expose only the public CLI ownership contract', () => {
+  const lease = ProjectAccessLeaseSchema.parse({
+    projectId: 'project_test', ownerId: 'cli_test', ownerLabel: 'Test CLI', client: 'cli',
+    acquiredAt: '2026-08-23T10:00:00.000Z', expiresAt: '2026-08-23T10:00:15.000Z',
+  });
+  assert.equal(lease.client, 'cli');
+  assert.equal(ProjectAccessLeaseSchema.safeParse({ ...lease, client: 'web' }).success, false);
 });
 
 test('rejects broken cross-project references and timeline invariants', () => {

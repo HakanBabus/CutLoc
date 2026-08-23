@@ -49,7 +49,7 @@ It is not:
 - a hosted video platform or collaboration service;
 - a replacement for a production editor with long-term file-format guarantees;
 - a secure public upload or remote-rendering service;
-- an automatic transcription or AI editing product yet.
+- an automatic transcription or built-in hosted AI editing product; provider-neutral local automation is available through the CLI.
 
 ## The editor in practice
 
@@ -108,7 +108,8 @@ Preview changes on the canvas, use the transport controls to move frame by frame
 | MP4, MP3, and WAV export | Available through local FFmpeg; export is re-encoded rather than lossless |
 | Autosave, revision checks, backups, and trash | Available locally |
 | English and Turkish interface | Dictionary-based editor coverage; some legacy labels and copy may still be incomplete |
-| AI editing and automatic transcription | Not part of the current editor scope |
+| Built-in AI editing and automatic transcription | Not part of the current editor scope |
+| Local CLI and AI-tool automation | Available through the loopback API with exclusive project access leases |
 | Hosted or collaborative editing | Not supported |
 
 The exact import/export boundaries and development contracts are kept as internal Codex working notes; they are intentionally not part of the public repository.
@@ -172,12 +173,26 @@ http://127.0.0.1:4173
 | --- | --- |
 | `npm run dev` | Start the Vite interface and local API in development mode |
 | `npm run build` | Build the shared package, web client, and server |
+| `npm run cli -- --help` | Build and open the local CutLoc CLI command reference |
 | `npm test` | Run shared-contract and server integration tests |
 | `npm run verify` | Build everything and run the complete automated test suite |
 | `npm start` | Build and start the production-style local server |
 | `npm audit --omit=dev --audit-level=high` | Check production dependency advisories |
 
 The automated baseline includes Playwright browser regressions through `npm run test:web`; `npm run verify:all` combines build, shared/server tests, and those browser checks. GitHub CI installs Chromium and runs the same browser suite.
+
+## CLI and AI-tool automation
+
+CutLoc includes a local, JSON-first CLI for managing existing projects, applying complete timeline edits, importing media, restoring backups, starting exports, and reaching JSON API routes through a low-level command. Dedicated commands handle multipart uploads, bundles, and binary downloads. Start the local server, then inspect the command surface:
+
+```powershell
+npm.cmd run dev:server
+npm.cmd run cli -- --help
+```
+
+Project-changing commands acquire an exclusive, short-lived project lease. If the project is already open in the browser, the CLI takes control and the web editor shows a read-only warning until the command or session ends. A crashed CLI cannot leave a permanent lock because leases expire without a heartbeat.
+
+Run `npm.cmd run cli -- --help` for AI-oriented `projects apply`, persistent `session`, media, export, recovery, and low-level API examples.
 
 ## Local data
 
@@ -206,7 +221,7 @@ You can change the location with `DATA_DIR` in a local `.env` file. Never commit
 - Do not expose it through a public interface, tunnel, LAN binding, or reverse proxy.
 - Do not commit API keys, personal media, local projects, or exported files.
 - Treat media from unknown sources carefully; FFmpeg processes complex native formats and the current experimental build does not provide a full process sandbox.
-- AI editing and transcription are intentionally outside the current local editor scope.
+- Built-in hosted AI editing and transcription remain outside the current scope; local CLI automation never sends project data to an external provider by itself.
 - GitHub Actions run build, test, and dependency-audit checks; GitHub's Default setup manages CodeQL scanning.
 
 ## Contributing

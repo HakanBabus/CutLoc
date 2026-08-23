@@ -271,6 +271,121 @@ test('cross-origin API mutations are rejected', async () => {
   assert.equal(response.statusCode, 403);
 });
 
+test('CLI access lease force-locks project mutations and releases cleanly', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'CLI lease test' })).json();
+  const accessUrl = `/api/projects/${created.id}/access`;
+  const firstResponse = await jsonRequest('POST', accessUrl, {
+    ownerId: 'cli-test-one', ownerLabel: 'Test CLI one', client: 'cli', ttlMs: 15_000, force: true,
+  });
+  assert.equal(firstResponse.statusCode, 200);
+  const first = firstResponse.json();
+  assert.equal(first.lease.projectId, created.id);
+  assert.equal(first.lease.ownerLabel, 'Test CLI one');
+  assert.equal(typeof first.token, 'string');
+  assert.equal('token' in first.lease, false);
+
+  const publicState = await app.inject({ method: 'GET', url: accessUrl });
+  assert.equal(publicState.statusCode, 200);
+  assert.equal(publicState.json().lease.ownerId, 'cli-test-one');
+  assert.equal(JSON.stringify(publicState.json()).includes(first.token), false);
+
+  const blocked = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'web must wait', revision: 0 });
+  assert.equal(blocked.statusCode, 423);
+  assert.equal(blocked.json().code, 'PROJECT_LOCKED');
+  assert.equal(blocked.json().lease.ownerLabel, 'Test CLI one');
+
+  const allowed = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'CLI edit', revision: 0 }, { 'x-cutloc-access-token': first.token });
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(allowed.json().name, 'CLI edit');
+
+  const refusedTakeover = await jsonRequest('POST', accessUrl, {
+    ownerId: 'cli-test-two', ownerLabel: 'Test CLI two', client: 'cli', force: false,
+  });
+  assert.equal(refusedTakeover.statusCode, 423);
+
+  const forcedTakeover = await jsonRequest('POST', accessUrl, {
+    ownerId: 'cli-test-two', ownerLabel: 'Test CLI two', client: 'cli', force: true,
+  });
+  assert.equal(forcedTakeover.statusCode, 423);
+  const firstRelease = await app.inject({ method: 'DELETE', url: accessUrl, headers: { 'x-cutloc-access-token': first.token } });
+  assert.equal(firstRelease.statusCode, 200);
+  const takeover = await jsonRequest('POST', accessUrl, {
+    ownerId: 'cli-test-two', ownerLabel: 'Test CLI two', client: 'cli', force: false,
+  });
+  assert.equal(takeover.statusCode, 200);
+  const second = takeover.json();
+  assert.notEqual(second.token, first.token);
+  const staleOwner = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'stale CLI', revision: 1 }, { 'x-cutloc-access-token': first.token });
+  assert.equal(staleOwner.statusCode, 423);
+
+  const heartbeat = await jsonRequest('PATCH', accessUrl, { ttlMs: 30_000 }, { 'x-cutloc-access-token': second.token });
+  assert.equal(heartbeat.statusCode, 200);
+  assert.equal(Date.parse(heartbeat.json().lease.expiresAt) > Date.now(), true);
+  const released = await app.inject({ method: 'DELETE', url: accessUrl, headers: { 'x-cutloc-access-token': second.token } });
+  assert.equal(released.statusCode, 200);
+  const afterRelease = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'Web edit resumed', revision: 1 });
+  assert.equal(afterRelease.statusCode, 200);
+
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` });
+});
+
+test('CLI takeover serializes with in-flight saves and rejects web writes queued behind it', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'CLI takeover race' })).json();
+  let releaseSave;
+  let signalSaveEntered;
+  const saveEntered = new Promise((resolve) => { signalSaveEntered = resolve; });
+  const saveGate = new Promise((resolve) => { releaseSave = resolve; });
+  let token;
+  try {
+    serverTestHooks.beforeSave = async (project) => {
+      if (project.id === created.id && project.name === 'in-flight web save') {
+        signalSaveEntered();
+        await saveGate;
+      }
+    };
+    const inFlightSave = jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'in-flight web save', revision: 0 });
+    await saveEntered;
+    let acquireSettled = false;
+    const acquire = jsonRequest('POST', `/api/projects/${created.id}/access`, {
+      ownerId: 'race-cli', ownerLabel: 'Race CLI', client: 'cli', ttlMs: 15_000, force: false,
+    }).then((response) => { acquireSettled = true; return response; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(acquireSettled, false, 'takeover must wait for the in-flight project mutation');
+    const queuedWebSave = jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'must stay blocked', revision: 1 });
+    releaseSave();
+
+    assert.equal((await inFlightSave).statusCode, 200);
+    const acquired = await acquire;
+    assert.equal(acquired.statusCode, 200);
+    token = acquired.json().token;
+    const blocked = await queuedWebSave;
+    assert.equal(blocked.statusCode, 423);
+    const finalProject = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+    assert.equal(finalProject.name, 'in-flight web save');
+  } finally {
+    serverTestHooks.beforeSave = undefined;
+    releaseSave?.();
+    if (token) await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/access`, headers: { 'x-cutloc-access-token': token } });
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+    if (deleted.statusCode === 200) await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` });
+  }
+});
+
+test('concurrent non-force CLI acquisitions yield exactly one owner', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'CLI acquire race' })).json();
+  const body = (ownerId) => ({ ownerId, ownerLabel: ownerId, client: 'cli', ttlMs: 15_000, force: false });
+  const [left, right] = await Promise.all([
+    jsonRequest('POST', `/api/projects/${created.id}/access`, body('left-cli')),
+    jsonRequest('POST', `/api/projects/${created.id}/access`, body('right-cli')),
+  ]);
+  assert.deepEqual([left.statusCode, right.statusCode].sort((a, b) => a - b), [200, 423]);
+  const winner = left.statusCode === 200 ? left.json() : right.json();
+  await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/access`, headers: { 'x-cutloc-access-token': winner.token } });
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` });
+});
+
 test('bracketed IPv6 localhost hosts are accepted', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/health', headers: { host: '[::1]:4173', origin: 'http://[::1]:5173' } });
   assert.equal(response.statusCode, 200);
@@ -803,6 +918,12 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(exportJob.status, 'completed', exportJob.error ?? 'audio export failed');
   const outputPath = exportFilePath(created.id, exportJob.fileName);
   assert.equal((await fsp.stat(outputPath)).size > 0, true);
+  const jobLeaseResponse = await jsonRequest('POST', `/api/projects/${created.id}/access`, { ownerId: 'job-cli', ownerLabel: 'Job CLI', client: 'cli', ttlMs: 15_000, force: false });
+  assert.equal(jobLeaseResponse.statusCode, 200);
+  const jobLeaseToken = jobLeaseResponse.json().token;
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/jobs/${exportJob.id}` })).statusCode, 423);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/jobs/${exportJob.id}`, headers: { 'x-cutloc-access-token': jobLeaseToken } })).statusCode, 200);
+  await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/access`, headers: { 'x-cutloc-access-token': jobLeaseToken } });
   const wavExportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'fixture.wav' });
   assert.equal(wavExportResponse.statusCode, 202);
   const wavExportJob = await waitForJob(wavExportResponse.json().job.id);

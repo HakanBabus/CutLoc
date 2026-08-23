@@ -32,6 +32,7 @@ import {
   type ExportOptions,
   type Job,
   type Project,
+  type ProjectAccessLease,
   type Settings,
 } from '@cutloc/shared';
 
@@ -53,6 +54,8 @@ const maxFfmpegRuntimeMs = boundedNumber(process.env.FFMPEG_TIMEOUT_MS, 30 * 60 
 const maxJobHistory = 200;
 const maxSseClients = 32;
 const maxConcurrentJobs = 2;
+const minAccessLeaseMs = 5_000;
+const maxAccessLeaseMs = 60_000;
 
 type SseClient = { reply: FastifyReply };
 const clients = new Set<SseClient>();
@@ -60,6 +63,8 @@ type InternalJob = Job & { outputPath?: string; absoluteOutputPath?: string; rel
 const jobs = new Map<string, InternalJob>();
 const reservedExportPaths = new Set<string>();
 const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
+type InternalProjectAccessLease = ProjectAccessLease & { token: string };
+const projectAccessLeases = new Map<string, InternalProjectAccessLease>();
 let settings: Settings = defaultSettings();
 const transientKeys = { openai: '', gemini: '' };
 
@@ -206,7 +211,9 @@ const projectLocks = new Map<string, Promise<void>>();
 /** Serialize read/modify/write operations for one project. Proxy generation and
  * editor autosaves can finish at the same time, so the lock must cover the
  * read as well as the final atomic write. */
-async function withProjectLock<T>(projectId: string, task: () => Promise<T>, options: { allowInactive?: boolean } = {}): Promise<T> {
+type ProjectLockOptions = { allowInactive?: boolean; enforceAccess?: boolean; accessToken?: string | string[] };
+
+async function withProjectLock<T>(projectId: string, task: () => Promise<T>, options: ProjectLockOptions = {}): Promise<T> {
   const previous = projectLocks.get(projectId) ?? Promise.resolve();
   const queuedLifecycle = lifecycleFor(projectId);
   let release!: () => void;
@@ -216,11 +223,63 @@ async function withProjectLock<T>(projectId: string, task: () => Promise<T>, opt
   await previous;
   try {
     if (!options.allowInactive) assertProjectActive(projectId, queuedLifecycle.generation);
+    if (options.enforceAccess) assertProjectAccessToken(projectId, options.accessToken);
     return await task();
   } finally {
     release();
     if (projectLocks.get(projectId) === queued) projectLocks.delete(projectId);
   }
+}
+
+function publicAccessLease(lease: InternalProjectAccessLease): ProjectAccessLease {
+  const { token: _token, ...publicLease } = lease;
+  return publicLease;
+}
+
+function activeAccessLease(projectId: string) {
+  const lease = projectAccessLeases.get(projectId);
+  if (!lease) return undefined;
+  if (Date.parse(lease.expiresAt) > Date.now()) return lease;
+  projectAccessLeases.delete(projectId);
+  publish('project-access', { projectId, lease: null });
+  return undefined;
+}
+
+function projectIdFromApiUrl(url: string) {
+  const pathname = url.split('?', 1)[0];
+  const match = pathname.match(/^\/api\/projects\/([A-Za-z0-9_-]+)(?:\/|$)/);
+  return match?.[1];
+}
+
+function isAccessLeaseRoute(url: string) {
+  return /^\/api\/projects\/[A-Za-z0-9_-]+\/access(?:\?|$)/.test(url);
+}
+
+function assertProjectAccess(request: FastifyRequest) {
+  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS' || isAccessLeaseRoute(request.url)) return;
+  const projectId = projectIdFromApiUrl(request.url);
+  if (!projectId) return;
+  const lease = activeAccessLease(projectId);
+  if (!lease || request.headers['x-cutloc-access-token'] === lease.token) return;
+  throw Object.assign(new Error(message('projectLocked', { owner: lease.ownerLabel })), {
+    statusCode: 423,
+    code: 'PROJECT_LOCKED',
+    lease: publicAccessLease(lease),
+  });
+}
+
+function assertProjectAccessToken(projectId: string, token: string | string[] | undefined) {
+  const lease = activeAccessLease(projectId);
+  if (!lease || token === lease.token) return;
+  throw Object.assign(new Error(message('projectLocked', { owner: lease.ownerLabel })), {
+    statusCode: 423,
+    code: 'PROJECT_LOCKED',
+    lease: publicAccessLease(lease),
+  });
+}
+
+function requestProjectLockOptions(request: FastifyRequest): ProjectLockOptions {
+  return { enforceAccess: true, accessToken: request.headers['x-cutloc-access-token'] };
 }
 
 async function loadSettings() {
@@ -1439,17 +1498,85 @@ async function registerRoutes(app: FastifyInstance) {
         const updated = ProjectSchema.parse({ ...current, assets: [...current.assets, asset], updatedAt: new Date().toISOString(), revision: current.revision + 1, duration: projectDuration(current) });
         await saveProject(updated);
         return { asset, project: updated };
-      });
+      }, requestProjectLockOptions(request));
       return reply.code(201).send(result);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'stockAddFailed') });
+      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'stockAddFailed') });
     }
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId', async (request, reply) => {
     try { return await readProject(request.params.projectId); }
     catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+  });
+
+  app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/access', async (request, reply) => {
+    try {
+      await readProject(request.params.projectId);
+      const lease = activeAccessLease(request.params.projectId);
+      return { lease: lease ? publicAccessLease(lease) : null };
+    } catch {
+      return reply.code(404).send({ error: message('projectNotFound') });
+    }
+  });
+
+  app.post<{
+    Params: { projectId: string };
+    Body: { ownerId?: string; ownerLabel?: string; client?: string; ttlMs?: number; force?: boolean };
+  }>('/api/projects/:projectId/access', async (request, reply) => {
+    try {
+      const ownerId = String(request.body?.ownerId ?? '').trim().slice(0, 120);
+      const ownerLabel = String(request.body?.ownerLabel ?? 'CutLoc CLI').trim().slice(0, 120);
+      if (!ownerId || !ownerLabel || request.body?.client !== 'cli') return reply.code(400).send({ error: message('projectSaveFailed') });
+      const result = await withProjectLock(request.params.projectId, async () => {
+        await readProject(request.params.projectId);
+        const current = activeAccessLease(request.params.projectId);
+        if (current) {
+          throw Object.assign(new Error(message('projectLocked', { owner: current.ownerLabel })), { statusCode: 423, code: 'PROJECT_LOCKED', lease: publicAccessLease(current) });
+        }
+        const ttlMs = Math.round(clamp(Number(request.body?.ttlMs) || 15_000, minAccessLeaseMs, maxAccessLeaseMs));
+        const acquiredAt = new Date().toISOString();
+        const lease: InternalProjectAccessLease = {
+          projectId: request.params.projectId,
+          ownerId,
+          ownerLabel,
+          client: 'cli',
+          acquiredAt,
+          expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+          token: crypto.randomBytes(32).toString('base64url'),
+        };
+        projectAccessLeases.set(request.params.projectId, lease);
+        publish('project-access', { projectId: request.params.projectId, lease: publicAccessLease(lease) });
+        return { lease: publicAccessLease(lease), token: lease.token };
+      });
+      return reply.send(result);
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 404;
+      const locked = error as { code?: string; lease?: ProjectAccessLease };
+      if (statusCode === 423) return reply.code(423).send({ error: localizedError(error, 'projectSaveFailed'), code: locked.code, lease: locked.lease });
+      return reply.code(404).send({ error: message('projectNotFound') });
+    }
+  });
+
+  app.patch<{ Params: { projectId: string }; Body: { ttlMs?: number } }>('/api/projects/:projectId/access', async (request, reply) => {
+    const lease = activeAccessLease(request.params.projectId);
+    const token = request.headers['x-cutloc-access-token'];
+    if (!lease || token !== lease.token) return reply.code(404).send({ error: message('projectNotFound') });
+    const ttlMs = Math.round(clamp(Number(request.body?.ttlMs) || 15_000, minAccessLeaseMs, maxAccessLeaseMs));
+    lease.expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    publish('project-access', { projectId: request.params.projectId, lease: publicAccessLease(lease) });
+    return { lease: publicAccessLease(lease) };
+  });
+
+  app.delete<{ Params: { projectId: string } }>('/api/projects/:projectId/access', async (request, reply) => {
+    const lease = activeAccessLease(request.params.projectId);
+    const token = request.headers['x-cutloc-access-token'];
+    if (!lease) return reply.send({ ok: true });
+    if (token !== lease.token) return reply.code(423).send({ error: message('projectLocked', { owner: lease.ownerLabel }), code: 'PROJECT_LOCKED', lease: publicAccessLease(lease) });
+    projectAccessLeases.delete(request.params.projectId);
+    publish('project-access', { projectId: request.params.projectId, lease: null });
+    return reply.send({ ok: true });
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/bundle', async (request, reply) => {
@@ -1497,11 +1624,11 @@ async function registerRoutes(app: FastifyInstance) {
         const next = ProjectSchema.parse({ ...backup, id: current.id, revision: current.revision + 1, updatedAt: new Date().toISOString() });
         await saveProject(next);
         return next;
-      });
+      }, requestProjectLockOptions(request));
       return reply.send(restored);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'backupRestoreFailed') });
+      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'backupRestoreFailed') });
     }
   });
 
@@ -1520,12 +1647,12 @@ async function registerRoutes(app: FastifyInstance) {
         await saveProject(updated);
         await Promise.all(removedAssetFiles.map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
         return updated;
-      });
+      }, requestProjectLockOptions(request));
       return next;
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       const conflictProject = statusCode === 409 && typeof error === 'object' && error !== null && 'project' in error ? error.project : undefined;
-      const responseCode = statusCode === 404 || statusCode === 409 ? statusCode : 400;
+      const responseCode = statusCode === 404 || statusCode === 409 || statusCode === 423 ? statusCode : 400;
       return reply.code(responseCode).send({ error: localizedError(error, responseCode === 404 ? 'projectNotFound' : 'projectSaveFailed'), ...(conflictProject ? { project: conflictProject } : {}) });
     }
   });
@@ -1538,10 +1665,11 @@ async function registerRoutes(app: FastifyInstance) {
         await copyProjectFolder(original.id, duplicated.id);
         await saveProject(duplicated);
         return duplicated;
-      });
+      }, requestProjectLockOptions(request));
       return reply.code(201).send(copy);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : undefined;
+      if (statusCode === 423) return reply.code(423).send({ error: localizedError(error, 'projectCopyFailed') });
       if (statusCode === 404 || (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) return reply.code(404).send({ error: message('projectNotFound') });
       return reply.code(400).send({ error: message('projectCopyFailed') });
     }
@@ -1570,11 +1698,11 @@ async function registerRoutes(app: FastifyInstance) {
         }
         projectLifecycles.set(request.params.projectId, { state: 'deleted', generation: deletingLifecycle.generation });
         return { ok: true, trashId: path.basename(trash) };
-      }, { allowInactive: true });
+      }, { ...requestProjectLockOptions(request), allowInactive: true });
       return result;
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, 'projectNotFound') });
+      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'projectNotFound') });
     }
   });
 
@@ -1638,11 +1766,11 @@ async function registerRoutes(app: FastifyInstance) {
         } catch (jobError) {
           return { asset, project: updated, jobError };
         }
-      });
+      }, requestProjectLockOptions(request));
       return reply.code(201).send({ asset: result.asset, ...(result.job ? { job: publicJob(result.job) } : { warning: localizedError(result.jobError, 'derivativesPrepareFailed') }), project: result.project });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
+      const responseCode = [404, 415, 423, 429].includes(statusCode) ? statusCode : 400;
       return reply.code(responseCode).send({ error: localizedError(error, statusCode === 415 ? 'contentMismatch' : statusCode === 404 ? 'projectNotFound' : 'derivativesPrepareFailed') });
     }
   });
@@ -1667,11 +1795,11 @@ async function registerRoutes(app: FastifyInstance) {
         const asset = project.assets.find((item) => item.id === request.params.assetId);
         if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
         return queueDerivedMediaJob(project.id, asset);
-      });
+      }, requestProjectLockOptions(request));
       return reply.code(202).send({ job: publicJob(job) });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 || statusCode === 429 ? statusCode : 400).send({ error: localizedError(error, 'derivativesRebuildFailed') });
+      return reply.code(statusCode === 404 || statusCode === 423 || statusCode === 429 ? statusCode : 400).send({ error: localizedError(error, 'derivativesRebuildFailed') });
     }
   });
 
@@ -1718,11 +1846,11 @@ async function registerRoutes(app: FastifyInstance) {
           await fsp.rm(uploadPath, { force: true }).catch(() => undefined);
           throw error;
         }
-      });
+      }, requestProjectLockOptions(request));
       return reply.code(202).send({ project: result.project, asset: result.asset, ...(result.job ? { job: publicJob(result.job) } : { warning: localizedError(result.jobError, 'derivativesOutputFailed') }) });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      const responseCode = [404, 415, 429].includes(statusCode) ? statusCode : 400;
+      const responseCode = [404, 415, 423, 429].includes(statusCode) ? statusCode : 400;
       return reply.code(responseCode).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : statusCode === 415 ? 'mediaValidationFailed' : 'derivativesOutputFailed') });
     }
   });
@@ -1738,11 +1866,11 @@ async function registerRoutes(app: FastifyInstance) {
         await saveProject(next);
         await Promise.all([asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath].filter((item): item is string => Boolean(item)).map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
         return next;
-      });
+      }, requestProjectLockOptions(request));
       return reply.send(project);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 ? 404 : 400).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : 'projectSaveFailed') });
+      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : 'projectSaveFailed') });
     }
   });
 
@@ -1789,10 +1917,10 @@ async function registerRoutes(app: FastifyInstance) {
         await ensureDir(exportDir);
         const options = normalizeExportOptions(project, request.body ?? {});
         return exportPreflight(project, options, exportDir);
-      });
+      }, requestProjectLockOptions(request));
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 || statusCode === 409 ? statusCode : 400).send({ error: localizedError(error, 'exportSettingsInvalid') });
+      return reply.code(statusCode === 404 || statusCode === 409 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'exportSettingsInvalid') });
     }
   });
 
@@ -1834,12 +1962,12 @@ async function registerRoutes(app: FastifyInstance) {
           reservedExportPaths.delete(output);
           throw error;
         }
-      });
+      }, requestProjectLockOptions(request));
       if (!result.job) return reply.code(400).send({ error: result.preflight.errors.map((item) => item.message).join(' '), preflight: result.preflight });
       return reply.code(202).send({ job: publicJob(result.job), preflight: result.preflight });
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      const responseCode = [404, 409, 429].includes(statusCode) ? statusCode : 400;
+      const responseCode = [404, 409, 423, 429].includes(statusCode) ? statusCode : 400;
       return reply.code(responseCode).send({ error: localizedError(error, statusCode === 429 ? 'tooManyJobs' : statusCode === 409 ? 'revisionConflict' : statusCode === 404 ? 'projectNotFound' : 'exportPrepareFailed') });
     }
   });
@@ -1870,11 +1998,19 @@ async function registerRoutes(app: FastifyInstance) {
     return publicJob(job);
   });
   app.delete<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
-    if (!jobs.has(request.params.jobId)) return reply.code(404).send({ error: message('jobNotFound') });
-    const process = jobProcesses.get(request.params.jobId);
-    if (process) process.kill();
-    updateJob(request.params.jobId, { status: 'cancelled', message: message('cancelledMessage') });
-    return reply.send({ ok: true });
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.code(404).send({ error: message('jobNotFound') });
+    try {
+      return await withProjectLock(job.projectId, async () => {
+        const process = jobProcesses.get(request.params.jobId);
+        if (process) process.kill();
+        updateJob(request.params.jobId, { status: 'cancelled', message: message('cancelledMessage') });
+        return { ok: true };
+      }, requestProjectLockOptions(request));
+    } catch (error) {
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
+      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'jobNotFound') });
+    }
   });
 
   app.get('/api/events', async (request, reply) => {
@@ -1917,6 +2053,12 @@ export async function createServer() {
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api/') && !isAllowedLocalRequest(request)) {
       return reply.code(403).send({ error: message('localOnly') });
+    }
+    try {
+      assertProjectAccess(request);
+    } catch (error) {
+      const locked = error as { message?: string; code?: string; lease?: ProjectAccessLease };
+      return reply.code(423).send({ error: locked.message ?? message('projectSaveFailed'), code: locked.code ?? 'PROJECT_LOCKED', lease: locked.lease });
     }
   });
   app.addHook('onSend', async (request, reply, payload) => {
