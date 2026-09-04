@@ -3967,3 +3967,547 @@ body {
   opacity: .98;
   transform: scale(1.045);
 }
+
+/* Animation studio v3: a quiet, text-first control surface with one clear
+   selection path. Keep this final block self-contained so the older card
+   experiments above cannot leak into the panel. */
+.app-shell[data-theme] .animation-studio-v3 {
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-studio-heading {
+  align-items: center;
+  gap: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-studio-heading h3 {
+  margin: 1px 0 3px;
+  font-size: 16px;
+  letter-spacing: -.045em;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-studio-heading small {
+  max-width: 205px;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-studio-mark {
+  width: 31px;
+  height: 31px;
+  border-radius: 9px;
+  border-color: color-mix(in srgb, var(--theme-accent) 30%, var(--theme-line));
+  color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent) 7%, var(--theme-panel-soft));
+  box-shadow: none;
+  font-size: 16px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-target-row {
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: var(--theme-panel-soft);
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-target-row strong {
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-target-row small {
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .target-dot.ready {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 12%, transparent);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--theme-line);
+  border-radius: 11px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading > div > span {
+  color: var(--theme-subtle);
+  font: 700 7px 'DM Mono', monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading strong {
+  overflow: hidden;
+  color: var(--theme-text);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading > b {
+  flex: 0 0 auto;
+  color: var(--theme-accent);
+  font: 700 8px 'DM Mono', monospace;
+  text-transform: uppercase;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  overflow: visible;
+  padding: 3px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  background: var(--theme-panel);
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 3px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--theme-muted);
+  background: transparent;
+  text-align: left;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button:hover,
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, var(--theme-line));
+  color: var(--theme-text);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button.active {
+  border-color: transparent;
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs strong {
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs small {
+  display: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid.single {
+  grid-template-columns: 1fr;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 0 0;
+  border: 0;
+  border-top: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid label span {
+  overflow: hidden;
+  color: var(--theme-muted);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid label strong {
+  color: var(--theme-text);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid input {
+  grid-column: 1 / -1;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-preset-section {
+  display: grid;
+  gap: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label {
+  align-items: center;
+  margin-top: 1px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label strong {
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label small {
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label > span {
+  display: grid;
+  place-items: center;
+  min-width: 21px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--theme-line);
+  border-radius: 6px;
+  color: var(--theme-muted);
+  background: var(--theme-panel-soft);
+  font: 700 8px 'DM Mono', monospace;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-category-tabs {
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-category-tabs button {
+  padding: 5px 7px;
+  border: 1px solid var(--theme-line);
+  border-radius: 7px;
+  color: var(--theme-muted);
+  background: transparent;
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-category-tabs button:hover,
+.app-shell[data-theme] .animation-studio-v3 .animation-category-tabs button:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, var(--theme-line));
+  color: var(--theme-text);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-category-tabs button.active {
+  border-color: color-mix(in srgb, var(--theme-accent) 54%, var(--theme-line));
+  color: var(--theme-accent);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-grid {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 57px;
+  padding: 7px 8px;
+  border: 1px solid var(--theme-line);
+  border-left: 2px solid transparent;
+  border-radius: 10px;
+  color: var(--theme-text);
+  background: linear-gradient(105deg, var(--theme-panel-raised), var(--theme-panel));
+  box-shadow: none;
+  text-align: left;
+  transition: border-color .16s, background .16s;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card:hover,
+.app-shell[data-theme] .animation-studio-v3 .animation-card:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-accent) 45%, var(--theme-line));
+  border-left-color: color-mix(in srgb, var(--theme-accent) 70%, var(--theme-line));
+  background: linear-gradient(105deg, color-mix(in srgb, var(--theme-accent) 6%, var(--theme-panel-raised)), var(--theme-panel));
+  box-shadow: none;
+  transform: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card.active {
+  border-color: color-mix(in srgb, var(--theme-accent) 56%, var(--theme-line));
+  border-left-color: var(--theme-accent);
+  background: linear-gradient(105deg, color-mix(in srgb, var(--theme-accent) 11%, var(--theme-panel-raised)), var(--theme-panel));
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual {
+  width: 32px;
+  height: 32px;
+  border-color: color-mix(in srgb, var(--theme-accent) 24%, var(--theme-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--theme-accent) 5%, var(--theme-panel));
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual::before,
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual::after,
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual i {
+  background: linear-gradient(135deg, var(--theme-accent), var(--theme-accent-2));
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual::before {
+  width: 16px;
+  height: 10px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-visual i {
+  width: 10px;
+  height: 2px;
+  bottom: 6px;
+  background: color-mix(in srgb, var(--theme-accent) 58%, white);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-visual-none::before,
+.app-shell[data-theme] .animation-studio-v3 .animation-visual-none::after {
+  width: 17px;
+  height: 1px;
+  background: var(--theme-subtle);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  align-content: center;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy strong,
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy small,
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy strong {
+  color: var(--theme-text);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy small {
+  color: var(--theme-muted);
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card-copy em {
+  color: var(--theme-subtle);
+  font: 7px 'DM Mono', monospace;
+  font-style: normal;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card > b {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--theme-subtle);
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-card.active > b {
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle {
+  min-height: 41px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  border-color: var(--theme-line);
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle:hover,
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle:focus-visible,
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle.active {
+  border-color: color-mix(in srgb, var(--theme-accent) 40%, var(--theme-line));
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle strong {
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle small {
+  margin-top: 2px;
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle > b {
+  color: var(--theme-accent);
+  font-size: 13px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 24%, var(--theme-line));
+  border-radius: 11px;
+  background: var(--theme-panel-soft);
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-heading strong {
+  color: var(--theme-text);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-heading small {
+  color: var(--theme-muted);
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-heading > span {
+  color: var(--theme-accent);
+  font: 700 11px 'DM Mono', monospace;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-fields label {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-fields label > span {
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced select {
+  min-height: 28px;
+  padding: 5px 6px;
+  border-color: var(--theme-line);
+  border-radius: 6px;
+  background: var(--theme-panel);
+  font-size: 8px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-intensity {
+  gap: 4px;
+  padding: 7px 0 0;
+  border: 0;
+  border-top: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-intensity span b {
+  color: var(--theme-accent);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-link-toggle {
+  padding: 1px 0 !important;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-link-toggle span {
+  font-size: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-apply-button {
+  min-height: 30px;
+  border-color: transparent;
+  border-radius: 7px;
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  box-shadow: none;
+  font-size: 8px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-apply-button:hover {
+  filter: brightness(1.04);
+  transform: none;
+}
+
+@media (max-width: 1180px) {
+  .app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    text-align: center;
+  }
+
+  .app-shell[data-theme] .animation-studio-v3 .animation-mode-icon {
+    margin-inline: auto;
+  }
+}
+
+@media (max-width: 240px) {
+  .app-shell[data-theme] .animation-studio-v3 .animation-card-copy em {
+    display: none;
+  }
+
+  .app-shell[data-theme] .animation-studio-v3 .animation-advanced-fields {
+    grid-template-columns: 1fr;
+  }
+}

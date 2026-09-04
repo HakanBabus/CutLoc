@@ -55,6 +55,25 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await page.locator('.timeline-clip').click();
     await page.locator('.tool-rail button').filter({ hasText: /Animation|Animasyon/ }).click();
     await expect(page.locator('.animation-card')).toHaveCount(9);
+    const animationStudio = page.locator('.animation-studio-v3');
+    await expect(animationStudio).toHaveAttribute('data-category', 'all');
+    const animationLayout = await animationStudio.locator('.animation-preset-list').evaluate((list) => ({
+      columns: getComputedStyle(list).gridTemplateColumns.split(' ').filter(Boolean).length,
+      cardColumns: getComputedStyle(list.querySelector('.animation-card')).gridTemplateColumns,
+    }));
+    expect(animationLayout.columns).toBe(1);
+    expect(animationLayout.cardColumns.split(' ').length).toBe(3);
+
+    await page.getByRole('tab', { name: /^(Motion|Hareket)$/i }).click();
+    await expect(page.locator('.animation-card')).toHaveCount(5);
+    await page.getByRole('tab', { name: /^(All|Tümü)$/i }).click();
+    await expect(page.locator('.animation-card')).toHaveCount(9);
+    await page.getByRole('tab', { name: /^(Combo|Karma)$/i }).click();
+    await expect(page.locator('.animation-studio input[type="range"]')).toHaveCount(2);
+    const advancedButton = page.getByRole('button', { name: /Advanced motion|Gelişmiş hareket/ });
+    await expect(advancedButton).toHaveAttribute('aria-controls', 'animation-advanced-controls');
+    await advancedButton.click();
+    await expect(page.locator('#animation-advanced-controls')).toBeVisible();
 
     const compactButtons = page.locator('.theme-switcher.compact button');
     for (const [index, theme] of themes.entries()) {
