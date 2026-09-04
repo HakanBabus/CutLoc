@@ -289,7 +289,6 @@ async function loadSettings() {
     // interface/encoder support existed, while preserving every other setting.
     stored.hardwareAcceleration = 'software';
     stored.experimentalAi = false;
-    stored.shortcuts = defaultSettings().shortcuts;
     settings = SettingsSchema.parse(stored);
   } catch {
     settings = defaultSettings();
@@ -304,7 +303,6 @@ async function saveSettings(next: Partial<Settings> & { openAiKey?: string; gemi
     ...settings,
     ...next,
     experimentalAi: false,
-    shortcuts: defaultSettings().shortcuts,
     hasOpenAiKey: false,
     hasGeminiKey: false,
   });

@@ -398,11 +398,11 @@ test('settings validation returns a client error without leaking a server failur
   assert.equal(validResponse.json().experimentalAi, false);
   assert.equal(validResponse.json().hasOpenAiKey, false);
   assert.equal('openAiKey' in validResponse.json(), false);
-  assert.equal(validResponse.json().shortcuts.split, 'B');
+  assert.equal(validResponse.json().shortcuts.split, 'K');
   assert.equal(validResponse.json().defaultExport.resolution, '1080p');
   assert.equal(validResponse.json().workspaceLayout.libraryWidth, 270);
   const persistedResponse = await app.inject({ method: 'GET', url: '/api/settings' });
-  assert.equal(persistedResponse.json().shortcuts.togglePlayback, 'Space');
+  assert.equal(persistedResponse.json().shortcuts.togglePlayback, 'P');
   const preserveKeyResponse = await jsonRequest('PUT', '/api/settings', { language: 'tr', openAiKey: '' });
   assert.equal(preserveKeyResponse.statusCode, 200);
   assert.equal(preserveKeyResponse.json().hasOpenAiKey, false);

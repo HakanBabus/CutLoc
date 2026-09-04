@@ -4,9 +4,9 @@
   "version": "0.0.2",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/start.ts",
+    "dev": "node --env-file-if-exists=../../.env --import=tsx/esm --watch src/start.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/start.js",
+    "start": "node --env-file-if-exists=../../.env dist/start.js",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

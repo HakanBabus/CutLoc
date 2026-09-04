@@ -2,6 +2,9 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/web',
+  // The local Fastify server and DATA_DIR are shared by browser workers.
+  // Serialize the suite so project/settings fixtures cannot race each other.
+  workers: 1,
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

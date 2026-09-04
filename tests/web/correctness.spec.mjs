@@ -38,6 +38,74 @@ test('dashboard quick cards and advertised editor shortcuts execute their labele
   }
 });
 
+test('custom editor shortcuts are used and persist after reopening the project', async ({ page, request }) => {
+  test.setTimeout(45_000);
+  const fixtureName = `Shortcut persistence ${Date.now()}`;
+  const beforeResponse = await request.get('/api/projects');
+  const beforeIds = new Set(beforeResponse.ok() ? (await beforeResponse.json()).map((project) => project.id) : []);
+  const settingsResponse = await request.get('/api/settings');
+  expect(settingsResponse.ok()).toBeTruthy();
+  const initialSettings = await settingsResponse.json();
+  const baselineSettings = { ...initialSettings, shortcuts: { ...initialSettings.shortcuts, togglePlayback: 'Space' } };
+  let projectId;
+
+  await request.put('/api/settings', { data: baselineSettings });
+  try {
+    await page.goto('/');
+    await page.locator('.primary-button.large').click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+    await page.locator('.project-name-input').fill(fixtureName);
+    await page.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
+
+    await page.locator('.editor-settings').click();
+    await page.locator('.settings-tabs button').filter({ hasText: /Shortcuts|Kısayollar/ }).click();
+    const playbackInput = page.locator('.shortcut-setting-row input').first();
+    await expect(playbackInput).toHaveValue('Space');
+    await playbackInput.fill('P');
+    await page.locator('.settings-modal .primary-button').click();
+    await expect(page.locator('.settings-modal')).toBeHidden();
+
+    const playButton = page.locator('.play-button');
+    await page.locator('.editor-statusbar').click();
+    await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
+    await page.keyboard.press('p');
+    await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
+    await page.keyboard.press('Space');
+    await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
+
+    const persistedSettings = await (await request.get('/api/settings')).json();
+    expect(persistedSettings.shortcuts.togglePlayback).toBe('P');
+    const projects = await (await request.get('/api/projects')).json();
+    projectId = projects.find((project) => !beforeIds.has(project.id))?.id;
+    expect(projectId).toBeTruthy();
+
+    await page.reload();
+    await page.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+    await page.locator('.editor-statusbar').click();
+    await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
+    await page.keyboard.press('Space');
+    await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Play|Oynat/);
+    await page.keyboard.press('p');
+    await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Pause|Duraklat/);
+
+    await page.locator('.editor-settings').click();
+    await page.locator('.settings-tabs button').filter({ hasText: /Shortcuts|Kısayollar/ }).click();
+    await expect(page.locator('.shortcut-setting-row input').first()).toHaveValue('P');
+  } finally {
+    await request.put('/api/settings', { data: initialSettings });
+    if (projectId) {
+      const deletedResponse = await request.delete(`/api/projects/${projectId}`);
+      if (deletedResponse.ok()) {
+        const deleted = await deletedResponse.json();
+        if (deleted.trashId) await request.delete(`/api/trash/${deleted.trashId}`);
+      }
+    }
+  }
+});
+
 test('an active CLI session makes an open web project read-only and shows its owner', async ({ page, request }) => {
   const createdResponse = await request.post('/api/projects', { data: { name: `CLI web lock ${Date.now()}` } });
   expect(createdResponse.ok()).toBeTruthy();
@@ -152,12 +220,12 @@ test('two tabs surface delete-versus-edit conflicts without deleting the saved c
   const contextB = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
   const pageA = await contextA.newPage(); const pageB = await contextB.newPage();
   let projectId;
-  const saved = /All changes saved|T[uÃ¼]m de[gÄŸ]i[ÅŸs]iklikler kaydedildi/i;
+  const saved = /All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i;
   try {
     await pageA.goto('/'); await pageA.locator('.primary-button.large').click();
     await pageA.locator('.project-name-input').fill(fixtureName);
     await pageA.getByRole('tab', { name: /Stock|Stok/ }).click();
-    await pageA.getByRole('button', { name: /White surface|Beyaz y[uÃ¼]zey/ }).click();
+    await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
     projectId = (await (await request.get('/api/projects')).json()).find((project) => project.name === fixtureName)?.id;
     await pageB.goto('/'); await pageB.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
@@ -167,8 +235,8 @@ test('two tabs surface delete-versus-edit conflicts without deleting the saved c
     await scale.fill('1.5'); await scale.press('Tab');
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
     await pageB.locator('.timeline-clip').click({ button: 'right' });
-    await pageB.getByRole('menuitem', { name: /^Delete$/i }).click();
-    await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[Ä±i]/i, { timeout: 10_000 });
+    await pageB.getByRole('menuitem', { name: /Delete/i }).click();
+    await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
     const detail = await (await request.get(`/api/projects/${projectId}`)).json();
     expect(detail.tracks.flatMap((track) => track.clips)).toHaveLength(1);
     expect(detail.tracks.flatMap((track) => track.clips)[0].transform.scale).toBe(1.5);

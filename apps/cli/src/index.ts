@@ -67,11 +67,22 @@ function ensureNoArgs(commandArgs: string[]) {
   if (commandArgs.length) throw new Error(`Unexpected argument: ${commandArgs[0]}`);
 }
 
+function ensureNoOptionArgs(commandArgs: string[]) {
+  const option = commandArgs.find((argument) => argument.startsWith('--'));
+  if (option) throw new Error(`Unexpected argument: ${option}`);
+}
+
 const args = process.argv.slice(2);
-const baseUrl = takeFlag(args, '--url') ?? process.env.CUTLOC_URL ?? 'http://127.0.0.1:4173';
-const compact = takeBooleanFlag(args, '--compact');
-const parsedBaseUrl = new URL(baseUrl);
-if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedBaseUrl.hostname)) throw new Error('CutLoc CLI only connects to a loopback server.');
+let compact = false;
+let parsedBaseUrl!: URL;
+
+function initialize() {
+  const baseUrl = takeFlag(args, '--url') ?? process.env.CUTLOC_URL ?? 'http://127.0.0.1:4173';
+  compact = takeBooleanFlag(args, '--compact');
+  parsedBaseUrl = new URL(baseUrl);
+  if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) throw new Error('CutLoc CLI only connects to HTTP(S) loopback servers.');
+  if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedBaseUrl.hostname)) throw new Error('CutLoc CLI only connects to a loopback server.');
+}
 
 function print(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, compact ? 0 : 2)}\n`);
@@ -208,6 +219,7 @@ async function runSession(projectId: string) {
 }
 
 async function main() {
+  initialize();
   const group = args.shift();
   if (!group || group === 'help' || group === '--help' || group === '-h') {
     process.stdout.write(`${help}\n`);
@@ -246,7 +258,7 @@ async function main() {
   const action = args.shift();
   if (group === 'projects') {
     if (action === 'list') { ensureNoArgs(args); return print(await jsonRequest('/api/projects')); }
-    if (action === 'create') return print(await jsonRequest('/api/projects', 'POST', { name: args.join(' ') || undefined }));
+    if (action === 'create') { ensureNoOptionArgs(args); return print(await jsonRequest('/api/projects', 'POST', { name: args.join(' ') || undefined })); }
     if (action === 'get') {
       const projectId = requireArg(args.shift(), 'project ID');
       const out = takeFlag(args, '--out');

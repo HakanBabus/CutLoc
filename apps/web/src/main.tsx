@@ -159,8 +159,7 @@ function initialTheme(): Theme {
 }
 
 function shortcutValue(settings: Settings | null, action: ShortcutAction) {
-  void settings;
-  return DEFAULT_SHORTCUTS[action];
+  return settings?.shortcuts?.[action] || DEFAULT_SHORTCUTS[action];
 }
 
 function matchesShortcut(event: KeyboardEvent, binding: string) {
@@ -651,8 +650,10 @@ function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: 
   const { t, formatDate } = useI18n();
   const accent = project.canvas.width > project.canvas.height ? 'landscape' : 'portrait';
   const hasTimeline = project.duration > 0;
+  const coverAsset = project.assets.find((asset) => asset.type === 'image') ?? project.assets.find((asset) => asset.type === 'video' && asset.thumbnailPath);
+  const coverUrl = coverAsset ? `/api/projects/${project.id}/media/${coverAsset.id}${coverAsset.thumbnailPath ? '?thumbnail=1' : ''}` : null;
   return <article className="project-card" onDoubleClick={onOpen}>
-    <button className={`project-preview ${accent}`} onClick={onOpen}><div className="preview-grid" /><span className="project-play">▶</span><span className="aspect-tag">{project.canvas.width}:{project.canvas.height}</span></button>
+    <button className={`project-preview ${accent}`} onClick={onOpen}>{coverUrl && <img className="project-preview-media" src={coverUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }} />}<div className="preview-grid" /><span className="project-play">▶</span><span className="aspect-tag">{project.canvas.width}:{project.canvas.height}</span></button>
     <div className="project-card-info"><div><div className="project-card-title"><h3>{project.name}</h3><span className={`project-status ${hasTimeline ? 'ready' : ''}`}>{t(hasTimeline ? 'dashboard.statusEdited' : 'dashboard.statusStarter')}</span></div><p>{formatDate(project.updatedAt, { day: '2-digit', month: 'short' })} · {formatTime(project.duration)} · {project.assets.length} {t('common.media')}</p></div><button className="more-button" onClick={onDelete} title={t('dashboard.moveToTrash')}>•••</button></div>
   </article>;
 }
@@ -1057,9 +1058,9 @@ function Editor({ onBack }: { onBack: () => void }) {
   const ensureProjectSaved = async (): Promise<Project> => {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const state = useEditor.getState();
-      if (!state.project) throw new Error('Proje bulunamad\u0131.');
-      if (state.saveState === 'offline') throw new Error('\u00c7evrimd\u0131\u015f\u0131 ba\u011flant\u0131 varken export ba\u015flat\u0131lamaz.');
-      if (state.saveState === 'error') throw new Error('Export i\u00e7in bekleyen proje kayd\u0131n\u0131 d\u00fczeltin.');
+      if (!state.project) throw new Error(t('editor.projectNotFound'));
+      if (state.saveState === 'offline') throw new Error(t('editor.exportOffline'));
+      if (state.saveState === 'error') throw new Error(t('editor.fixPendingSave'));
       if (state.localRevision !== state.savedRevision) {
         await saveProjectNow();
         continue;
@@ -1067,13 +1068,13 @@ function Editor({ onBack }: { onBack: () => void }) {
       const confirmed = await api<Project>(`/api/projects/${state.project.id}`);
       const latestState = useEditor.getState();
       if (confirmed.revision !== latestState.savedRevision) {
-        if (!latestState.project) throw new Error('Proje bulunamad\u0131.');
+        if (!latestState.project) throw new Error(t('editor.projectNotFound'));
         applyServerProject(confirmed);
         continue;
       }
       return confirmed;
     }
-    throw new Error('Proje kayd\u0131 backend taraf\u0131ndan do\u011frulanamad\u0131.');
+    throw new Error(t('editor.projectSaveVerificationFailed'));
   };
   /* Legacy timeout helper body retained only for reference.
     const deadline = Date.now() + 3500;
@@ -1125,9 +1126,9 @@ function Editor({ onBack }: { onBack: () => void }) {
     };
     const poll = () => {
       if (settled) return;
-      setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export durumu yoklan\u0131yor...' }));
+      setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.polling') }));
       void api<Job>('/api/jobs/' + jobId).then(applyJob).catch(() => {
-        if (!settled) setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export sunucusuna yeniden ba\u011flan\u0131l\u0131yor...' }));
+        if (!settled) setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.serverReconnecting') }));
       }).finally(() => {
         if (!settled) pollTimer = window.setTimeout(poll, 1000);
       });
@@ -1148,7 +1149,7 @@ function Editor({ onBack }: { onBack: () => void }) {
         source?.close();
         source = null;
         reconnectAttempts += 1;
-        setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: 'Export ba\u011flant\u0131s\u0131 yeniden kuruluyor...' }));
+        setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.connectionReconnecting') }));
         if (reconnectAttempts <= 3) {
           reconnectTimer = window.setTimeout(connect, 500 * reconnectAttempts);
         } else {
@@ -1165,7 +1166,7 @@ function Editor({ onBack }: { onBack: () => void }) {
   const startExportResilient = async (options: ExportOptions): Promise<ExportPreflight> => {
     setExporting(true);
     try {
-      setExportStatus({ progress: 0, status: 'saving', message: 'Proje kayd\u0131 backend taraf\u0131ndan do\u011frulan\u0131yor' });
+      setExportStatus({ progress: 0, status: 'saving', message: t('export.verifyingProjectSave') });
       const confirmedProject = await ensureProjectSaved();
       const requestBody = { ...options, projectRevision: confirmedProject.revision };
       setExportStatus({ progress: 0, status: 'preflight', message: t('export.preflightRunning') });
@@ -1207,7 +1208,7 @@ function Editor({ onBack }: { onBack: () => void }) {
     { id: 'text', label: t('command.text'), icon: 'T', run: () => useEditor.getState().setPanel('text') },
     { id: 'animation', label: t('command.animation'), icon: '✧', run: () => useEditor.getState().setPanel('animation') },
     { id: 'project', label: t('command.project'), icon: '◉', run: () => useEditor.getState().setPanel('project') },
-    { id: 'playback', label: t('command.playback'), icon: '▶', shortcut: 'Space', run: () => useEditor.getState().setPlaying(!useEditor.getState().playing) },
+    { id: 'playback', label: t('command.playback'), icon: '▶', shortcut: shortcutValue(settings, 'togglePlayback'), run: () => useEditor.getState().setPlaying(!useEditor.getState().playing) },
     { id: 'export', label: t('command.export'), icon: '↗', shortcut: 'Ctrl+E', run: () => setShowExport(true) },
     { id: 'settings', label: t('command.settings'), icon: '⚙', run: () => setShowSettings(true) },
   ];
@@ -1217,7 +1218,7 @@ function Editor({ onBack }: { onBack: () => void }) {
     <div className="editor-body workspace-layout" style={{ '--workspace-rail-width': `${workspaceLayout.railWidth}px`, '--workspace-library-width': `${workspaceLayout.libraryWidth}px`, '--workspace-inspector-width': `${workspaceLayout.inspectorWidth}px`, '--workspace-timeline-height': `${workspaceLayout.timelineHeight}px` } as React.CSSProperties}><ToolRail onOpenSettings={() => setShowSettings(true)} /><AssetPanelPro onImport={importMedia} onOpenSettings={() => setShowSettings(true)} /><PreviewArea project={project} settings={settings} /><Inspector project={project} /><TimelinePro project={project} /><WorkspaceResizers layout={workspaceLayout} onPreview={setWorkspaceLayout} onCommit={persistWorkspaceLayout} /></div>
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
     {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
-    <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'offline' ? t('editor.saveOffline') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts')}</span></div>
+    <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'offline' ? t('editor.saveOffline') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts', { undo: shortcutValue(settings, 'undo'), togglePlayback: shortcutValue(settings, 'togglePlayback') })}</span></div>
     {projectAccess && <div className="cli-access-lock" role="alert" aria-live="assertive"><section><span className="cli-access-badge">CLI</span><h2>{t('editor.access.cliTitle')}</h2><p>{t('editor.access.cliCopy', { owner: projectAccess.ownerLabel })}</p><small>{t('editor.access.cliHint')}</small></section></div>}
     {showCommandPalette && <CommandPalette actions={commandActions} onClose={() => setShowCommandPalette(false)} />}
     {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} />}
@@ -1273,7 +1274,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const submit = async () => {
     setError('');
     if (scope === 'range' && (rangeStart === null || rangeEnd === null || rangeEnd <= rangeStart)) {
-      setError('Set a valid In–Out range before exporting this scope.');
+      setError(t('export.invalidRange'));
       return;
     }
     try { setPreflight(await onStart(options())); }
@@ -1353,7 +1354,7 @@ function SettingsModal({ settings, onClose }: { settings: Settings | null; onClo
     <div className="setting-row setting-readonly"><span><strong>{t('settings.encoder')}</strong><small>{t('settings.encoderHint')}</small></span><b>H.264 · CPU</b></div>
     <div className="workspace-settings-card"><div><strong>{t('settings.layout')}</strong><small>{t('settings.layoutHint')}</small></div><button type="button" className="shortcut-reset" onClick={() => setForm({ ...form, workspaceLayout: { ...DEFAULT_WORKSPACE_LAYOUT } })}>{t('settings.resetLayout')}</button></div>
   </>;
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="settings-modal"><div className="modal-head"><div><p className="eyebrow">{t('settings.workspace')}</p><h2>{t('settings.title')}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><div className="settings-tabs"><button className={activeTab === 'general' ? 'active' : ''} onClick={() => setActiveTab('general')}>{t('settings.general')}</button><button className={activeTab === 'shortcuts' ? 'active' : ''} onClick={() => setActiveTab('shortcuts')}>{t('settings.shortcuts')}</button></div>{activeTab === 'general' && generalSettings}{activeTab === 'shortcuts' && <div className="shortcut-settings"><div className="settings-intro"><strong>{t('settings.editShortcuts')}</strong><small>{t('settings.shortcutHint')}</small></div>{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => { const label = t(SHORTCUT_LABELS[action].labelKey); return <div className="shortcut-setting-row" key={action}><span><strong>{label}</strong><small>{t(SHORTCUT_LABELS[action].descriptionKey)}</small></span><kbd aria-label={t('settings.shortcutAria', { label })}>{DEFAULT_SHORTCUTS[action]}</kbd></div>; })}</div>}<div className="modal-actions"><span>{status}</span><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" onClick={() => void save()}>{t('common.save')}</button></div></section></div>;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="settings-modal"><div className="modal-head"><div><p className="eyebrow">{t('settings.workspace')}</p><h2>{t('settings.title')}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><div className="settings-tabs"><button className={activeTab === 'general' ? 'active' : ''} onClick={() => setActiveTab('general')}>{t('settings.general')}</button><button className={activeTab === 'shortcuts' ? 'active' : ''} onClick={() => setActiveTab('shortcuts')}>{t('settings.shortcuts')}</button></div>{activeTab === 'general' && generalSettings}{activeTab === 'shortcuts' && <div className="shortcut-settings"><div className="settings-intro"><strong>{t('settings.editShortcuts')}</strong><small>{t('settings.shortcutHint')}</small></div>{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => { const label = t(SHORTCUT_LABELS[action].labelKey); return <label className="shortcut-setting-row" key={action}><span><strong>{label}</strong><small>{t(SHORTCUT_LABELS[action].descriptionKey)}</small></span><input type="text" maxLength={40} autoComplete="off" spellCheck={false} aria-label={t('settings.shortcutAria', { label })} value={form.shortcuts[action]} onChange={(event) => setForm({ ...form, shortcuts: { ...form.shortcuts, [action]: event.target.value } })} /></label>; })}</div>}<div className="modal-actions"><span>{status}</span><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" onClick={() => void save()}>{t('common.save')}</button></div></section></div>;
 }
 
 function panelTitle(panel: Panel): TranslationKey {
@@ -3474,6 +3475,7 @@ function copyClipStyle(clip: Clip) {
 
 function TimelinePro({ project }: { project: Project }) {
   const { t } = useI18n();
+  const settings = useEditor((state) => state.settings);
   const currentTime = useEditor((state) => state.currentTime);
   const setCurrentTime = useEditor((state) => state.setCurrentTime);
   const px = useEditor((state) => state.pxPerSecond);
@@ -3812,7 +3814,7 @@ function TimelinePro({ project }: { project: Project }) {
   };
   const menuItems: ContextMenuItem[] = menu?.kind === 'add-track' ? [{ label: t('timeline.menu.newLayer'), icon: '◫', shortcut: 'Ctrl+Shift+L', onSelect: addTrack }, { label: t('timeline.menu.addAdjustment'), icon: '✦', onSelect: addAdjustmentLayer }] : menu?.kind === 'empty' ? [{ label: t('timeline.menu.newLayerHere'), icon: '◫', shortcut: 'Ctrl+Shift+L', onSelect: () => { if (menu.time !== undefined) setCurrentTime(menu.time); addTrack(); } }, { label: t('timeline.menu.addAdjustmentHere'), icon: '✦', onSelect: () => { if (menu.time !== undefined) setCurrentTime(menu.time); addAdjustmentLayer(); } }, { label: t('timeline.menu.movePlayheadHere'), icon: '⌖', onSelect: () => { if (menu.time !== undefined) setCurrentTime(menu.time); closeMenu(); } }] : menu?.kind === 'clip' && clip ? [
     { label: t('timeline.menu.openProperties'), icon: '⚙', shortcut: 'Enter', onSelect: () => { setSelected(clip.id, menu.trackId ?? null); closeMenu(); } },
-    { label: t('timeline.menu.splitAtPlayhead'), icon: '✂', shortcut: 'B', disabled: currentTime <= clip.start || currentTime >= clip.start + clip.duration, onSelect: () => splitClip(clip.id) },
+    { label: t('timeline.menu.splitAtPlayhead'), icon: '✂', shortcut: shortcutValue(settings, 'split'), disabled: currentTime <= clip.start || currentTime >= clip.start + clip.duration, onSelect: () => splitClip(clip.id) },
     { label: t('timeline.menu.trimStart'), icon: '◁', disabled: currentTime <= clip.start || currentTime >= clip.start + clip.duration, onSelect: () => trimSelectedClipToPlayhead(clip.id, 'start') },
     { label: t('timeline.menu.trimEnd'), icon: '▷', disabled: currentTime <= clip.start || currentTime >= clip.start + clip.duration, onSelect: () => trimSelectedClipToPlayhead(clip.id, 'end') },
     { label: t('timeline.menu.duplicate'), icon: '⧉', onSelect: () => duplicateClip(clip.id) },

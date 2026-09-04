@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD033 MD041 -->
+
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logo" />
   <h1>CutLoc</h1>
@@ -13,124 +15,114 @@
 > [!WARNING]
 > **CutLoc v0.0.2 is experimental software.** Features are still changing, export and preview parity is not guaranteed for every media or effect combination, and project files may not remain compatible with future versions. Keep independent backups of important media and projects. Do not use this build as the only copy of production work.
 
-CutLoc is a single-user video editor that runs on your own computer. It brings a media library, multi-track timeline, live canvas, clip Inspector, text tools, project recovery, and FFmpeg-based export into one local workspace.
+CutLoc is a single-user video editor that runs on your own computer. It combines a media library, multi-track timeline, live canvas, clip **Inspector**, project recovery, and local FFmpeg export in one browser-based workspace.
 
-The product is intentionally small and exploratory: it is a serious engineering playground, not a production platform. The goal is to make the core loop feel useful while keeping the local-first boundary clear.
+The project is intentionally small and exploratory: it is an engineering playground with a useful editing loop, not a hosted production platform.
 
 ![CutLoc dashboard](assets/screenshots/cutloc-dashboard.jpg)
 
-## What CutLoc is — and is not
+## Contents
 
-CutLoc is designed around a simple principle: **your working media and project data stay on your device**. The local server binds to `127.0.0.1` by default and is not intended to be exposed as a public, LAN, hosted, or multi-user service.
+- [What CutLoc does](#what-cutloc-does)
+- [Feature map](#feature-map)
+- [Editor workflow](#editor-workflow)
+- [Project status](#project-status)
+- [Technology](#technology)
+- [Quick start](#quick-start)
+- [CLI and automation](#cli-and-automation)
+- [Local data and configuration](#local-data-and-configuration)
+- [Verification](#verification)
+- [Safety boundaries](#safety-boundaries)
+- [Documentation map](#documentation-map)
+- [Contributing](#contributing)
+- [License](#license)
 
-It is:
+## What CutLoc does
 
-- a local browser interface backed by a Fastify server;
-- a frame-aware editor for arranging video, audio, image, text, and adjustment layers;
-- a local FFmpeg workflow for previews, derived media, and exports;
-- an experimental project for interface and editing-workflow exploration.
+CutLoc is built around a clear local-first boundary:
 
-It includes:
-- **Local-first workspace** — projects, media, proxies, thumbnails, waveforms, backups, and exports are stored locally.
-- **Multi-track timeline** — arrange clips across layers, move them between compatible tracks, trim, split, duplicate, ripple-delete, and snap to useful boundaries.
-- **Frame-aware editing** — move the playhead, markers, and selected clips using project frame precision.
-- **Direct canvas editing** — click a visible text or media object to select the matching timeline clip and Inspector, then position, scale, rotate, flip, or adjust opacity while viewing the result.
-- **Zoomable preview** — fit the canvas to the workspace, zoom in with a compact control, and scroll across the enlarged canvas without losing object selection.
-- **Motion studio** — apply in, out, or combined animation presets, then tune duration, direction, easing, intensity, and linked timing.
-- **Structured Inspector** — edit layout, trim, speed, animation, appearance, filters, crop, masks, keyframes, transitions, audio, and text.
-- **Media library** — import video, audio, and images; search, filter, sort, preview, and drag items onto the timeline.
-- **Creative building blocks** — built-in stock surfaces, shapes inside the Media area, text styles, and adjustment layers.
-- **In-app help center** — searchable, topic-based guidance with shortcuts and direct links to the relevant editor panel.
-- **Flexible workspace** — resize the tool rail, library, Inspector, preview, and timeline; saved layout settings persist locally.
-- **Local export** — render MP4 video or MP3/WAV audio with selectable resolution, frame rate, quality, and range.
-- **Safety-oriented project handling** — autosave, revision checks, backups, a recoverable trash area, and partial-output cleanup.
-It is not:
+- Projects, imported media, derived previews, backups, and exports are stored on the local machine.
+- The API binds to a loopback address by default and is intended for one local user.
+- Editing happens in a browser UI backed by a local Fastify server.
+- Media probing, derived files, previews, and exports use the FFmpeg/ffprobe binaries supplied through the project dependencies.
+- The local CLI uses the same API and validation boundary as the web editor, which makes it suitable for provider-neutral AI-tool automation.
 
-- a hosted video platform or collaboration service;
-- a replacement for a production editor with long-term file-format guarantees;
-- a secure public upload or remote-rendering service;
-- an automatic transcription or built-in hosted AI editing product; provider-neutral local automation is available through the CLI.
+CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. The experimental build also does not promise long-term project-file compatibility or identical browser/FFmpeg output for every codec and effect combination.
 
-## The editor in practice
+## Feature map
 
-The quickest way to understand CutLoc is to follow the work, not the component names.
+| Surface | Current capability |
+| --- | --- |
+| **Dashboard and projects** | Create, open, duplicate, import, recover, and remove local projects; deleted projects can be restored from the local trash area. |
+| **Media library** | Import video, audio, and image files; search, filter, sort, preview, switch between list/card views, inspect media health, rebuild derived files, and drag assets to the timeline. |
+| **Timeline** | Arrange video, overlay, audio, text, and subtitle tracks with frame-aware playhead positioning, markers, snapping, trim, split, move, duplicate, ripple-delete, undo/redo, and track lock/hide/mute controls. |
+| **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, zoom and pan the preview, then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
+| **Motion and building blocks** | Use text presets, an animation studio with in/out controls, direction, easing, intensity, and linked timing; add built-in stock surfaces, shapes, and adjustment layers from the editor. |
+| **Export** | Run local export preflight and render MP4 video or MP3/WAV audio with selectable aspect, resolution, FPS, quality, audio bitrate, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
+| **Recovery and safety** | Autosave, revision checks, backups, recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
 
-### 1. Start a local project
+## Editor workflow
 
-From the dashboard, create a blank project or continue a draft. The workspace keeps project JSON, imported media, proxies, thumbnails, waveforms, backups, and exports under the local `data/` directory.
+### 1. Create a local project
 
-### 2. Bring media in
+From the dashboard, create a blank project or continue a draft. Runtime files live under the local `data/` directory by default.
 
-Use the **Media** area to:
+### 2. Add and organize media
 
-- import video, audio, and image files;
-- search, filter by type or usage, sort, and switch between list and card views;
-- browse built-in stock surfaces and shapes;
-- drag media into the timeline or add it with the card action.
+Open **Media** to import video, audio, or image files. Search and filter the library, preview an asset, or drag it into a compatible timeline track. The **Stock** and **Shapes** shelves provide built-in visual building blocks.
 
-### 3. Cut, trim, and arrange
+### 3. Cut and arrange
 
-Use the **Timeline** to do the practical editing work:
+Use the **Timeline** to trim either edge of a clip, split at the playhead, move clips with frame precision, snap to useful boundaries, add markers, and use undo/redo. Tracks can be added, renamed, reordered, duplicated, locked, hidden, muted, or deleted.
 
-- trim from either edge of a clip;
-- split a selected clip at the playhead;
-- move clips with frame-aware positioning and optional snap;
-- duplicate, ripple-delete, and undo/redo edits;
-- set `I`/`O` range points and place markers;
-- add, rename, reorder, duplicate, lock, hide, mute, or delete tracks.
+### 4. Shape the picture and sound
 
-### 4. Shape what is on screen
+The **Canvas** and **Inspector** work together. Choose `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; select fit, fill, or smart framing; then adjust position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, transitions, motion, keyframes, and text styles.
 
-The **Canvas** and **Inspector** work together. Choose an aspect such as `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; switch between fit, fill, and smart framing; zoom or use safe-area and fullscreen views; then adjust the selected clip’s position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, transitions, motion, and keyframes.
+### 5. Preview, save, and export
 
-### 5. Add text and visual building blocks
-
-The left tool rail exposes **Text**, **Animation**, **Project**, **Help**, and **Settings** surfaces. Text presets can be added to the timeline and edited in the Inspector. Shape presets and adjustment layers keep repeated visual changes manageable; caption and SRT/VTT import are intentionally outside the current editor scope.
-
-### 6. Preview, save, and export
-
-Preview changes on the canvas, use the transport controls to move frame by frame, and export locally as **MP4**, **MP3**, or **WAV**. MP4 export supports aspect, resolution, FPS, quality, audio bitrate, and timeline range choices. Autosave, revision checks, backups, trash recovery, export preflight, and partial-output cleanup are part of the local workflow.
+Use the transport controls and frame-aware playhead to review the edit. Autosave and revision checks protect the local project while you work. When the edit is ready, run export preflight and render locally as **MP4**, **MP3**, or **WAV**.
 
 ![CutLoc editor with media library, canvas, Inspector, and timeline](assets/screenshots/cutloc-editor.jpg)
 
 ## Project status
 
-**Current version: `0.0.2` — experimental.** This version is suitable for local testing, interface exploration, and continued development. Treat every feature below as a practical snapshot of the current checkout, not as a long-term compatibility promise.
+**Current version: `0.0.2` — experimental.** Treat this table as a snapshot of the current checkout, not as a compatibility promise.
 
-| Area | v0.0.2 status |
+| Area | Status in v0.0.2 |
 | --- | --- |
-| Local dashboard and project storage | Available locally |
+| Dashboard, local projects, and project storage | Available locally |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
-| Media search, filtering, sorting, list/card views | Available; imported media also gets derived previews |
+| Media search, filtering, sorting, list/card views, and derived previews | Available locally |
 | Multi-track timeline editing | Available; still evolving |
-| Canvas and Inspector controls | Available; parity varies by media and effect combination |
-| Text, shapes, adjustment layers | Available; still evolving |
-| MP4, MP3, and WAV export | Available through local FFmpeg; export is re-encoded rather than lossless |
-| Autosave, revision checks, backups, and trash | Available locally |
-| English and Turkish interface | Dictionary-based editor coverage; some legacy labels and copy may still be incomplete |
-| Built-in AI editing and automatic transcription | Not part of the current editor scope |
+| Canvas, Inspector, motion, text, shapes, and adjustment layers | Available; parity varies by media and effect combination |
+| MP4, MP3, and WAV export | Available through local FFmpeg; output is re-encoded |
+| Autosave, revision checks, backups, and trash recovery | Available locally |
+| English and Turkish interface | Dictionary-based coverage; some legacy labels and copy may still be incomplete |
 | Local CLI and AI-tool automation | Available through the loopback API with exclusive project access leases |
 | Hosted or collaborative editing | Not supported |
+| Built-in transcription or hosted AI editing | Not part of the current editor scope |
 
-The exact import/export boundaries and development contracts are kept as internal Codex working notes; they are intentionally not part of the public repository.
+The exact import/export boundaries and development contracts are maintained as internal engineering notes; they are intentionally not reproduced in this public README.
 
 ## Technology
 
 - **React 19** and **Vite** for the editor interface
-- **TypeScript** across the client, server, and shared contracts
+- **TypeScript** across the client, server, CLI, and shared contracts
 - **Zustand** and **Immer** for editor state and immutable project updates
 - **Fastify** for the loopback-only local API
 - **Zod** for shared runtime validation
 - **FFmpeg / ffprobe** for probing, proxies, thumbnails, waveforms, and export
+- **Playwright** for browser regression coverage
 - **Node.js 24.x** in continuous integration
 
-## Getting started
+## Quick start
 
 ### Requirements
 
 - Windows 10 or 11 is the current primary target.
 - Node.js 24.x and npm are recommended.
-- A Chromium-based browser is recommended for the current web interface.
+- A Chromium-based browser is recommended for the current web interface and browser tests.
 - FFmpeg and ffprobe are supplied through the project dependencies for the supported local workflow.
 
 ### Clone and install
@@ -147,13 +139,14 @@ npm ci
 npm run dev
 ```
 
-On Windows PowerShell, use `npm.cmd run dev` if the local execution policy blocks the `npm` shim. Then open:
+This starts Vite at `http://127.0.0.1:5173` and the Fastify API at `http://127.0.0.1:4173`. Vite proxies local `/api` requests to the Fastify port.
 
-```text
-http://127.0.0.1:5173
+On Windows PowerShell, use the `.cmd` form if the local execution policy blocks the `npm` shim:
+
+```powershell
+npm.cmd ci
+npm.cmd run dev
 ```
-
-Vite serves the interface on port `5173` and proxies local API requests to Fastify on port `4173`.
 
 ### Run a production-style local build
 
@@ -161,40 +154,61 @@ Vite serves the interface on port `5173` and proxies local API requests to Fasti
 npm start
 ```
 
-Then open:
+This builds all workspaces and starts the local server at `http://127.0.0.1:4173`. On Windows, the server opens the local URL automatically unless `NO_OPEN=1` is set.
 
-```text
-http://127.0.0.1:4173
-```
+The local server started by `npm run dev` and `npm start` loads the optional root `.env` file through Node.js 24's native environment-file support. Existing process environment variables take precedence, and a missing `.env` file is allowed.
 
-## Useful commands
+## CLI and automation
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start the Vite interface and local API in development mode |
-| `npm run build` | Build the shared package, web client, and server |
-| `npm run cli -- --help` | Build and open the local CutLoc CLI command reference |
-| `npm test` | Run shared-contract and server integration tests |
-| `npm run verify` | Build everything and run the complete automated test suite |
-| `npm start` | Build and start the production-style local server |
-| `npm audit --omit=dev --audit-level=high` | Check production dependency advisories |
+CutLoc includes a JSON-first CLI for managing existing projects, applying complete project edits, importing media, restoring backups, starting exports, and accessing supported JSON API routes. It talks to the same local Fastify API as the browser editor; it does not edit `data/projects/.../project.json` directly.
 
-The automated baseline includes Playwright browser regressions through `npm run test:web`; `npm run verify:all` combines build, shared/server tests, and those browser checks. GitHub CI installs Chromium and runs the same browser suite.
-
-## CLI and AI-tool automation
-
-CutLoc includes a local, JSON-first CLI for managing existing projects, applying complete timeline edits, importing media, restoring backups, starting exports, and reaching JSON API routes through a low-level command. Dedicated commands handle multipart uploads, bundles, and binary downloads. Start the local server, then inspect the command surface:
+Start the server first, then inspect the command surface:
 
 ```powershell
 npm.cmd run dev:server
 npm.cmd run cli -- --help
 ```
 
-Project-changing commands acquire an exclusive, short-lived project lease. If the project is already open in the browser, the CLI takes control and the web editor shows a read-only warning until the command or session ends. A crashed CLI cannot leave a permanent lock because leases expire without a heartbeat.
+The default CLI URL is `http://127.0.0.1:4173`. Use `--url` or `CUTLOC_URL` for another loopback URL; the CLI rejects non-loopback hosts.
 
-Run `npm.cmd run cli -- --help` for AI-oriented `projects apply`, persistent `session`, media, export, recovery, and low-level API examples.
+### AI-tool project editing
 
-## Local data
+An AI tool can fetch the current project JSON, edit it locally, and apply it while preserving the server's **revision** value:
+
+```powershell
+npm.cmd run cli -- projects get <project-id> --out project.json
+npm.cmd run cli -- projects apply <project-id> --file project.json
+```
+
+The server validates the complete document with the shared **ProjectSchema**. If another client changed the project first, the apply returns a conflict instead of silently overwriting that work.
+
+For a sequence of JSON operations, use a persistent session:
+
+```powershell
+npm.cmd run cli -- session <project-id>
+```
+
+The session reads one JSON request per stdin line and writes one JSON result per line:
+
+```json
+{"method":"GET","path":"/api/projects/<project-id>"}
+{"method":"PATCH","path":"/api/projects/<project-id>","body":{"name":"Edited locally","revision":3}}
+```
+
+Project-changing commands acquire an exclusive, short-lived project lease. If the project is open in the browser, the CLI can take control and the web editor shows a read-only warning until the command or session ends. A crashed CLI cannot leave a permanent lease because the heartbeat expires.
+
+| Area | Commands |
+| --- | --- |
+| Projects | `projects list/create/get/apply/duplicate/delete/import/bundle` |
+| Media | `media add/remove/relink/rebuild/health/stock` |
+| Recovery | `backups list/restore` and `trash list/restore/delete` |
+| Export | `export preflight/start` and `jobs list/get/cancel/download` |
+| Settings | `settings get/set` |
+| Low-level API | `api <method> </api/path>` |
+
+Use dedicated media and project-bundle commands for uploads and binary files. The generic `api` and `session` commands do not stream the `/api/events` SSE endpoint; use `--out` when downloading a binary response.
+
+## Local data and configuration
 
 By default, runtime files are written to the ignored `data/` directory:
 
@@ -213,26 +227,57 @@ data/
 └── settings.json
 ```
 
-You can change the location with `DATA_DIR` in a local `.env` file. Never commit `.env`, project media, exports, or the `data/` directory.
+Set `DATA_DIR` in a local `.env` file to move this runtime directory. The repository includes an [`.env.example`](.env.example) with the supported local configuration names. Never commit `.env`, API keys, project media, exports, or the `data/` directory.
 
-## Security and privacy
+## Verification
 
-- Keep the server bound to `127.0.0.1`.
-- Do not expose it through a public interface, tunnel, LAN binding, or reverse proxy.
-- Do not commit API keys, personal media, local projects, or exported files.
-- Treat media from unknown sources carefully; FFmpeg processes complex native formats and the current experimental build does not provide a full process sandbox.
-- Built-in hosted AI editing and transcription remain outside the current scope; local CLI automation never sends project data to an external provider by itself.
-- GitHub Actions run build, test, and dependency-audit checks; GitHub's Default setup manages CodeQL scanning.
+Run the focused checks while developing, or use the full baseline before opening a pull request:
+
+| Check | Command | Covers |
+| --- | --- | --- |
+| Build | `npm run build` | Shared package, web client, server, and CLI builds |
+| Shared contract tests | `npm run test:shared` | Zod models, defaults, timeline helpers, and export dimensions |
+| Server integration tests | `npm run test:server` | Local API, project/media/recovery flows, leases, FFmpeg jobs, and export |
+| CLI integration tests | `npm run test:cli` | CLI executable, JSON output, argument validation, sessions, and API routing |
+| All non-browser tests | `npm test` | Shared, server, and CLI tests |
+| Browser regression | `npm run test:web` | Playwright Chromium coverage for dashboard, editor, autosave, conflicts, shortcuts, and CLI lease handoff |
+| Local baseline | `npm run verify` | Build plus `npm test`; browser tests remain separate |
+| Full automated baseline | `npm run verify:all` | Build plus all non-browser and browser tests |
+| Production dependency audit | `npm audit --omit=dev --audit-level=high` | High-or-higher production dependency advisories |
+
+For a full local check in PowerShell:
+
+```powershell
+npm.cmd run verify:all
+npm.cmd audit --omit=dev --audit-level=high
+```
+
+GitHub CI runs the equivalent sequence: locked install, all-workspace build, shared/server/CLI tests, Playwright Chromium installation and browser tests, then the production dependency audit.
+
+## Safety boundaries
+
+- Keep the server on `127.0.0.1` or another loopback address. Do not expose it through a LAN binding, tunnel, reverse proxy, or public interface.
+- CutLoc is local-first, but it is not a full process sandbox. Treat media from unknown sources carefully because FFmpeg processes complex native formats.
+- The local CLI does not start a hosted AI provider or send project data to an external provider by itself. Do not commit API keys or personal media.
+- Export is local and re-encoded. Preview/export parity can vary with codecs, filters, motion, and other effects.
+- Keep independent backups of important projects and media. For vulnerability reports, see the [security policy](SECURITY.md).
+
+## Documentation map
+
+- [CLI guide](docs/CLI.md) — command groups, JSONL sessions, leases, and low-level API boundaries.
+- [Testing baseline](docs/TESTING.md) — focused checks, browser regression scope, fixtures, and CI gates.
+- [Security policy](SECURITY.md) — reporting guidance and deployment boundaries.
 
 ## Contributing
 
 CutLoc is still taking shape. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
 
-Keep changes reviewable by working on a feature branch and opening a pull request instead of pushing directly to `main`:
+Keep changes reviewable by working on a feature branch and opening a pull request:
 
 ```powershell
 git switch -c feat/short-description
-npm run verify
+npm.cmd run verify:all
+npm.cmd audit --omit=dev --audit-level=high
 git add <files>
 git commit -m "Describe the change"
 git push -u origin feat/short-description
