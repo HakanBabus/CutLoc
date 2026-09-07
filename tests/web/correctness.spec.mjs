@@ -266,9 +266,11 @@ test('server refresh cannot resurrect a locally deleted asset', async ({ page, r
     await page.getByRole('tab', { name: /Media 1|Medya 1/ }).click();
     await page.clock.install();
     clockInstalled = true;
-    page.once('dialog', (dialog) => void dialog.accept());
     await page.locator('.asset-item.pro .asset-dots').click();
     await page.getByRole('menuitem', { name: /Remove from project|Projeden kald[ıi]r/ }).click();
+    const removeDialog = page.getByRole('dialog', { name: /Remove from project|Projeden kald[ıi]r/ });
+    await expect(removeDialog).toBeVisible();
+    await removeDialog.getByRole('button', { name: /Remove from project|Projeden kald[ıi]r/ }).click();
     await expect(page.getByRole('tab', { name: /Media 0|Medya 0/ })).toBeVisible();
 
     const current = await (await request.get(`/api/projects/${projectId}`)).json();

@@ -52,7 +52,13 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await page.getByRole('tab', { name: /Stock|Stok/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-    await page.locator('.timeline-clip').click();
+    const timelineClip = page.locator('.timeline-clip');
+    await expect(timelineClip).toHaveAttribute('role', 'button');
+    await page.locator('.timeline-tool').first().click();
+    await expect(timelineClip).toHaveAttribute('aria-pressed', 'false');
+    await timelineClip.focus();
+    await page.keyboard.press('Enter');
+    await expect(timelineClip).toHaveAttribute('aria-pressed', 'true');
     await page.locator('.tool-rail button').filter({ hasText: /Animation|Animasyon/ }).click();
     await expect(page.locator('.animation-card')).toHaveCount(9);
     const animationStudio = page.locator('.animation-studio-v3');

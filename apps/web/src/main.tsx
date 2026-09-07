@@ -44,7 +44,9 @@ import {
 import './styles.css';
 import './preview-redesign.css';
 import './product-refresh.css';
+import './editor/timeline.css';
 import { I18nProvider, translate, useI18n, type TranslationKey } from './i18n';
+import { ConfirmDialog, MessageDialog, PromptDialog } from './components/dialogs';
 
 type Theme = 'dark' | 'gray' | 'light';
 type Panel = 'media' | 'text' | 'project' | 'transitions' | 'effects' | 'color' | 'animation' | 'help';
@@ -339,11 +341,6 @@ const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
  */
 function Glyph({ children }: { children: string }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 
-function ConfirmDialog({ title, message, confirmLabel, onConfirm, onClose }: { title: string; message: string; confirmLabel: string; onConfirm: () => void; onClose: () => void }) {
-  const { t } = useI18n();
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title"><div className="modal-head"><div><p className="eyebrow">{t('confirm.eyebrow')}</p><h2 id="confirm-dialog-title">{title}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><p>{message}</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button danger-button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
-}
-
 type ContextMenuItem = {
   label: string;
   icon?: string;
@@ -389,6 +386,7 @@ function App() {
   const [notice, setNotice] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<Project | null>(null);
+  const [trashAction, setTrashAction] = useState<{ kind: 'restore' | 'purge'; entry: TrashEntry } | null>(null);
   const project = useEditor((state) => state.project);
   const setProject = useEditor((state) => state.setProject);
   const setSettings = useEditor((state) => state.setSettings);
@@ -487,11 +485,6 @@ function App() {
   };
 
 
-/* Legacy requestDelete body retained only for reference.
-    const candidate = projects.find((item) => item.id === id);
-    if (candidate) setDeleteCandidate(candidate);
-*/
-
   const deleteProject = async () => {
     const candidate = deleteCandidate;
     if (!candidate) return;
@@ -506,7 +499,7 @@ function App() {
 
   const restoreTrash = async (trashId: string) => {
     const entry = trash.find((item) => item.trashId === trashId);
-    if (!entry || !window.confirm(t('dashboard.restoreConfirm', { name: entry.name }))) return;
+    if (!entry) return;
     try {
       const restored = await api<Project>('/api/trash/' + encodeURIComponent(trashId) + '/restore', { method: 'POST', body: JSON.stringify({}) });
       setProjects((items) => [restored, ...items]);
@@ -517,7 +510,7 @@ function App() {
 
   const purgeTrash = async (trashId: string) => {
     const entry = trash.find((item) => item.trashId === trashId);
-    if (!entry || !window.confirm(t('dashboard.purgeConfirm', { name: entry.name }))) return;
+    if (!entry) return;
     try {
       await api('/api/trash/' + encodeURIComponent(trashId), { method: 'DELETE' });
       setTrash((items) => items.filter((item) => item.trashId !== trashId));
@@ -546,11 +539,12 @@ function App() {
 
   return <div className="app-shell" data-theme={theme}>
     <div className={viewClass} key={screen}>
-      {screen === 'dashboard' ? <Dashboard projects={projects} trash={trash} loading={loading} onCreate={createProject} onStartWithMedia={startWithMedia} onOpen={openProject} onDelete={requestDeleteProject} onRestoreTrash={restoreTrash} onPurgeTrash={purgeTrash} onSettings={() => setShowSettings(true)} onImportBundle={importBundle} /> : project ? <Editor onBack={returnToDashboard} /> : null}
+      {screen === 'dashboard' ? <Dashboard projects={projects} trash={trash} loading={loading} onCreate={createProject} onStartWithMedia={startWithMedia} onOpen={openProject} onDelete={requestDeleteProject} onRestoreTrash={(trashId) => { const entry = trash.find((item) => item.trashId === trashId); if (entry) setTrashAction({ kind: 'restore', entry }); }} onPurgeTrash={(trashId) => { const entry = trash.find((item) => item.trashId === trashId); if (entry) setTrashAction({ kind: 'purge', entry }); }} onSettings={() => setShowSettings(true)} onImportBundle={importBundle} /> : project ? <Editor onBack={returnToDashboard} /> : null}
     </div>
     {screenTransition !== 'idle' && <div className={`route-transition ${screenTransition === 'enter' ? 'route-transition-enter' : ''}`} aria-hidden="true"><div className="route-transition-orbit"><i /><i /><i /></div><span>{t(screen === 'editor' ? 'route.editor' : 'route.dashboard')}</span></div>}
     {screen === 'dashboard' && showSettings && <SettingsModal settings={useEditor.getState().settings} onClose={() => setShowSettings(false)} />}
     {screen === 'dashboard' && deleteCandidate && <ConfirmDialog title={t('dashboard.confirmTitle')} message={t('dashboard.confirmMessage', { name: deleteCandidate.name })} confirmLabel={t('dashboard.moveToTrash')} onConfirm={() => void deleteProject()} onClose={() => setDeleteCandidate(null)} />}
+    {screen === 'dashboard' && trashAction && <ConfirmDialog title={t(trashAction.kind === 'restore' ? 'common.restore' : 'common.deletePermanently')} message={t(trashAction.kind === 'restore' ? 'dashboard.restoreConfirm' : 'dashboard.purgeConfirm', { name: trashAction.entry.name })} confirmLabel={t(trashAction.kind === 'restore' ? 'common.restore' : 'common.deletePermanently')} danger={trashAction.kind === 'purge'} onConfirm={() => { const action = trashAction; setTrashAction(null); void (action.kind === 'restore' ? restoreTrash(action.entry.trashId) : purgeTrash(action.entry.trashId)); }} onClose={() => setTrashAction(null)} />}
     {notice && <div className="toast toast-error"><Glyph>!</Glyph>{notice}<button onClick={() => setNotice('')}>×</button></div>}
   </div>;
 }
@@ -595,6 +589,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
   const mediaFileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'recent' | 'name'>('recent');
+  const [bundleError, setBundleError] = useState(false);
   const visibleProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase(language === 'tr' ? 'tr-TR' : 'en-US');
     return [...projects]
@@ -609,7 +604,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
       else onImportBundle(file);
     } catch {
       // Keep malformed files out of the API and give the user a useful local error.
-      window.alert(t('dashboard.bundleError'));
+      setBundleError(true);
     }
   };
   return <main key={language} className="dashboard">
@@ -635,6 +630,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
     </section>
     <TrashSection entries={trash} onRestore={onRestoreTrash} onPurge={onPurgeTrash} />
     <footer className="dashboard-footer"><span><i className="status-dot" /> {t('dashboard.dataLocal')}</span><span>CutLoc <b>v0.0.2</b></span></footer>
+    {bundleError && <MessageDialog title={t('dashboard.importFailed')} message={t('dashboard.bundleError')} onClose={() => setBundleError(false)} />}
   </main>;
 }
 
@@ -693,7 +689,6 @@ function Editor({ onBack }: { onBack: () => void }) {
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>({ ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) });
   const [projectAccess, setProjectAccess] = useState<ProjectAccessLease | null>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const saveInFlightRef = useRef(false);
   const savePromiseRef = useRef<Promise<void> | null>(null);
   const exportWatchCleanupRef = useRef<(() => void) | null>(null);
   const projectAccessRef = useRef<ProjectAccessLease | null>(null);
@@ -835,74 +830,6 @@ function Editor({ onBack }: { onBack: () => void }) {
       window.removeEventListener('online', onOnline);
     };
   }, [setSaveState]);
-  /* Legacy autosave body kept only as a migration reference; saveProjectNow above is the live path.
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      if (saveInFlightRef.current) return;
-      const snapshot = useEditor.getState().project;
-      if (!snapshot) return;
-      const beforeSave = useEditor.getState();
-      const keepClipId = beforeSave.selectedClipId;
-      const keepClipIds = beforeSave.selectedClipIds;
-      const keepTrackId = beforeSave.selectedTrackId;
-      const keepTime = beforeSave.currentTime;
-      saveInFlightRef.current = true;
-      void (async () => {
-        try {
-          let candidate = snapshot;
-          let saved: Project | null = null;
-          for (let attempt = 0; attempt < 3 && !saved; attempt += 1) {
-            try {
-              saved = await api<Project>(`/api/projects/${snapshot.id}`, { method: 'PATCH', body: JSON.stringify(candidate) });
-            } catch (error) {
-              if (!(error instanceof ApiError) || error.status !== 409 || attempt >= 2) throw error;
-              const latest = await api<Project>(`/api/projects/${snapshot.id}`);
-              const localAssets = candidate.assets;
-              const mergedAssets = latest.assets.map((serverAsset) => {
-                const localAsset = localAssets.find((asset) => asset.id === serverAsset.id);
-                return localAsset ? { ...localAsset, ...serverAsset } : serverAsset;
-              });
-              mergedAssets.push(...localAssets.filter((asset) => !latest.assets.some((serverAsset) => serverAsset.id === asset.id)));
-              candidate = { ...candidate, assets: mergedAssets, revision: latest.revision };
-            }
-          }
-          if (!saved) throw new Error(t('editor.projectSaveFailed'));
-          const currentProject = useEditor.getState().project;
-          if (currentProject === snapshot) {
-            // A server acknowledgement must not erase the local undo/redo stack.
-            useEditor.getState().acknowledgeSaved(saved, snapshot);
-            const survivingClipIds = keepClipIds.filter((id) => saved!.tracks.some((track) => track.clips.some((clip) => clip.id === id)));
-            if (survivingClipIds.length) useEditor.getState().setSelectedMany(survivingClipIds, keepTrackId);
-            else if (keepClipId && saved.tracks.some((track) => track.clips.some((clip) => clip.id === keepClipId))) useEditor.getState().setSelected(keepClipId, keepTrackId);
-            useEditor.getState().setCurrentTime(keepTime);
-            setEditorNotice('');
-            setSaveState('saved');
-          } else {
-            // A newer local edit arrived while the request was in flight. Keep it
-            // visible and immediately schedule that newer snapshot for saving.
-            setSaveState('saved');
-            setEditorNotice('');
-            window.setTimeout(() => {
-              if (useEditor.getState().project !== saved) useEditor.getState().setSaveState('saving');
-            }, 0);
-          }
-          setSaveState('error');
-          setEditorNotice(t('editor.saveErrorWithReason', { reason: error instanceof Error ? error.message : t('common.saveError') }));
-        } finally {
-          saveInFlightRef.current = false;
-        }
-      })();
-    }, 550);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
-  }, [project, saveState, setEditorNotice, setProject, setSaveState]);
-
-  */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (projectAccessRef.current) { event.preventDefault(); return; }
@@ -1076,15 +1003,6 @@ function Editor({ onBack }: { onBack: () => void }) {
     }
     throw new Error(t('editor.projectSaveVerificationFailed'));
   };
-  /* Legacy timeout helper body retained only for reference.
-    const deadline = Date.now() + 3500;
-    while (useEditor.getState().saveState === 'saving' && Date.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 80));
-    }
-    if (useEditor.getState().saveState === 'error') throw new Error(t('editor.fixPendingSave'));
-  };
-
-  */
   useEffect(() => {
     return () => {
       exportWatchCleanupRef.current?.();
@@ -1317,7 +1235,6 @@ function EditorTopbar({ project, onBack, backPending, onExport, exporting, onSet
   const saveTitle = saveState === 'saved' && saveTime ? t('editor.status.lastSavedAt', { time: saveTime }) : saveLabel;
   return <header className="editor-topbar"><div className="topbar-left"><button className="back-button" disabled={backPending} aria-busy={backPending} onClick={onBack}>&#8249;</button><div className="editor-brand"><div className="mini-mark">CL</div><span>CUTLOC</span></div><div className="topbar-divider" /><input className="project-name-input" value={project.name} onChange={(event) => mutateProject((draft) => { draft.name = event.target.value; })} /></div><div className="topbar-center"><button className="history-button" onClick={undo} title={t('common.undo')}>&#8630;</button><button className="history-button" onClick={redo} title={t('common.redo')}>&#8631;</button><button className="topbar-command-button" onClick={onCommands} title={t('command.open')}><span>&#8981;</span><small>{t('command.title')}</small><kbd>&#8984; K</kbd></button><span className={'save-indicator ' + saveState} title={saveTitle} aria-live="polite"><i className={'status-dot ' + saveState} /> {saveLabel}</span></div><div className="topbar-right"><ThemeSwitcher compact /><button className="export-button" disabled={exporting} onClick={onExport}>{exporting ? t('common.exporting') : t('common.export')} <Glyph>&#8599;</Glyph></button><button className="icon-button editor-settings" onClick={onSettings} title={t('common.settings')}><Glyph>&#9881;</Glyph></button><button className="avatar-button" onClick={onSettings} title={t('common.settings')}>HK</button></div></header>;
 }
-// Legacy topbar body removed during merge; the live topbar is above.
 
 function SettingsModal({ settings, onClose }: { settings: Settings | null; onClose: () => void }) {
   const { t } = useI18n();
@@ -1438,34 +1355,6 @@ function ToolRail({ onOpenSettings }: { onOpenSettings: () => void }) {
   return <aside className="tool-rail" aria-label={t('editor.tools')}><div className="rail-caption">{t('editor.project')}</div><div className="rail-scroll">{tools.map(([key, icon, label]) => <button key={key} className={panel === key ? 'active' : ''} onClick={() => setPanel(key)}><span>{icon}</span><small>{t(label)}</small></button>)}</div><div className="rail-spacer" /><button className="rail-ai" onClick={() => setPanel('help')}><span>?</span><small>{t('editor.panel.help')}</small></button><button onClick={onOpenSettings}><span>⚙</span><small>{t('common.settings')}</small></button></aside>;
 }
 
-function AssetPanel({ onImport }: { onImport: (file: File) => void }) {
-  const { t } = useI18n();
-  const panel = useEditor((state) => state.panel); const project = useEditor((state) => state.project)!;
-  const fileRef = useRef<HTMLInputElement>(null);
-  const addTextClip = (preset: TextPreset) => {
-    const state = useEditor.getState();
-    if (!state.project) return;
-    const project = state.project;
-    const track = project.tracks.find((item) => item.type === 'text') ?? project.tracks[0];
-    const clip = createTextClip(preset, state.currentTime);
-    let targetId = track?.id ?? null;
-    state.mutateProject((draft) => { const target = targetId ? draft.tracks.find((item) => item.id === targetId) : undefined; const destination = target && !target.locked ? target : createLayerTrack(draft); targetId = destination.id; destination.clips.push(clip); draft.duration = projectDuration(draft); });
-    useEditor.getState().setSelected(clip.id, targetId);
-  };
-  const title = t(panelTitle(panel));
-  return <aside className="asset-panel"><div className="panel-heading"><div><p className="eyebrow">Kütüphane</p><h2>{title}</h2></div><button className="panel-more">•••</button></div>{panel === 'media' ? <><button className="import-zone" onClick={() => fileRef.current?.click()}><span className="import-icon">＋</span><strong>Medya içe aktar</strong><small>Video, ses veya görsel seç</small></button><input ref={fileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(file); event.target.value = ''; }} /><div className="asset-filter"><span>Proje medyası</span><span>{project.assets.length}</span></div><div className="asset-list">{project.assets.length === 0 ? <div className="panel-empty"><span>▱</span><p>Henüz medya yok</p><small>Dosyalarını buraya ekle</small></div> : project.assets.map((asset) => <AssetItem key={asset.id} asset={asset} />)}</div></> : <PanelContent panel={panel} onAddText={addTextClip} onImport={onImport} onApplyEffect={() => undefined} onOpenSettings={() => undefined} />}</aside>;
-}
-
-function AssetItem({ asset }: { asset: Asset }) {
-  const icon = asset.type === 'video' ? '▶' : asset.type === 'audio' ? '♫' : '▧';
-  const meta = asset.duration ? formatTime(asset.duration) : asset.mimeType.split('/')[1]?.toUpperCase() || 'MEDIA';
-  return <div className="asset-item"><div className={`asset-thumb ${asset.type}`}><span>{icon}</span><small>{meta}</small></div><div className="asset-info"><strong title={asset.name}>{asset.name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.type}</small></div><button className="asset-dots">•••</button></div>;
-}
-
-/**
- * Asset library UX: importing only registers an asset. A file is inserted into
- * the timeline after the explicit "Add to timeline" action in its menu.
- */
 function mediaTrackType(asset: Asset): Track['type'] { return asset.type === 'audio' ? 'audio' : asset.type === 'image' ? 'overlay' : 'video'; }
 
 const TRACK_TYPE_NAMES: Record<Track['type'], string> = { layer: 'Layer', video: 'Video', overlay: 'Overlay', audio: 'Audio', text: 'Text', subtitle: 'Subtitle' };
@@ -1605,104 +1494,6 @@ function createTextClip(preset: TextPreset, start: number): Clip {
   };
 }
 
-function AssetPanelEnhanced({ onImport, onOpenSettings }: { onImport: (file: File) => void; onOpenSettings: () => void }) {
-  const { t } = useI18n();
-  const panel = useEditor((state) => state.panel);
-  const project = useEditor((state) => state.project)!;
-  const currentTime = useEditor((state) => state.currentTime);
-  const mutateProject = useEditor((state) => state.mutateProject);
-  const setSelected = useEditor((state) => state.setSelected);
-  const setEditorNotice = useEditor((state) => state.setNotice);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [panelMenuOpen, setPanelMenuOpen] = useState(false);
-  const [assetMenuId, setAssetMenuId] = useState<string | null>(null);
-  const [assetSearch, setAssetSearch] = useState('');
-  const [assetFilter, setAssetFilter] = useState<'all' | Asset['type']>('all');
-  const [assetSort, setAssetSort] = useState<'name' | 'date' | 'duration'>('date');
-  const [assetView, setAssetView] = useState<'grid' | 'list'>('list');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; asset: Asset } | null>(null);
-
-  const applyServerProject = useEditor((state) => state.applyServerProject);
-  const refreshProject = async () => {
-    try {
-      const fresh = await api<Project>(`/api/projects/${project.id}`);
-      applyServerProject(normalizeProjectDurations(fresh));
-    } catch {
-      // Keep the current in-memory project when a refresh races with a save.
-    } finally {
-      setPanelMenuOpen(false);
-    }
-  };
-
-  const showAssetInfo = (asset: Asset) => {
-    const dimensions = asset.width && asset.height ? `\nBoyut: ${asset.width} × ${asset.height}` : '';
-    const duration = asset.duration ? `\nSüre: ${formatTime(asset.duration)}` : '';
-    setEditorNotice(`${asset.name} · ${asset.mimeType}${dimensions}${duration} · ${asset.size.toLocaleString('tr-TR')} bayt`);
-    setAssetMenuId(null);
-  };
-
-  const addAssetToTimeline = (asset: Asset) => {
-    const state = useEditor.getState();
-    const currentProject = state.project;
-    if (!currentProject) return;
-    const targetTrack = currentProject.tracks.find((track) => !track.locked);
-    const targetTrackId = targetTrack?.id ?? `track-layer-${crypto.randomUUID().slice(0, 8)}`;
-    const clip = createMediaClip(asset, currentTime);
-    mutateProject((draft) => {
-      let track = draft.tracks.find((item) => item.id === targetTrackId);
-      if (!track) {
-        track = { id: targetTrackId, type: 'layer', name: `Layer ${draft.tracks.length + 1}`, order: draft.tracks.length, clips: [], locked: false, hidden: false, muted: false, volume: 1 };
-        draft.tracks.push(track);
-      }
-      if (track.locked) return;
-      track.clips.push(clip);
-      draft.duration = projectDuration(draft);
-    });
-    setSelected(clip.id, targetTrackId);
-    setAssetMenuId(null);
-  };
-
-  const addTextClip = (preset: TextPreset) => {
-    const state = useEditor.getState();
-    if (!state.project) return;
-    const target = state.project.tracks.find((track) => !track.locked);
-    const clip = createTextClip(preset, state.currentTime);
-    let targetId = target?.id ?? null;
-    mutateProject((draft) => { const track = targetId ? draft.tracks.find((item) => item.id === targetId) : undefined; const targetTrack = track && !track.locked ? track : createLayerTrack(draft); targetId = targetTrack.id; targetTrack.clips.push(clip); draft.duration = projectDuration(draft); });
-    setSelected(clip.id, targetId);
-  };
-
-  const applyEffect = (preset: 'film' | 'retro' | 'glow' | 'blur' | 'chroma' | 'noise') => {
-    const selectedClipId = useEditor.getState().selectedClipId;
-    if (!selectedClipId) {
-      setEditorNotice('Önce timeline üzerinde bir klip seçin.');
-      return;
-    }
-    mutateProject((draft) => {
-      const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === selectedClipId);
-      if (!clip) return;
-      if (preset === 'film') { clip.filters.brightness = -0.05; clip.filters.contrast = 0.12; clip.filters.saturation = -0.1; }
-      if (preset === 'retro') { clip.filters.brightness = 0.04; clip.filters.contrast = 0.08; clip.filters.saturation = -0.22; }
-      if (preset === 'glow') { clip.filters.brightness = 0.1; clip.filters.contrast = 0.04; clip.filters.saturation = 0.16; clip.filters.blur = 1.5; }
-      if (preset === 'blur') clip.filters.blur = 8;
-      if (preset === 'chroma') clip.filters.chromaKey = { color: '#00ff00', similarity: 0.35, blend: 0.1 };
-      if (preset === 'noise') { clip.filters.contrast = 0.12; clip.filters.grayscale = 0.08; }
-    });
-  };
-
-  const title = t(panelTitle(panel));
-  return <aside className="asset-panel" onClick={() => { setPanelMenuOpen(false); setAssetMenuId(null); }}>
-    <div className="panel-heading"><div><p className="eyebrow">Kütüphane</p><h2>{title}</h2></div><div className="panel-menu-wrap"><button className="panel-more" aria-label="Panel menüsü" onClick={(event) => { event.stopPropagation(); setPanelMenuOpen((open) => !open); }}>•••</button>{panelMenuOpen && <div className="floating-menu panel-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => { setPanelMenuOpen(false); fileRef.current?.click(); }}>＋ Dosya içe aktar</button><button onClick={() => { void refreshProject(); }}>⌘ Kütüphaneyi yenile</button><button onClick={() => { setPanelMenuOpen(false); onOpenSettings(); }}>⚙ Panel ayarları</button></div>}</div></div>
-    {panel === 'media' ? <><button className="import-zone" onClick={() => fileRef.current?.click()}><span className="import-icon">＋</span><strong>Medya içe aktar</strong><small>Video, ses veya görsel seç</small></button><input ref={fileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(file); event.target.value = ''; }} /><div className="asset-filter"><span>Proje medyası</span><span>{project.assets.length}</span></div><div className="asset-list">{project.assets.length === 0 ? <div className="panel-empty"><span>▱</span><p>Henüz medya yok</p><small>Dosyalarını buraya ekle</small></div> : project.assets.map((asset) => <AssetItemEnhanced key={asset.id} asset={asset} menuOpen={assetMenuId === asset.id} onToggleMenu={() => setAssetMenuId((open) => open === asset.id ? null : asset.id)} onAddToTimeline={() => addAssetToTimeline(asset)} onShowInfo={() => showAssetInfo(asset)} />)}</div></> : <PanelContent panel={panel} onAddText={addTextClip} onImport={onImport} onApplyEffect={applyEffect} onOpenSettings={onOpenSettings} />}
-  </aside>;
-}
-
-function AssetItemEnhanced({ asset, menuOpen, onToggleMenu, onAddToTimeline, onShowInfo }: { asset: Asset; menuOpen: boolean; onToggleMenu: () => void; onAddToTimeline: () => void; onShowInfo: () => void }) {
-  const icon = asset.type === 'video' ? '▶' : asset.type === 'audio' ? '♫' : '▧';
-  const meta = asset.duration ? formatTime(asset.duration) : asset.mimeType.split('/')[1]?.toUpperCase() || 'MEDIA';
-  return <div className="asset-item" onClick={(event) => event.stopPropagation()}><div className={`asset-thumb ${asset.type}`}><span>{icon}</span><small>{meta}</small></div><div className="asset-info"><strong title={asset.name}>{asset.name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.type}</small></div><div className="asset-menu-wrap"><button className="asset-dots" aria-label={`${asset.name} menüsü`} onClick={onToggleMenu}>•••</button>{menuOpen && <div className="floating-menu asset-menu"><button onClick={onAddToTimeline}>＋ Timeline'a ekle</button><button onClick={() => { void navigator.clipboard?.writeText(asset.name); onToggleMenu(); }}>⧉ Adı kopyala</button><button onClick={onShowInfo}>ⓘ Medya bilgisi</button></div>}</div></div>;
-}
-
 type TransitionPreset = 'none' | 'fade' | 'dissolve' | 'slide' | 'wipe' | 'zoom';
 type AnimationApplyMode = 'in' | 'out' | 'both';
 type TransitionDirection = 'left' | 'right' | 'up' | 'down' | 'center';
@@ -1798,7 +1589,7 @@ function PanelContent({ panel, onAddText, onImport, onApplyEffect, onApplyTransi
     return () => { active = false; };
   }, [panel, project?.id]);
   const restoreBackup = async (fileName: string) => {
-    if (!project || !window.confirm(t('backup.confirm'))) return;
+    if (!project) return;
     try {
       const restored = await api<Project>('/api/projects/' + project.id + '/restore', { method: 'POST', body: JSON.stringify({ fileName }) });
       useEditor.getState().setProject(restored);
@@ -2003,9 +1794,11 @@ function AnimationStudio() {
 
 function ProjectBackupPanel({ backups, onRestore }: { backups: BackupSummary[]; onRestore: (fileName: string) => void }) {
   const { t, formatDate } = useI18n();
+  const [restoreCandidate, setRestoreCandidate] = useState<string | null>(null);
   return <section className="project-backup-panel">
     <div className="project-backup-heading"><div><strong>{t('backup.title')}</strong><small>{t('backup.copy')}</small></div><span>{backups.length}</span></div>
-    {backups.length === 0 ? <p className="project-backup-empty">{t('backup.empty')}</p> : <div className="project-backup-list">{backups.slice(0, 5).map((backup) => <div className="project-backup-item" key={backup.fileName}><div><strong>{formatDate(backup.createdAt, { dateStyle: 'short', timeStyle: 'short' })}</strong><small>{Math.max(1, Math.round(backup.size / 1024))} KB</small></div><button type="button" onClick={() => onRestore(backup.fileName)}>{t('common.restore')}</button></div>)}</div>}
+    {backups.length === 0 ? <p className="project-backup-empty">{t('backup.empty')}</p> : <div className="project-backup-list">{backups.slice(0, 5).map((backup) => <div className="project-backup-item" key={backup.fileName}><div><strong>{formatDate(backup.createdAt, { dateStyle: 'short', timeStyle: 'short' })}</strong><small>{Math.max(1, Math.round(backup.size / 1024))} KB</small></div><button type="button" onClick={() => setRestoreCandidate(backup.fileName)}>{t('common.restore')}</button></div>)}</div>}
+    {restoreCandidate && <ConfirmDialog title={t('backup.title')} message={t('backup.confirm')} confirmLabel={t('common.restore')} danger={false} onConfirm={() => { const fileName = restoreCandidate; setRestoreCandidate(null); onRestore(fileName); }} onClose={() => setRestoreCandidate(null)} />}
   </section>;
 }
 
@@ -2030,6 +1823,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
   const [menu, setMenu] = useState<{ x: number; y: number; asset?: Asset; panel?: boolean } | null>(null);
   const [mediaHealth, setMediaHealth] = useState<Record<string, { status: 'ready' | 'missing' | 'derived-missing'; sourceExists: boolean; proxyExists: boolean; thumbnailExists: boolean; waveformExists: boolean }>>({});
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const [removeCandidate, setRemoveCandidate] = useState<Asset | null>(null);
   const [relinkAssetId, setRelinkAssetId] = useState<string | null>(null);
   const [bulkRebuildBusy, setBulkRebuildBusy] = useState(false);
   const relinkRef = useRef<HTMLInputElement>(null);
@@ -2126,7 +1920,6 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
     }
   };
   const removeAsset = (asset: Asset) => {
-    if (!window.confirm(t('library.removeConfirm'))) { closeMenu(); return; }
     mutateProject((draft) => { draft.assets = draft.assets.filter((item) => item.id !== asset.id); for (const track of draft.tracks) track.clips = track.clips.filter((clip) => clip.assetId !== asset.id); draft.duration = projectDuration(draft); });
     closeMenu();
   };
@@ -2200,7 +1993,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
     { label: t('library.menu.rebuild'), icon: '↻', onSelect: () => { void rebuildDerived(asset); } },
     { label: t('library.menu.relink'), icon: '↪', onSelect: () => { setRelinkAssetId(asset.id); window.setTimeout(() => relinkRef.current?.click(), 0); closeMenu(); } },
     { label: t('library.menu.showUsage'), icon: '⌁', onSelect: () => setNotice(t('library.timelineUsage', { count: usageCount(asset.id) })) },
-    { label: t('library.menu.remove'), icon: '×', danger: true, onSelect: () => removeAsset(asset) },
+    { label: t('library.menu.remove'), icon: '×', danger: true, onSelect: () => { setRemoveCandidate(asset); closeMenu(); } },
   ];
   const addTextClip = (preset: TextPreset) => {
     const state = useEditor.getState();
@@ -2251,6 +2044,7 @@ function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: File) =>
       {mediaSection === 'shapes' && <ShapeShelf onAdd={addTextClip} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.panel ? panelMenuItems : menu.asset ? assetMenuItems(menu.asset) : []} onClose={closeMenu} />}
       {previewAsset && <MediaPreviewModal projectId={project.id} asset={previewAsset} onClose={() => setPreviewAsset(null)} />}
+      {removeCandidate && <ConfirmDialog title={t('library.menu.remove')} message={t('library.removeConfirm')} confirmLabel={t('library.menu.remove')} onConfirm={() => { const asset = removeCandidate; setRemoveCandidate(null); removeAsset(asset); }} onClose={() => setRemoveCandidate(null)} />}
     </aside>;
   }
   return <aside className="asset-panel asset-panel-pro">
@@ -2990,29 +2784,6 @@ function PreviewArea({ project, settings }: { project: Project; settings: Settin
     <div className="preview-controls"><span className="preview-time"><EditableTimecode value={currentTime} duration={project.duration} fps={project.canvas.fps} onChange={setCurrentTime} /> <i>/</i> {formatTime(project.duration, true, project.canvas.fps)}</span><div className="transport-center"><button className="control-button" title={t('preview.previousFrame')} onClick={() => stepFrame(-1)}>↶</button><button className="play-button" aria-label={t(playing ? 'preview.pause' : 'preview.play')} onClick={() => setPlaying(!playing)}>{playing ? 'Ⅱ' : '▶'}</button><button className="control-button" title={t('preview.nextFrame')} onClick={() => stepFrame(1)}>↷</button></div><div className="transport-right"><button className="control-button" title={t('preview.rewind')} onClick={() => { setPlaying(false); setCurrentTime(0); }}>⌁</button><button className="quality-button" onClick={cycleQuality} title={t('preview.quality')}>{t(`settings.previewQuality.${settings?.proxyQuality ?? 'balanced'}` as TranslationKey)}⌄</button></div></div></main>;
 }
 
-function InspectorLegacy({ project }: { project: Project }) {
-  const selectedClipId = useEditor((state) => state.selectedClipId); const currentTime = useEditor((state) => state.currentTime); const mutateProject = useEditor((state) => state.mutateProject); const setSelected = useEditor((state) => state.setSelected);
-  const selected = project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
-  if (!selected) return <aside className="inspector"><div className="inspector-empty"><span>⌖</span><strong>Klip seç</strong><small>Özellikleri düzenlemek için timeline’dan bir klip seç.</small></div></aside>;
-  const update = (recipe: (clip: Clip) => void) => mutateProject((draft) => { const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === selected.id); if (clip) recipe(clip); });
-  const addKeyframe = () => {
-    const localTime = clamp(currentTime - selected.start, 0, selected.duration);
-    mutateProject((draft) => {
-      const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === selected.id);
-      if (!clip) return;
-      const existing = clip.keyframes.find((keyframe) => keyframe.property === 'opacity' && Math.abs(keyframe.time - localTime) < 1 / project.canvas.fps);
-      if (!existing) clip.keyframes.push({ id: `key_${crypto.randomUUID().slice(0, 8)}`, property: 'opacity', time: localTime, value: clip.transform.opacity, easing: 'linear' });
-    });
-  };
-  const keyframeEasing = (easing: Clip['keyframes'][number]['easing']) => easing === 'linear' ? 'ease-in' : easing === 'ease-in' ? 'ease-out' : easing === 'ease-out' ? 'ease-in-out' : 'linear';
-  const opacityKeyframes = selected.keyframes.filter((keyframe) => keyframe.property === 'opacity').sort((a, b) => a.time - b.time);
-  const graphPoints = opacityKeyframes.map((keyframe, index) => {
-    const x = opacityKeyframes.length === 1 ? 90 : (index / (opacityKeyframes.length - 1)) * 180;
-    return `${x},${58 - clamp(keyframe.value, 0, 1) * 48}`;
-  }).join(' ');
-  return <aside className="inspector"><div className="inspector-heading"><div><p className="eyebrow">Inspector</p><h2>{selected.type === 'video' ? 'Video klibi' : selected.type === 'audio' ? 'Ses klibi' : 'Klip'}</h2></div><button onClick={() => setSelected(null, null)} aria-label="Seçimi kaldır">×</button></div><div className="selected-file"><div className={`mini-thumb ${selected.type}`}>{selected.type === 'video' ? '▶' : selected.type === 'audio' ? '♫' : 'T'}</div><div><strong>{selected.name}</strong><small>{formatTime(selected.duration)} · {selected.speed}×</small></div></div><InspectorSection title="Transform"><div className="field-grid"><NumberField label="X" value={selected.transform.x} onChange={(value) => update((clip) => { clip.transform.x = value; })} /><NumberField label="Y" value={selected.transform.y} onChange={(value) => update((clip) => { clip.transform.y = value; })} /><NumberField label="Scale" value={selected.transform.scale} step={0.05} onChange={(value) => update((clip) => { clip.transform.scale = value; })} /><NumberField label="Rotate" value={selected.transform.rotation} onChange={(value) => update((clip) => { clip.transform.rotation = value; })} /></div><div className="field-row"><span>Opacity</span><input type="range" min="0" max="1" step="0.01" value={selected.transform.opacity} onChange={(event) => update((clip) => { clip.transform.opacity = Number(event.target.value); })} /><b>{Math.round(selected.transform.opacity * 100)}%</b></div></InspectorSection><InspectorSection title="Video"><div className="field-row"><span>Hız</span><select value={selected.speed} onChange={(event) => update((clip) => { clip.speed = Number(event.target.value); })}><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="4">4×</option></select></div><div className="field-row"><span>Fit mode</span><select value={selected.transform.fit} onChange={(event) => update((clip) => { clip.transform.fit = event.target.value as Clip['transform']['fit']; })}><option value="contain">Contain</option><option value="cover">Cover</option><option value="stretch">Stretch</option></select></div></InspectorSection><InspectorSection title="Renk"><div className="field-row"><span>Brightness</span><input type="range" min="-1" max="1" step="0.01" value={selected.filters.brightness} onChange={(event) => update((clip) => { clip.filters.brightness = Number(event.target.value); })} /></div><div className="field-row"><span>Contrast</span><input type="range" min="-1" max="1" step="0.01" value={selected.filters.contrast} onChange={(event) => update((clip) => { clip.filters.contrast = Number(event.target.value); })} /></div><div className="field-row"><span>Saturation</span><input type="range" min="-1" max="1" step="0.01" value={selected.filters.saturation} onChange={(event) => update((clip) => { clip.filters.saturation = Number(event.target.value); })} /></div></InspectorSection><button className="add-keyframe" onClick={addKeyframe}>◇ Opacity keyframe ekle</button>{opacityKeyframes.length > 0 && <section className="keyframe-graph"><div className="keyframe-graph-head"><strong>Opacity graph</strong><small>{opacityKeyframes.length} keyframe</small></div><svg viewBox="0 0 180 60" role="img" aria-label="Opacity easing graph"><path d="M0 58H180M0 10H180" /><polyline points={graphPoints} /><>{opacityKeyframes.map((keyframe, index) => <circle key={keyframe.id} cx={opacityKeyframes.length === 1 ? 90 : (index / (opacityKeyframes.length - 1)) * 180} cy={58 - clamp(keyframe.value, 0, 1) * 48} r="3" />)}</></svg><div className="keyframe-easing-list">{opacityKeyframes.map((keyframe) => <button key={keyframe.id} onClick={() => mutateProject((draft) => { const target = draft.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selected.id)?.keyframes.find((item) => item.id === keyframe.id); if (target) target.easing = keyframeEasing(target.easing); })}>{formatTime(keyframe.time)} · {keyframe.easing}</button>)}</div></section>}</aside>;
-}
-
 function Inspector({ project }: { project: Project }) {
   const { t } = useI18n();
   const selectedClipId = useEditor((state) => state.selectedClipId);
@@ -3267,206 +3038,6 @@ function NumberField({ label, value, step = 1, min, max, onChange }: { label: st
 
 const TIMELINE_LABEL_WIDTH = 160;
 
-type TimelineDrag =
-  | { kind: 'clip'; clipId: string; trackId: string; startX: number; start: number }
-  | { kind: 'playhead'; startX: number }
-  | { kind: 'marker'; markerId: string; startX: number; start: number };
-
-function Timeline({ project }: { project: Project }) {
-  const currentTime = useEditor((state) => state.currentTime);
-  const setCurrentTime = useEditor((state) => state.setCurrentTime);
-  const px = useEditor((state) => state.pxPerSecond);
-  const setZoom = useEditor((state) => state.setZoom);
-  const selectedClipId = useEditor((state) => state.selectedClipId);
-  const setSelected = useEditor((state) => state.setSelected);
-  const mutateProject = useEditor((state) => state.mutateProject);
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<TimelineDrag | null>(null);
-  const [trackTypeMenuOpen, setTrackTypeMenuOpen] = useState(false);
-  const [trackMenuId, setTrackMenuId] = useState<string | null>(null);
-  const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
-  const [editingTrackName, setEditingTrackName] = useState('');
-  const [pendingDeleteTrackId, setPendingDeleteTrackId] = useState<string | null>(null);
-
-  const maxTime = Math.max(project.duration + 5, 10);
-  const rulerTicks = Array.from({ length: Math.ceil(maxTime) + 1 }, (_, i) => i)
-    .filter((i) => i % (px < 60 ? 5 : px < 100 ? 2 : 1) === 0);
-  // Timeline coordinates always originate at the ruler/canvas edge, not at the
-  // scroll container edge.  Subtracting the label column fixes the old ~108px
-  // seek offset and keeps seeking correct after horizontal scrolling.
-  const timeFromClientX = (clientX: number) => {
-    const box = timelineRef.current?.getBoundingClientRect();
-    if (!box) return 0;
-    return clamp((clientX - box.left + (timelineRef.current?.scrollLeft ?? 0) - TIMELINE_LABEL_WIDTH) / px, 0, project.duration);
-  };
-  const seekFromEvent = (event: React.MouseEvent<HTMLElement>, clearSelection = true) => {
-    setCurrentTime(timeFromClientX(event.clientX));
-    if (clearSelection) setSelected(null, null);
-  };
-  const seekFromPointer = (event: React.PointerEvent) => setCurrentTime(timeFromClientX(event.clientX));
-
-  const onPointerMove = (event: React.PointerEvent) => {
-    if (!drag) return;
-    if (drag.kind === 'playhead') {
-      seekFromPointer(event);
-      return;
-    }
-    if (drag.kind === 'marker') {
-      const at = Math.round(timeFromClientX(event.clientX) * project.canvas.fps) / project.canvas.fps;
-      mutateProject((draft) => {
-        const marker = draft.markers.find((item) => item.id === drag.markerId);
-        if (marker) marker.time = clamp(at, 0, project.duration);
-      });
-      return;
-    }
-    const delta = (event.clientX - drag.startX) / px;
-    mutateProject((draft) => {
-      const track = draft.tracks.find((item) => item.id === drag.trackId);
-      const clip = track?.clips.find((item) => item.id === drag.clipId);
-      if (clip && !track?.locked) {
-        clip.start = Math.max(0, Math.round((drag.start + delta) * project.canvas.fps) / project.canvas.fps);
-        draft.duration = projectDuration(draft);
-      }
-    });
-  };
-
-  const splitSelected = () => {
-    if (!selectedClipId) return;
-    const at = currentTime;
-    mutateProject((draft) => { splitClipAt(draft, selectedClipId, at); });
-  };
-
-  const addMarker = () => mutateProject((draft) => {
-    const time = Math.round(currentTime * project.canvas.fps) / project.canvas.fps;
-    if (draft.markers.some((marker) => Math.abs(marker.time - time) < 1 / project.canvas.fps)) return;
-    draft.markers.push({ id: `marker_${crypto.randomUUID().slice(0, 8)}`, time, label: `Marker ${draft.markers.length + 1}` });
-  });
-
-  const addTrack = (type: Track['type']) => {
-    mutateProject((draft) => {
-      const index = draft.tracks.length;
-      const names: Record<Track['type'], string> = { layer: 'Layer', video: 'Video', overlay: 'Overlay', audio: 'Audio', text: 'Text', subtitle: 'Subtitle' };
-      draft.tracks.push({ id: `track-${type}-${crypto.randomUUID().slice(0, 8)}`, type, name: `${names[type]} ${index + 1}`, order: index, clips: [], locked: false, hidden: false, muted: false, volume: 1 });
-    });
-    setTrackTypeMenuOpen(false);
-  };
-  const toggleTrack = (trackId: string, field: 'hidden' | 'muted' | 'locked') => mutateProject((draft) => { const track = draft.tracks.find((item) => item.id === trackId); if (track) track[field] = !track[field]; });
-  const renameTrack = (track: Track) => {
-    setEditingTrackId(track.id);
-    setEditingTrackName(track.name);
-    setTrackMenuId(null);
-  };
-  const commitTrackRename = (trackId: string) => {
-    const name = editingTrackName.trim();
-    if (name) mutateProject((draft) => { const item = draft.tracks.find((entry) => entry.id === trackId); if (item) item.name = name; });
-    setEditingTrackId(null);
-  };
-  const duplicateTrack = (track: Track) => {
-    mutateProject((draft) => {
-      const index = draft.tracks.findIndex((item) => item.id === track.id);
-      if (index < 0) return;
-      const copy: Track = { ...track, id: `track-${crypto.randomUUID().slice(0, 8)}`, name: `${track.name} kopya`, order: index + 1, clips: track.clips.map((clip) => ({ ...clip, id: `clip_${crypto.randomUUID().slice(0, 8)}` })) };
-      draft.tracks.splice(index + 1, 0, copy);
-      draft.tracks.forEach((item, i) => { item.order = i; });
-    });
-    setTrackMenuId(null);
-  };
-  const moveTrack = (track: Track, direction: -1 | 1) => {
-    mutateProject((draft) => {
-      const index = draft.tracks.findIndex((item) => item.id === track.id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= draft.tracks.length) return;
-      [draft.tracks[index], draft.tracks[target]] = [draft.tracks[target], draft.tracks[index]];
-      draft.tracks.forEach((item, i) => { item.order = i; });
-    });
-    setTrackMenuId(null);
-  };
-  const deleteTrack = (track: Track) => {
-    setPendingDeleteTrackId(track.id);
-    setTrackMenuId(null);
-  };
-  const confirmDeleteTrack = () => {
-    const trackId = pendingDeleteTrackId;
-    if (!trackId) return;
-    mutateProject((draft) => { draft.tracks = draft.tracks.filter((item) => item.id !== trackId); draft.tracks.forEach((item, i) => { item.order = i; }); draft.duration = projectDuration(draft); });
-    setPendingDeleteTrackId(null);
-    setSelected(null, null);
-  };
-  const markerPointerDown = (event: React.PointerEvent<HTMLButtonElement>, marker: { id: string; time: number }) => {
-    event.stopPropagation();
-    setCurrentTime(marker.time);
-    setDrag({ kind: 'marker', markerId: marker.id, startX: event.clientX, start: marker.time });
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  const pendingDeleteTrack = project.tracks.find((track) => track.id === pendingDeleteTrackId);
-
-  return (
-    <section className="timeline">
-      <div className="timeline-toolbar">
-        <div className="timeline-toolbar-left">
-          <button className="timeline-tool active" title="Seçim" onClick={() => setSelected(null, null)}>↖</button>
-          <button className="timeline-tool" title="Böl" onClick={splitSelected}>✂</button>
-          <button className="timeline-tool" title="Marker ekle" onClick={addMarker}>⊙</button>
-          <div className="toolbar-rule" />
-          <div className="track-menu-wrap">
-            <button className="track-add-button" onClick={() => setTrackTypeMenuOpen((open) => !open)}>＋ Track</button>
-            {trackTypeMenuOpen && <div className="floating-menu track-type-menu" onClick={(event) => event.stopPropagation()}>
-              <button onClick={() => addTrack('video')}>▧ Video</button>
-              <button onClick={() => addTrack('overlay')}>◈ Overlay</button>
-              <button onClick={() => addTrack('audio')}>♫ Audio</button>
-              <button onClick={() => addTrack('text')}>T Text</button>
-            </div>}
-          </div>
-        </div>
-        <div className="timeline-toolbar-right">
-          <button className="timeline-tool" title="Marker ekle" onClick={addMarker}>⌁</button>
-          <span className="zoom-label">{Math.round(px)} px/s</span>
-          <input aria-label="Timeline zoom" type="range" min="38" max="260" value={px} onChange={(event) => setZoom(Number(event.target.value))} />
-        </div>
-        {pendingDeleteTrack && <div className="track-confirm" role="status"><span>“{pendingDeleteTrack.name}” silinsin mi?</span><button className="confirm" onClick={confirmDeleteTrack}>Sil</button><button onClick={() => setPendingDeleteTrackId(null)}>Vazgeç</button></div>}
-      </div>
-      <div className="timeline-scroll" ref={timelineRef} onPointerMove={onPointerMove} onPointerUp={() => setDrag(null)} onPointerCancel={() => setDrag(null)}>
-        <div className="timeline-head">
-          <div className="track-label-spacer" />
-          <div className="ruler" onClick={(event) => seekFromEvent(event)}>
-            {rulerTicks.map((tick) => <div key={tick} className="ruler-tick" style={{ left: tick * px }}><span>{formatTime(tick).slice(3)}</span></div>)}
-            {project.markers.map((marker) => <button key={marker.id} className="timeline-marker" title={`${marker.label} · ${formatTime(marker.time, true, project.canvas.fps)}`} style={{ left: marker.time * px }} onClick={(event) => { event.stopPropagation(); setCurrentTime(marker.time); setSelected(null, null); }} onPointerDown={(event) => markerPointerDown(event, marker)}><i /><span>{marker.label}</span></button>)}
-          </div>
-        </div>
-        <div className="timeline-content">
-          <div className="track-labels">
-            {project.tracks.map((track, trackIndex) => <div className={`track-label ${track.hidden ? 'is-hidden' : ''} ${track.muted ? 'is-muted' : ''}`} key={track.id}>
-              <span className="track-type">{trackIcon(track.type)}</span>
-              {editingTrackId === track.id ? <input className="track-name-input" value={editingTrackName} autoFocus aria-label="Track adı" onChange={(event) => setEditingTrackName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitTrackRename(track.id); if (event.key === 'Escape') setEditingTrackId(null); }} onBlur={() => commitTrackRename(track.id)} /> : <span>{track.name}</span>}
-              <div className="track-actions">
-                <button className={track.hidden ? 'active' : ''} title="Gizle/göster" onClick={() => toggleTrack(track.id, 'hidden')}>◉</button>
-                <button className={track.muted ? 'active' : ''} title="Sessize al" onClick={() => toggleTrack(track.id, 'muted')}>♫</button>
-                <button className={track.locked ? 'active' : ''} title="Kilitle" onClick={() => toggleTrack(track.id, 'locked')}>♙</button>
-                <div className="track-menu-wrap">
-                  <button title="Track seçenekleri" onClick={() => setTrackMenuId((id) => id === track.id ? null : track.id)}>•••</button>
-                  {trackMenuId === track.id && <div className="floating-menu track-menu" onClick={(event) => event.stopPropagation()}>
-                    <button onClick={() => moveTrack(track, -1)} disabled={trackIndex === 0}>↑ Yukarı</button>
-                    <button onClick={() => moveTrack(track, 1)} disabled={trackIndex === project.tracks.length - 1}>↓ Aşağı</button>
-                    <button onClick={() => renameTrack(track)}>✎ Yeniden adlandır</button>
-                    <button onClick={() => duplicateTrack(track)}>⧉ Çoğalt</button>
-                    <button onClick={() => deleteTrack(track)}>× Sil</button>
-                  </div>}
-                </div>
-              </div>
-            </div>)}
-          </div>
-          <div className="tracks-canvas" onClick={(event) => seekFromEvent(event)}>
-            <div className="playhead" style={{ left: currentTime * px }} onPointerDown={(event) => { event.stopPropagation(); setDrag({ kind: 'playhead', startX: event.clientX }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="playhead-cap" /></div>
-            {project.tracks.map((track) => <div className={`track-row ${track.locked ? 'locked' : ''} ${track.hidden ? 'is-hidden' : ''}`} key={track.id}>{track.clips.map((clip) => <TimelineClip key={clip.id} clip={clip} selected={selectedClipId === clip.id} px={px} disabled={track.locked} onSelect={() => setSelected(clip.id, track.id)} onPointerDown={(event) => { event.stopPropagation(); if (track.locked) return; setSelected(clip.id, track.id); setDrag({ kind: 'clip', clipId: clip.id, trackId: track.id, startX: event.clientX, start: clip.start }); event.currentTarget.setPointerCapture(event.pointerId); }} />)}</div>)}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-
-  return <section className="timeline"><div className="timeline-toolbar"><div className="timeline-toolbar-left"><button className="timeline-tool active" title="Seçim" onClick={() => setSelected(null, null)}>↖</button><button className="timeline-tool" title="Böl" onClick={splitSelected}>✂</button><button className="timeline-tool" title="Marker ekle" onClick={addMarker}>⊙</button><div className="toolbar-rule" /><div className="track-menu-wrap"><button className="track-add-button" onClick={() => setTrackTypeMenuOpen((open) => !open)}>＋ Track</button>{trackTypeMenuOpen && <div className="floating-menu track-type-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => addTrack('video')}>▧ Video</button><button onClick={() => addTrack('overlay')}>◈ Overlay</button><button onClick={() => addTrack('audio')}>♫ Audio</button><button onClick={() => addTrack('text')}>T Text</button><button onClick={() => addTrack('subtitle')}>≡ Subtitle</button></div>}</div></div><div className="timeline-toolbar-right"><button className="timeline-tool" title="Marker ekle" onClick={addMarker}>⌁</button><span className="zoom-label">{Math.round(px)} px/s</span><input aria-label="Timeline zoom" type="range" min="38" max="260" value={px} onChange={(event) => setZoom(Number(event.target.value))} /></div></div><div className="timeline-scroll" ref={timelineRef} onPointerMove={onPointerMove} onPointerUp={() => setDrag(null)} onPointerCancel={() => setDrag(null)}><div className="timeline-head"><div className="track-label-spacer" /><div className="ruler" onClick={(event) => seekFromEvent(event)}>{rulerTicks.map((tick) => <div key={tick} className="ruler-tick" style={{ left: tick * px }}><span>{formatTime(tick).slice(3)}</span></div>)}{project.markers.map((marker) => <button key={marker.id} className="timeline-marker" title={`${marker.label} · ${formatTime(marker.time, true, project.canvas.fps)}`} style={{ left: marker.time * px }} onClick={(event) => { event.stopPropagation(); setCurrentTime(marker.time); setSelected(null, null); }} onPointerDown={(event) => markerPointerDown(event, marker)}><i /> <span>{marker.label}</span></button>)}</div></div><div className="timeline-content"><div className="track-labels">{project.tracks.map((track, trackIndex) => <div className={`track-label ${track.hidden ? 'is-hidden' : ''} ${track.muted ? 'is-muted' : ''}`} key={track.id}><span className="track-type">{track.type === 'video' ? '▧' : track.type === 'audio' ? '♫' : track.type === 'text' ? 'T' : track.type === 'subtitle' ? '≡' : '◈'}</span><span>{track.name}</span><div className="track-actions"><button className={track.hidden ? 'active' : ''} title="Gizle/göster" onClick={() => toggleTrack(track.id, 'hidden')}>◉</button><button className={track.muted ? 'active' : ''} title="Sessize al" onClick={() => toggleTrack(track.id, 'muted')}>♫</button><button className={track.locked ? 'active' : ''} title="Kilitle" onClick={() => toggleTrack(track.id, 'locked')}>♙</button><div className="track-menu-wrap"><button title="Track seçenekleri" onClick={() => setTrackMenuId((id) => id === track.id ? null : track.id)}>•••</button>{trackMenuId === track.id && <div className="floating-menu track-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => moveTrack(track, -1)} disabled={trackIndex === 0}>↑ Yukarı</button><button onClick={() => moveTrack(track, 1)} disabled={trackIndex === project.tracks.length - 1}>↓ Aşağı</button><button onClick={() => renameTrack(track)}>✎ Yeniden adlandır</button><button onClick={() => duplicateTrack(track)}>⧉ Çoğalt</button><button onClick={() => deleteTrack(track)}>× Sil</button></div>}</div></div></div>)}</div><div className="tracks-canvas" onClick={(event) => seekFromEvent(event)}><div className="playhead" style={{ left: currentTime * px }} onPointerDown={(event) => { event.stopPropagation(); setDrag({ kind: 'playhead', startX: event.clientX }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="playhead-cap" /></div>{project.tracks.map((track) => <div className={`track-row ${track.locked ? 'locked' : ''} ${track.hidden ? 'is-hidden' : ''}`} key={track.id}>{track.clips.map((clip) => <TimelineClip key={clip.id} clip={clip} selected={selectedClipId === clip.id} px={px} disabled={track.locked} onSelect={() => setSelected(clip.id, track.id)} onPointerDown={(event) => { event.stopPropagation(); if (track.locked) return; setSelected(clip.id, track.id); setDrag({ kind: 'clip', clipId: clip.id, trackId: track.id, startX: event.clientX, start: clip.start }); event.currentTarget.setPointerCapture(event.pointerId); }} />)}</div>)}</div></div></div></section>;
-}
-
 type ProTimelineDrag =
   | { kind: 'clip'; clipId: string; trackId: string; startX: number; start: number; selectedClipIds: string[]; selectedClipStarts: Record<string, number>; historyGroup?: string }
   | { kind: 'trimLeft' | 'trimRight'; clipId: string; trackId: string; startX: number; start: number; duration: number; clipSnapshot: Clip; historyGroup: string }
@@ -3479,6 +3050,15 @@ let clipStyleClipboard: { sourceType: Clip['type']; style: ClipStyleSnapshot } |
 function copyClipStyle(clip: Clip) {
   const { transform, filters, transitionIn, transitionOut, volume, fadeIn, fadeOut, normalize, mask, crop, keyframes, textStyle } = clip;
   clipStyleClipboard = structuredClone({ sourceType: clip.type, style: { transform, filters, transitionIn, transitionOut, volume, fadeIn, fadeOut, normalize, mask, crop, keyframes, textStyle } });
+}
+
+function clipTypeIcon(clip: Pick<Clip, 'type' | 'adjustment'>) {
+  if (clip.adjustment) return '◐';
+  if (clip.type === 'video') return '▶';
+  if (clip.type === 'audio') return '♫';
+  if (clip.type === 'image') return '▧';
+  if (clip.type === 'subtitle') return 'CC';
+  return 'T';
 }
 
 function TimelinePro({ project }: { project: Project }) {
@@ -3509,6 +3089,7 @@ function TimelinePro({ project }: { project: Project }) {
   const [menu, setMenu] = useState<{ x: number; y: number; kind: 'clip' | 'track' | 'marker' | 'add-track' | 'empty'; clipId?: string; trackId?: string; markerId?: string; time?: number } | null>(null);
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editingTrackName, setEditingTrackName] = useState('');
+  const [renameMarker, setRenameMarker] = useState<{ id: string; label: string } | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const closeMenu = () => setMenu(null);
   const newHistoryGroup = () => `timeline-${crypto.randomUUID()}`;
@@ -3846,7 +3427,7 @@ function TimelinePro({ project }: { project: Project }) {
     { label: t(track.muted ? 'timeline.menu.unmute' : 'timeline.menu.silence'), icon: '♫', onSelect: () => updateTrack(track.id, 'muted') },
     { label: t(track.hidden ? 'timeline.menu.show' : 'timeline.menu.hide'), icon: '◉', onSelect: () => updateTrack(track.id, 'hidden') },
     { label: t('timeline.menu.delete'), icon: '×', danger: true, onSelect: () => deleteTrack(track.id) },
-  ] : menu?.kind === 'marker' && menu.markerId ? [{ label: t('timeline.menu.renameMarker'), icon: '✎', onSelect: () => { const marker = project.markers.find((item) => item.id === menu.markerId); const next = window.prompt(t('timeline.markerNamePrompt'), marker?.label ?? t('timeline.markerFallback')); if (next?.trim()) mutateProject((draft) => { const target = draft.markers.find((item) => item.id === menu.markerId); if (target) target.label = next.trim(); }); closeMenu(); } }, { label: t('timeline.menu.deleteMarker'), icon: '×', danger: true, onSelect: () => { mutateProject((draft) => { draft.markers = draft.markers.filter((item) => item.id !== menu.markerId); }); closeMenu(); } }] : [];
+  ] : menu?.kind === 'marker' && menu.markerId ? [{ label: t('timeline.menu.renameMarker'), icon: '✎', onSelect: () => { const marker = project.markers.find((item) => item.id === menu.markerId); if (marker) setRenameMarker({ id: marker.id, label: marker.label }); closeMenu(); } }, { label: t('timeline.menu.deleteMarker'), icon: '×', danger: true, onSelect: () => { mutateProject((draft) => { draft.markers = draft.markers.filter((item) => item.id !== menu.markerId); }); closeMenu(); } }] : [];
   // The active implementation below supersedes the removed legacy timeline prototype.
   return <section className="timeline timeline-pro" onContextMenu={(event) => { event.preventDefault(); const target = event.target as HTMLElement; if (target.closest('.timeline-clip,.track-label,.timeline-marker,.context-menu')) return; setMenu({ x: event.clientX, y: event.clientY, kind: 'empty', time: snapTime(timeFromClientX(event.clientX)) }); }}>
     <div className="timeline-toolbar">
@@ -3865,14 +3446,13 @@ function TimelinePro({ project }: { project: Project }) {
     <div className="timeline-scroll" ref={timelineRef} onPointerMove={onPointerMove} onPointerUp={finishPointerAssetDrop} onPointerCancel={() => { setDrag(null); setDrop(null); setAssetDragId(null); }}>
       <div className="timeline-head"><div className="track-label-spacer" /><div className="ruler" onClick={seek}>{rulerTicks.map((tick) => <div key={tick} className="ruler-tick" style={{ left: tick * px }}><span>{formatTime(tick).slice(3)}</span></div>)}{project.markers.map((marker) => <button key={marker.id} className="timeline-marker" style={{ left: marker.time * px }} title={`${marker.label} · ${formatTime(marker.time, true, project.canvas.fps)}`} onClick={(event) => { event.stopPropagation(); setCurrentTime(marker.time); setSelected(null, null); }} onPointerDown={(event) => { event.stopPropagation(); setCurrentTime(marker.time); setDrag({ kind: 'marker', markerId: marker.id }); event.currentTarget.setPointerCapture(event.pointerId); }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, kind: 'marker', markerId: marker.id }); }}><i /><span>{marker.label}</span></button>)}</div></div>
       <div className="timeline-content"><div className="track-labels">{project.tracks.map((item) => <div className={`track-label ${item.hidden ? 'is-hidden' : ''} ${item.muted ? 'is-muted' : ''}`} key={item.id} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, kind: 'track', trackId: item.id }); }}>{editingTrackId === item.id ? <input className="track-name-input" autoFocus value={editingTrackName} onChange={(event) => setEditingTrackName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { mutateProject((draft) => { const target = draft.tracks.find((track) => track.id === item.id); if (target && editingTrackName.trim()) target.name = editingTrackName.trim(); }); setEditingTrackId(null); } if (event.key === 'Escape') setEditingTrackId(null); }} onBlur={() => setEditingTrackId(null)} /> : <><span className={`track-type track-type-${item.type}`} aria-hidden="true">{item.type === 'audio' ? 'A' : item.type === 'text' ? 'T' : item.type === 'subtitle' ? 'S' : item.type === 'overlay' ? 'O' : 'V'}</span><span className="track-name" title={item.name}>{item.name}</span></>}<span className="track-status-strip">{item.hidden && <i className="track-status is-hidden" title={t('timeline.menu.hide')} />}{item.muted && <i className="track-status is-muted" title={t('timeline.menu.silence')} />}{item.locked && <i className="track-status is-locked" title={t('timeline.menu.lock')} />}</span><div className="track-actions"><button className="track-menu-button" title={t('timeline.trackOptions')} aria-label={t('timeline.trackOptions')} onClick={(event) => setMenu({ x: event.clientX, y: event.clientY, kind: 'track', trackId: item.id })}><span className="track-menu-dots" aria-hidden="true"><i /><i /><i /></span></button></div></div>)}</div>
-        <div className="tracks-canvas" onClick={seek}><div className="playhead" style={{ left: currentTime * px }} onPointerDown={(event) => { event.stopPropagation(); setDrag({ kind: 'playhead' }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="playhead-cap" /></div>{project.tracks.map((item) => <div data-track-id={item.id} className={`track-row ${item.locked ? 'locked' : ''} ${item.hidden ? 'is-hidden' : ''} ${drop?.trackId === item.id ? 'drop-target' : ''}`} key={item.id} onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-cutloc-asset')) { event.preventDefault(); setDrop({ trackId: item.id, time: snapTime(timeFromClientX(event.clientX)) }); } }} onDragLeave={() => setDrop((current) => current?.trackId === item.id ? null : current)} onDrop={(event) => dropAsset(event, item)}>{drop?.trackId === item.id && <div className="drop-ghost" title={draggedAsset ? `${draggedAsset.name} · ${formatTime(Math.max(draggedAsset.duration || 5, 0.5))}` : undefined} style={{ left: drop.time * px, width: dropGhostWidth }} />}{item.clips.map((itemClip) => <div key={itemClip.id} className={`timeline-clip clip-${itemClip.type} ${selectedClipIds.includes(itemClip.id) ? 'selected' : ''} ${item.locked ? 'disabled' : ''}`} style={{ left: itemClip.start * px, width: Math.max(36, itemClip.duration * px) }} onClick={(event) => { event.stopPropagation(); if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelected(itemClip.id, item.id); else if (selectedClipIds.length <= 1 || !selectedClipIds.includes(itemClip.id)) setSelected(itemClip.id, item.id); }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelected(itemClip.id, item.id); setMenu({ x: event.clientX, y: event.clientY, kind: 'clip', clipId: itemClip.id, trackId: item.id }); }} onPointerDown={(event) => { event.stopPropagation(); if (item.locked) return; if (event.shiftKey || event.ctrlKey || event.metaKey) { return; } if (!selectedClipIds.includes(itemClip.id)) setSelected(itemClip.id, item.id); const selectedIds = selectedClipIds.includes(itemClip.id) ? selectedClipIds : [itemClip.id]; const selectedStarts = Object.fromEntries(project.tracks.flatMap((track) => track.clips).filter((clip) => selectedIds.includes(clip.id)).map((clip) => [clip.id, clip.start])); const historyGroup = newHistoryGroup(); dragHistoryGroupRef.current = historyGroup; setDrag({ kind: 'clip', clipId: itemClip.id, trackId: item.id, startX: event.clientX, start: itemClip.start, selectedClipIds: selectedIds, selectedClipStarts: selectedStarts, historyGroup }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="clip-handle left" /><div className="clip-body"><span className="clip-icon">{itemClip.type === 'video' ? '▶' : itemClip.type === 'audio' ? '♫' : '▧'}</span><strong>{itemClip.name}</strong><small>{formatTime(itemClip.duration)}</small></div><div className="clip-handle right" /></div>)}</div>)}</div>
+        <div className="tracks-canvas" onClick={seek}><div className="playhead" style={{ left: currentTime * px }} onPointerDown={(event) => { event.stopPropagation(); setDrag({ kind: 'playhead' }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="playhead-cap" /></div>{project.tracks.map((item) => <div data-track-id={item.id} className={`track-row ${item.locked ? 'locked' : ''} ${item.hidden ? 'is-hidden' : ''} ${drop?.trackId === item.id ? 'drop-target' : ''}`} key={item.id} onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-cutloc-asset')) { event.preventDefault(); setDrop({ trackId: item.id, time: snapTime(timeFromClientX(event.clientX)) }); } }} onDragLeave={() => setDrop((current) => current?.trackId === item.id ? null : current)} onDrop={(event) => dropAsset(event, item)}>{drop?.trackId === item.id && <div className="drop-ghost" title={draggedAsset ? `${draggedAsset.name} · ${formatTime(Math.max(draggedAsset.duration || 5, 0.5))}` : undefined} style={{ left: drop.time * px, width: dropGhostWidth }} />}{item.clips.map((itemClip) => <div key={itemClip.id} role="button" tabIndex={item.locked ? -1 : 0} aria-pressed={selectedClipIds.includes(itemClip.id)} aria-disabled={item.locked} aria-label={`${itemClip.name}, ${formatTime(itemClip.duration)}`} className={`timeline-clip clip-${itemClip.type} ${selectedClipIds.includes(itemClip.id) ? 'selected' : ''} ${item.locked ? 'disabled' : ''}`} style={{ left: itemClip.start * px, width: Math.max(36, itemClip.duration * px) }} onKeyDown={(event) => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelected(itemClip.id, item.id); else setSelected(itemClip.id, item.id); }} onClick={(event) => { event.stopPropagation(); if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelected(itemClip.id, item.id); else if (selectedClipIds.length <= 1 || !selectedClipIds.includes(itemClip.id)) setSelected(itemClip.id, item.id); }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelected(itemClip.id, item.id); setMenu({ x: event.clientX, y: event.clientY, kind: 'clip', clipId: itemClip.id, trackId: item.id }); }} onPointerDown={(event) => { event.stopPropagation(); if (item.locked) return; if (event.shiftKey || event.ctrlKey || event.metaKey) { return; } if (!selectedClipIds.includes(itemClip.id)) setSelected(itemClip.id, item.id); const selectedIds = selectedClipIds.includes(itemClip.id) ? selectedClipIds : [itemClip.id]; const selectedStarts = Object.fromEntries(project.tracks.flatMap((track) => track.clips).filter((clip) => selectedIds.includes(clip.id)).map((clip) => [clip.id, clip.start])); const historyGroup = newHistoryGroup(); dragHistoryGroupRef.current = historyGroup; setDrag({ kind: 'clip', clipId: itemClip.id, trackId: item.id, startX: event.clientX, start: itemClip.start, selectedClipIds: selectedIds, selectedClipStarts: selectedStarts, historyGroup }); event.currentTarget.setPointerCapture(event.pointerId); }}><div className="clip-handle left" /><div className="clip-body"><span className="clip-icon">{clipTypeIcon(itemClip)}</span><strong>{itemClip.name}</strong><small>{formatTime(itemClip.duration)}</small></div><div className="clip-handle right" /></div>)}</div>)}</div>
       </div>
     </div>
     {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
+    {renameMarker && <PromptDialog title={t('timeline.menu.renameMarker')} label={t('timeline.markerNamePrompt')} initialValue={renameMarker.label || t('timeline.markerFallback')} confirmLabel={t('common.save')} onConfirm={(value) => { const markerId = renameMarker.id; mutateProject((draft) => { const target = draft.markers.find((item) => item.id === markerId); if (target) target.label = value; }); setRenameMarker(null); }} onClose={() => setRenameMarker(null)} />}
   </section>;
 }
-
-function TimelineClip({ clip, selected, px, disabled, onSelect, onPointerDown }: { clip: Clip; selected: boolean; px: number; disabled?: boolean; onSelect: () => void; onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void }) { return <div className={`timeline-clip clip-${clip.type} ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`} style={{ left: clip.start * px, width: Math.max(36, clip.duration * px) }} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={onPointerDown}><div className="clip-handle left" /><div className="clip-body"><span className="clip-icon">{clip.type === 'video' ? '▶' : clip.type === 'audio' ? '♫' : clip.type === 'image' ? '▧' : 'T'}</span><strong>{clip.name}</strong><small>{formatTime(clip.duration)}</small></div><div className="clip-handle right" /></div>; }
 
 function AppWrapper() {
   const language = useEditor((state) => state.settings?.language ?? 'en');
