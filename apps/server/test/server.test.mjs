@@ -114,20 +114,12 @@ test('translation catalogs localize server messages and interpolation values', (
 });
 
 test('active UI and route implementations keep Turkish copy in translation catalogs', async () => {
-  const webSource = await fsp.readFile(path.join(repoRoot, 'apps', 'web', 'src', 'main.tsx'), 'utf8');
-  const sourceSection = (start, end) => {
-    const startIndex = webSource.indexOf(start);
-    const endIndex = webSource.indexOf(end, startIndex + start.length);
-    assert.notEqual(startIndex, -1, `Missing source boundary: ${start}`);
-    assert.notEqual(endIndex, -1, `Missing source boundary: ${end}`);
-    return webSource.slice(startIndex, endIndex);
-  };
-  const activeUiSource = [
-    sourceSection('function App()', 'function AssetPanel('),
-    sourceSection('function PanelContent(', 'function InspectorLegacy('),
-    sourceSection('function Inspector({', 'function Timeline({'),
-    sourceSection('function TimelinePro(', 'function AppWrapper()'),
-  ].join('\n').replaceAll('Türkçe', '');
+  const webRoot = path.join(repoRoot, 'apps', 'web', 'src');
+  const activeUiFiles = (await fsp.readdir(webRoot, { recursive: true }))
+    .filter((fileName) => fileName.endsWith('.tsx') && fileName !== 'i18n.tsx');
+  const activeUiSource = (await Promise.all(activeUiFiles.map((fileName) => fsp.readFile(path.join(webRoot, fileName), 'utf8'))))
+    .join('\n')
+    .replaceAll('Türkçe', '');
   assert.doesNotMatch(activeUiSource, /[ÇĞİÖŞÜçğıöşü]/u);
 
   const serverSource = await fsp.readFile(path.join(repoRoot, 'apps', 'server', 'src', 'index.ts'), 'utf8');
