@@ -62,7 +62,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .timeline-marker { min-width:12px; margin-left:-5px; }
 .timeline-marker i { width:2px; margin-left:5px; }
 .preview-media.preview-layer, .preview-text.preview-layer { pointer-events:auto; cursor:move; }
-.preview-layer.preview-selected { outline:1px solid rgba(183,243,106,.88); outline-offset:-1px; }
+.preview-layer.preview-selected { outline:0; }
 .preview-transform-box { position:absolute; inset:16%; border:1px dashed rgba(183,243,106,.8); pointer-events:none; transform-origin:center; }
 .preview-transform-label { position:absolute; top:-18px; left:0; padding:2px 5px; border-radius:3px; color:#0b0c11; background:var(--accent); font:8px 'DM Mono'; }
 .preview-scale-handle { position:absolute; right:-7px; bottom:-7px; width:14px; height:14px; border:2px solid #0b0c11; border-radius:3px; background:var(--accent); cursor:nwse-resize; pointer-events:auto; }
