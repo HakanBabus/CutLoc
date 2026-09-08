@@ -43,13 +43,14 @@ Mevcut ürünün ana akışı:
 - Video, ses ve görsel import.
 - Çoklu track timeline.
 - Frame-aware playhead, marker ve snapping.
+- Playhead veya marker hareket ettirilirken timeline klip seçiminin korunması.
 - Split, trim, taşıma, duplicate, ripple delete ve undo/redo.
 - Canvas üzerinde position, scale, rotation, opacity ve fit ayarları.
 - Canvas üzerinde görünür nesneye tıklayarak eşleşen timeline klibini ve Inspector'ı seçme; zoom ve kaydırmalı preview viewport'u.
 - Filtre, mask, speed, fade, transition ve keyframe modeli.
-- Motion studio üzerinden giriş, çıkış veya birlikte animasyon seçimi; yön, easing, yoğunluk ve süre ayarları.
+- Seçili klibin Inspector içindeki Animasyon sekmesinden giriş, çıkış veya birlikte animasyon seçimi; yön, easing, yoğunluk, süre ve keyframe ayarları.
 - Text, shape, caption ve SRT/VTT import.
-- Şekillerin ayrı bir araç rayı yerine Media alanında tutulması ve aranabilir yardım merkezi.
+- Hazır arka planlar ve şekiller için Media'dan ayrı bir Öğeler alanı.
 - MP4, MP3 ve WAV local export.
 - Autosave, revision kontrolü, backup ve trash.
 - Proje, medya, yedek, export, iş ve ayar yönetimine erişen local CLI; AI araçları için tam project JSON apply ve kalıcı JSONL session modu.
@@ -59,7 +60,7 @@ Mevcut ürünün ana akışı:
 - Tüm Inspector kontrollerinin her medya türünde export ile birebir aynı sonucu vermesi.
 - Browser preview ile FFmpeg çıktısının her codec ve filtre kombinasyonunda aynı görünmesi.
 - Metin rotation ve bazı tipografi ayrıntıları için tam parity; bu alanlar kullanıldığında export preflight açık bir approximation uyarısı verir.
-- Motion studio'nun yön/easing/yoğunluk gibi gelişmiş ayarlarının tüm export yollarında birebir render edilmesi; export fallback davranışı sürüm sözleşmesine göre değişebilir.
+- Animasyon sekmesindeki yön/easing/yoğunluk gibi gelişmiş ayarların tüm export yollarında birebir render edilmesi; export fallback davranışı sürüm sözleşmesine göre değişebilir.
 - Otomatik altyazı/transcription.
 - Uygulama içine gömülü veya dış sağlayıcıya bağlı otomatik AI edit üretimi. Local CLI, sağlayıcıdan bağımsız otomasyon yüzeyi olarak desteklenir.
 - Lossless/remux tabanlı hızlı kesme modu.

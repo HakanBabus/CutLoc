@@ -4,7 +4,8 @@ import { clamp, enforceLockedTrackInvariants, mergeProjectThreeWay, type Job, ty
 import type { TranslationKey } from '../i18n';
 
 export type Theme = 'dark' | 'gray' | 'light';
-export type Panel = 'media' | 'text' | 'project' | 'transitions' | 'effects' | 'color' | 'animation' | 'help';
+export type Panel = 'media' | 'text' | 'elements' | 'project' | 'transitions' | 'effects' | 'color' | 'animation';
+export type InspectorTab = 'primary' | 'audio' | 'speed' | 'motion' | 'adjust';
 export type TrashEntry = { trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; duration: number; assetCount: number };
 type HistoryState = { past: Project[]; future: Project[] };
 type HistoryMutationOptions = { historyGroup?: string };
@@ -72,6 +73,7 @@ type EditorState = {
   playing: boolean;
   pxPerSecond: number;
   panel: Panel;
+  inspectorTab: InspectorTab;
   theme: Theme;
   saveState: SaveState;
   localRevision: number;
@@ -90,6 +92,7 @@ type EditorState = {
   clearRange: () => void;
   setPlaying: (playing: boolean) => void;
   setPanel: (panel: Panel) => void;
+  setInspectorTab: (tab: InspectorTab) => void;
   setTheme: (theme: Theme) => void;
   setSelected: (clipId: string | null, trackId?: string | null) => void;
   setSelectedMany: (clipIds: string[], trackId?: string | null) => void;
@@ -147,6 +150,7 @@ export const useEditor = create<EditorState>((set) => ({
   playing: false,
   pxPerSecond: 92,
   panel: 'media',
+  inspectorTab: 'primary',
   theme: initialTheme(),
   saveState: 'saved',
   localRevision: 0,
@@ -157,7 +161,7 @@ export const useEditor = create<EditorState>((set) => ({
   history: { past: [], future: [] },
   historyGroup: null,
   setProject: (project, resetHistory = true) => set((state) => resetHistory
-    ? { project, localRevision: project.revision, savedRevision: project.revision, lastSavedAt: project.updatedAt, lastSavedProject: project, saveState: 'saved', history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null }
+    ? { project, localRevision: project.revision, savedRevision: project.revision, lastSavedAt: project.updatedAt, lastSavedProject: project, saveState: 'saved', history: { past: [], future: [] }, historyGroup: null, selectedClipId: null, selectedClipIds: [], selectedTrackId: null, currentTime: 0, rangeStart: null, rangeEnd: null, assetDragId: null, inspectorTab: 'primary' }
     : { ...state, project, localRevision: Math.max(state.localRevision, project.revision), savedRevision: Math.max(state.savedRevision, project.revision), lastSavedAt: project.updatedAt, lastSavedProject: project }),
   setSettings: (settings) => set({ settings }),
   setCurrentTime: (time) => set((state) => ({ currentTime: clamp(time, 0, state.project?.duration ?? 0) })),
@@ -167,6 +171,7 @@ export const useEditor = create<EditorState>((set) => ({
   clearRange: () => set({ rangeStart: null, rangeEnd: null }),
   setPlaying: (playing) => set({ playing }),
   setPanel: (panel) => set({ panel }),
+  setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   setTheme: (theme) => {
     try { window.localStorage.setItem('cutloc-theme', theme); } catch { /* ignore */ }
     set({ theme });

@@ -54,10 +54,10 @@ CutLoc is not a hosted video platform, collaboration service, public upload endp
 | Surface | Current capability |
 | --- | --- |
 | **Dashboard and projects** | Create, open, duplicate, import, recover, and remove local projects; deleted projects can be restored from the local trash area. |
-| **Media library** | Import video, audio, and image files; search, filter, sort, preview, switch between list/card views, inspect media health, rebuild derived files, and drag assets to the timeline. |
+| **Media library** | Import video, audio, and image files; search, filter, preview, switch between list/card views, inspect media health, rebuild derived files, and drag assets to the timeline. |
 | **Timeline** | Arrange video, overlay, audio, text, and subtitle tracks with frame-aware playhead positioning, markers, snapping, trim, split, move, duplicate, ripple-delete, undo/redo, and track lock/hide/mute controls. |
 | **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, zoom and pan the preview, then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
-| **Motion and building blocks** | Use text presets, an animation studio with in/out controls, direction, easing, intensity, and linked timing; add built-in stock surfaces, shapes, and adjustment layers from the editor. |
+| **Motion and building blocks** | Use text presets and add built-in backgrounds or shapes from the Elements panel. The selected clip's Animation tab owns entrance/exit presets, timing, direction, easing, intensity, and keyframes. |
 | **Export** | Run local export preflight and render MP4 video or MP3/WAV audio with selectable aspect, resolution, FPS, quality, audio bitrate, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
 | **Recovery and safety** | Autosave, revision checks, backups, recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
 
@@ -69,7 +69,7 @@ From the dashboard, create a blank project or continue a draft. Runtime files li
 
 ### 2. Add and organize media
 
-Open **Media** to import video, audio, or image files. Search and filter the library, preview an asset, or drag it into a compatible timeline track. The **Stock** and **Shapes** shelves provide built-in visual building blocks.
+Open **Media** to import video, audio, or image files. Search and filter the library, preview an asset, or drag it into a compatible timeline track. Open **Elements** for built-in backgrounds and shapes.
 
 ### 3. Cut and arrange
 
@@ -77,7 +77,7 @@ Use the **Timeline** to trim either edge of a clip, split at the playhead, move 
 
 ### 4. Shape the picture and sound
 
-The **Canvas** and **Inspector** work together. Choose `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; select fit, fill, or smart framing; then adjust position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, transitions, motion, keyframes, and text styles.
+The **Canvas** and **Inspector** work together. Choose `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; select fit, fill, or smart framing; then adjust position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, entrance/exit animation, keyframes, and text styles. Animation controls appear only for the selected clip.
 
 ### 5. Preview, save, and export
 

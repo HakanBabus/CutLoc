@@ -353,7 +353,7 @@ export function Editor({ onBack }: { onBack: () => void }) {
   const commandActions: CommandAction[] = [
     { id: 'media', label: t('command.media'), icon: '▧', shortcut: 'M', run: () => useEditor.getState().setPanel('media') },
     { id: 'text', label: t('command.text'), icon: 'T', run: () => useEditor.getState().setPanel('text') },
-    { id: 'animation', label: t('command.animation'), icon: '✧', run: () => useEditor.getState().setPanel('animation') },
+    { id: 'animation', label: t('command.animation'), icon: '✧', run: () => useEditor.getState().setInspectorTab('motion') },
     { id: 'project', label: t('command.project'), icon: '◉', run: () => useEditor.getState().setPanel('project') },
     { id: 'playback', label: t('command.playback'), icon: '▶', shortcut: shortcutValue(settings, 'togglePlayback'), run: () => useEditor.getState().setPlaying(!useEditor.getState().playing) },
     { id: 'export', label: t('command.export'), icon: '↗', shortcut: 'Ctrl+E', run: () => setShowExport(true) },
@@ -570,7 +570,7 @@ function ToolRail({ onOpenSettings }: { onOpenSettings: () => void }) {
   const panel = useEditor((state) => state.panel); const setPanel = useEditor((state) => state.setPanel);
   const tools: Array<[Panel, string, TranslationKey]> = [
     ['media', '▧', 'editor.panel.media'], ['text', 'T', 'editor.panel.text'],
-    ['animation', '✧', 'editor.panel.animation'], ['project', '◉', 'editor.panel.project'],
+    ['elements', '◇', 'editor.panel.elements'], ['project', '◉', 'editor.panel.project'],
   ];
-  return <aside className="tool-rail" aria-label={t('editor.tools')}><div className="rail-caption">{t('editor.project')}</div><div className="rail-scroll">{tools.map(([key, icon, label]) => <button key={key} className={panel === key ? 'active' : ''} onClick={() => setPanel(key)}><span>{icon}</span><small>{t(label)}</small></button>)}</div><div className="rail-spacer" /><button className="rail-ai" onClick={() => setPanel('help')}><span>?</span><small>{t('editor.panel.help')}</small></button><button onClick={onOpenSettings}><span>⚙</span><small>{t('common.settings')}</small></button></aside>;
+  return <aside className="tool-rail" aria-label={t('editor.tools')}><div className="rail-caption">{t('editor.project')}</div><div className="rail-scroll">{tools.map(([key, icon, label]) => <button key={key} className={panel === key ? 'active' : ''} onClick={() => setPanel(key)}><span>{icon}</span><small>{t(label)}</small></button>)}</div><div className="rail-spacer" /><button onClick={onOpenSettings}><span>⚙</span><small>{t('common.settings')}</small></button></aside>;
 }

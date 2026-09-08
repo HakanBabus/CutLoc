@@ -7,13 +7,13 @@ import { ContextMenu, type ContextMenuItem } from '../components/context-menu';
 import { api } from './api';
 import { createLayerTrack, createMediaClip, findEmptyPlacement } from './media-model';
 import { DEFAULT_TEXT_STYLE, SHAPE_PRESETS, TEXT_PRESETS, localizeShapePreset, localizeTextPreset, type ShapePreset, type TextPreset } from './text-model';
-import { SHORTCUT_LABELS, STOCK_MEDIA, localizeStockMedia, shortcutValue, useEditor, type Panel, type ShortcutAction, type StockMediaItem } from './store';
+import { STOCK_MEDIA, localizeStockMedia, useEditor, type Panel, type StockMediaItem } from './store';
 
 function panelTitle(panel: Panel): TranslationKey {
   const labels: Record<Panel, TranslationKey> = {
-    media: 'editor.panel.media', text: 'editor.panel.text',
+    media: 'editor.panel.media', text: 'editor.panel.text', elements: 'editor.panel.elements',
     project: 'editor.panel.project', transitions: 'editor.panel.transitions', effects: 'editor.panel.effects', color: 'editor.panel.color',
-    animation: 'editor.panel.animation', help: 'editor.panel.help',
+    animation: 'editor.panel.animation',
   };
   return labels[panel];
 }
@@ -85,58 +85,14 @@ const ANIMATION_PRESETS: AnimationPreset[] = [
 ];
 type BackupSummary = { fileName: string; createdAt: string; size: number };
 
-type HelpTopicId = 'start' | 'media' | 'preview' | 'motion' | 'timeline' | 'export';
-type HelpTopic = {
-  id: HelpTopicId;
-  icon: string;
-  labelKey: TranslationKey;
-  titleKey: TranslationKey;
-  summaryKey: TranslationKey;
-  stepKeys: TranslationKey[];
-  actionLabelKey: TranslationKey;
-  actionPanel?: Panel;
-  actionNotice?: string;
-};
-
-const HELP_TOPICS: HelpTopic[] = [
-  {
-    id: 'start', icon: '✦', labelKey: 'help.topic.start.label', titleKey: 'help.topic.start.title', summaryKey: 'help.topic.start.summary',
-    stepKeys: ['help.topic.start.step1', 'help.topic.start.step2', 'help.topic.start.step3'], actionLabelKey: 'help.topic.start.action', actionPanel: 'media',
-  },
-  {
-    id: 'media', icon: '▧', labelKey: 'help.topic.media.label', titleKey: 'help.topic.media.title', summaryKey: 'help.topic.media.summary',
-    stepKeys: ['help.topic.media.step1', 'help.topic.media.step2', 'help.topic.media.step3'], actionLabelKey: 'help.topic.media.action', actionPanel: 'media',
-  },
-  {
-    id: 'preview', icon: '⌖', labelKey: 'help.topic.preview.label', titleKey: 'help.topic.preview.title', summaryKey: 'help.topic.preview.summary',
-    stepKeys: ['help.topic.preview.step1', 'help.topic.preview.step2', 'help.topic.preview.step3'], actionLabelKey: 'help.topic.preview.action', actionPanel: 'text',
-  },
-  {
-    id: 'motion', icon: '↝', labelKey: 'help.topic.motion.label', titleKey: 'help.topic.motion.title', summaryKey: 'help.topic.motion.summary',
-    stepKeys: ['help.topic.motion.step1', 'help.topic.motion.step2', 'help.topic.motion.step3'], actionLabelKey: 'help.topic.motion.action', actionPanel: 'animation',
-  },
-  {
-    id: 'timeline', icon: '⌁', labelKey: 'help.topic.timeline.label', titleKey: 'help.topic.timeline.title', summaryKey: 'help.topic.timeline.summary',
-    stepKeys: ['help.topic.timeline.step1', 'help.topic.timeline.step2', 'help.topic.timeline.step3'], actionLabelKey: 'help.topic.timeline.action', actionPanel: 'project',
-  },
-  {
-    id: 'export', icon: '↗', labelKey: 'help.topic.export.label', titleKey: 'help.topic.export.title', summaryKey: 'help.topic.export.summary',
-    stepKeys: ['help.topic.export.step1', 'help.topic.export.step2', 'help.topic.export.step3'], actionLabelKey: 'help.topic.export.action', actionPanel: 'project',
-  },
-];
-
 function PanelContent({ panel, onAddText, onApplyEffect, onOpenSettings }: { panel: Panel; onAddText: (preset: TextPreset) => void; onApplyEffect: (preset: 'film' | 'retro' | 'glow' | 'blur' | 'chroma' | 'noise') => void; onOpenSettings: () => void }) {
   const { t, locale } = useI18n();
   const project = useEditor((state) => state.project);
-  const currentSettings = useEditor((state) => state.settings);
   const mutateProject = useEditor((state) => state.mutateProject);
   const setNotice = useEditor((state) => state.setNotice);
-  const setPanel = useEditor((state) => state.setPanel);
   const [backups, setBackups] = useState<BackupSummary[]>([]);
   const [textSearch, setTextSearch] = useState('');
   const [textCategory, setTextCategory] = useState<'all' | TextPreset['category']>('all');
-  const [helpTopicId, setHelpTopicId] = useState<HelpTopicId>('start');
-  const [helpSearch, setHelpSearch] = useState('');
   const localizedTextPresets = TEXT_PRESETS.map((preset) => localizeTextPreset(preset, t));
   const filteredTextPresets = localizedTextPresets.filter((preset) => {
     const query = textSearch.trim().toLocaleLowerCase(locale);
@@ -161,24 +117,6 @@ function PanelContent({ panel, onAddText, onApplyEffect, onOpenSettings }: { pan
       setNotice(error instanceof Error ? t('backup.restoreFailedWithReason', { reason: error.message }) : t('backup.restoreFailed'));
     }
   };
-  if (panel === 'help') {
-    const query = helpSearch.trim().toLocaleLowerCase(locale);
-    const matchingTopics = HELP_TOPICS.filter((topic) => !query || `${t(topic.labelKey)} ${t(topic.titleKey)} ${t(topic.summaryKey)} ${topic.stepKeys.map((key) => t(key)).join(' ')}`.toLocaleLowerCase(locale).includes(query));
-    const activeTopic = matchingTopics.find((topic) => topic.id === helpTopicId) ?? matchingTopics[0];
-    const openHelpAction = (topic: HelpTopic) => {
-      if (topic.actionPanel) setPanel(topic.actionPanel);
-      if (topic.actionNotice) setNotice(topic.actionNotice);
-    };
-    return <div className="quick-panel help-panel">
-      <div className="help-hero"><div><p className="eyebrow">{t('help.center')}</p><h3>{t('help.title')}</h3><small>{t('help.copy')}</small></div><span className="help-hero-mark">?</span></div>
-      <label className="help-search-field"><span>⌕</span><input value={helpSearch} onChange={(event) => setHelpSearch(event.target.value)} placeholder={t('help.search')} aria-label={t('help.search')} /></label>
-      <div className="help-topic-tabs" role="tablist" aria-label={t('help.topics')}>{matchingTopics.map((topic) => <button key={topic.id} type="button" role="tab" aria-selected={activeTopic?.id === topic.id} className={activeTopic?.id === topic.id ? 'active' : ''} onClick={() => setHelpTopicId(topic.id)}><span>{topic.icon}</span>{t(topic.labelKey)}</button>)}</div>
-      {activeTopic ? <article className="help-topic-card"><div className="help-topic-heading"><span className="help-topic-icon">{activeTopic.icon}</span><div><p className="eyebrow">{t(activeTopic.labelKey)}</p><h4>{t(activeTopic.titleKey)}</h4><p>{t(activeTopic.summaryKey)}</p></div></div><ol className="help-steps">{activeTopic.stepKeys.map((key, index) => <li key={key}><b>{index + 1}</b><span>{t(key)}</span></li>)}</ol><button type="button" className="help-open-action" onClick={() => openHelpAction(activeTopic)}>{t(activeTopic.actionLabelKey)}<span>→</span></button></article> : <div className="help-empty"><strong>{t('help.noResult')}</strong><small>{t('help.noResultCopy')}</small></div>}
-      <section className="help-section"><div className="help-section-heading"><div><strong>{t('settings.shortcuts')}</strong><small>{t('help.shortcutsCopy')}</small></div><button type="button" onClick={onOpenSettings}>{t('help.openSettings')}</button></div><div className="help-shortcut-grid">{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => <div className="help-shortcut" key={action}><kbd>{shortcutValue(currentSettings, action)}</kbd><span><strong>{t(SHORTCUT_LABELS[action].labelKey)}</strong><small>{t(SHORTCUT_LABELS[action].descriptionKey)}</small></span></div>)}</div></section>
-      <section className="help-section"><div className="help-section-heading"><div><strong>{t('help.quickTips')}</strong><small>{t('help.quickTipsCopy')}</small></div></div><div className="help-tip-grid"><button type="button" className="help-tip-card" onClick={() => { setNotice(t('help.selectCanvasNotice')); setPanel('text'); }}><span>⌖</span><strong>{t('help.selectCanvas')}</strong><small>{t('help.selectCanvasCopy')}</small></button><button type="button" className="help-tip-card" onClick={() => setPanel('animation')}><span>↝</span><strong>{t('help.addMotion')}</strong><small>{t('help.addMotionCopy')}</small></button><button type="button" className="help-tip-card" onClick={() => setPanel('media')}><span>▧</span><strong>{t('help.addShape')}</strong><small>{t('help.addShapeCopy')}</small></button></div></section>
-      <p className="panel-note">{t('help.exportReminder')}</p>
-    </div>;
-  }
   if (panel === 'project') return <div className="quick-panel project-tools-panel">
     <ProjectBackupPanel backups={backups} onRestore={restoreBackup} />
     <div className="text-library-head"><div><strong>{t('projectTools.title')}</strong><small>{t('projectTools.copy')}</small></div><span>⌘</span></div>
@@ -186,7 +124,6 @@ function PanelContent({ panel, onAddText, onApplyEffect, onOpenSettings }: { pan
     <div className="project-background-grid"><button onClick={() => mutateProject((draft) => { draft.canvas.background = '#101116'; })}>{t('projectTools.black')}</button><button onClick={() => mutateProject((draft) => { draft.canvas.background = '#f3f4f1'; })}>{t('projectTools.white')}</button><button onClick={() => mutateProject((draft) => { draft.canvas.background = '#7b8088'; })}>{t('projectTools.gray')}</button><button onClick={() => mutateProject((draft) => { draft.canvas.background = 'transparent'; })}>{t('projectTools.transparent')}</button></div>
     <div className="project-tool-list"><button onClick={() => setNotice(t('projectTools.timelineGuideNotice'))}>⌁ {t('projectTools.timelineGuide')} <span>›</span></button><button onClick={() => { if (project) window.location.href = `/api/projects/${project.id}/bundle`; }}>⇩ {t('projectTools.downloadBundle')} <span>›</span></button><button onClick={onOpenSettings}>⚙ {t('projectTools.workspaceSettings')} <span>›</span></button></div>
   </div>;
-  if (panel === 'transitions' || panel === 'animation') return <AnimationStudio />;
   if (panel === 'color') return <div className="quick-panel">
     <div className="text-library-head"><div><strong>{t('color.title')}</strong><small>{t('color.copy')}</small></div><span>6</span></div>
     <div className="effect-grid"><button onClick={() => onApplyEffect('film')}>◌<small>Film</small></button><button onClick={() => onApplyEffect('retro')}>◍<small>Retro</small></button><button onClick={() => onApplyEffect('glow')}>◈<small>Glow</small></button><button onClick={() => onApplyEffect('blur')}>◇<small>{t('effects.blur')}</small></button><button onClick={() => onApplyEffect('noise')}>◒<small>Mono</small></button><button onClick={() => onApplyEffect('chroma')}>⌁<small>Chroma</small></button></div>
@@ -208,7 +145,7 @@ function PanelContent({ panel, onAddText, onApplyEffect, onOpenSettings }: { pan
   return <div className="quick-panel"><div className="panel-placeholder-card"><span>✦</span><div><strong>{t('effects.title')}</strong><small>{t('effects.copy')}</small></div></div><div className="effect-grid"><button onClick={() => onApplyEffect('film')}>◌<small>Film</small></button><button onClick={() => onApplyEffect('retro')}>◍<small>Retro</small></button><button onClick={() => onApplyEffect('glow')}>◈<small>Glow</small></button><button onClick={() => onApplyEffect('blur')}>◇<small>Blur</small></button><button onClick={() => onApplyEffect('chroma')}>⌁<small>Chroma</small></button><button onClick={() => onApplyEffect('noise')}>◒<small>Mono</small></button></div><p className="panel-note">{t('effects.clickPreset')}</p></div>;
 }
 
-function AnimationStudio() {
+export function AnimationStudio({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n();
   const project = useEditor((state) => state.project);
   const selectedClipId = useEditor((state) => state.selectedClipId);
@@ -324,9 +261,9 @@ function AnimationStudio() {
     updateSelectedDurations(nextInDuration, value);
   };
 
-  return <div className="quick-panel animation-studio animation-studio-v3" data-mode={mode} data-category={category} data-has-selection={selectedIds.length ? 'true' : 'false'}>
-    <div className="animation-studio-heading"><div><p className="eyebrow">{t('animation.studio')}</p><h3>{t('animation.title')}</h3><small>{t('animation.copy')}</small></div></div>
-    <div className="animation-target-row"><span className={selected ? 'target-dot ready' : 'target-dot'} />{selected ? <><strong>{selected.name}</strong><small>{selectedIds.length > 1 ? t('common.selectedClips', { count: selectedIds.length }) : t('animation.selectedClip')}</small></> : <><strong>{t('animation.noClip')}</strong><small>{t('animation.selectClip')}</small></>}</div>
+  return <div className={`quick-panel animation-studio animation-studio-v3 ${compact ? 'animation-studio-compact' : ''}`} data-mode={mode} data-category={category} data-has-selection={selectedIds.length ? 'true' : 'false'}>
+    {!compact && <div className="animation-studio-heading"><div><p className="eyebrow">{t('animation.studio')}</p><h3>{t('animation.title')}</h3><small>{t('animation.copy')}</small></div></div>}
+    {!compact && <div className="animation-target-row"><span className={selected ? 'target-dot ready' : 'target-dot'} />{selected ? <><strong>{selected.name}</strong><small>{selectedIds.length > 1 ? t('common.selectedClips', { count: selectedIds.length }) : t('animation.selectedClip')}</small></> : <><strong>{t('animation.noClip')}</strong><small>{t('animation.selectClip')}</small></>}</div>}
     <section className="animation-setup" aria-label={t('animation.sectionAria')}>
       <div className="animation-setup-heading"><div><span>{t('animation.applyArea')}</span><strong>{t('animation.applyAreaCopy')}</strong></div><b>{t(`animation.modeLabel.${mode}` as TranslationKey)}</b></div>
       <div className="animation-mode-tabs" role="tablist" aria-label={t('animation.sectionAria')}>{(['in', 'both', 'out'] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={mode === value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}><span className="animation-mode-icon" aria-hidden="true">{value === 'in' ? '↘' : value === 'both' ? '✦' : '↗'}</span><span><strong>{t(`animation.modeLabel.${value}` as TranslationKey)}</strong><small>{t(`animation.mode.${value}Hint` as TranslationKey)}</small></span></button>)}</div>
@@ -376,10 +313,10 @@ export function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: F
   const setNotice = useEditor((state) => state.setNotice);
   const fileRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | Asset['type'] | 'unused'>('all');
-  const [sort, setSort] = useState<'date' | 'name' | 'duration'>('date');
   const [view, setView] = useState<'list' | 'grid'>('list');
-  const [mediaSection, setMediaSection] = useState<'project' | 'stock' | 'shapes'>('project');
+  const [elementsSection, setElementsSection] = useState<'backgrounds' | 'shapes'>('backgrounds');
   const [isDropActive, setIsDropActive] = useState(false);
   const [stockBusyId, setStockBusyId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; asset?: Asset; panel?: boolean } | null>(null);
@@ -417,7 +354,7 @@ export function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: F
     const query = search.trim().toLocaleLowerCase(locale);
     const matchesType = filter === 'all' || (filter === 'unused' ? usageCount(asset.id) === 0 : asset.type === filter);
     return (!query || `${asset.name} ${asset.mimeType}`.toLocaleLowerCase(locale).includes(query)) && matchesType;
-  }).sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name, locale) : sort === 'duration' ? b.duration - a.duration : b.createdAt.localeCompare(a.createdAt)), [filter, locale, project.assets, project.tracks, search, sort]);
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [filter, locale, project.assets, project.tracks, search]);
   const hasFilePayload = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes('Files');
   const importDroppedFiles = async (files: File[]) => {
     const supported = files.filter((file) => /^(video|audio|image)\//.test(file.type));
@@ -573,29 +510,28 @@ export function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: F
   };
   if (panel === 'media') {
     return <aside className="asset-panel asset-panel-pro">
-      <div className="panel-heading"><div><p className="eyebrow">{t('library.title')}</p><h2>{t('editor.panel.media')}</h2></div><button className="panel-more" aria-label={t('library.panelMenu')} onClick={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, panel: true }); }}>•••</button></div>
-      <div className="media-source-tabs" role="tablist" aria-label={t('library.mediaSources')}>
-        <button role="tab" aria-selected={mediaSection === 'project'} className={mediaSection === 'project' ? 'active' : ''} onClick={() => setMediaSection('project')}><span className="media-source-tab-icon">▧</span><span className="media-source-tab-label">{t('editor.panel.media')}</span><small>{project.assets.length}</small></button>
-        <button role="tab" aria-selected={mediaSection === 'stock'} className={mediaSection === 'stock' ? 'active' : ''} onClick={() => setMediaSection('stock')}><span className="media-source-tab-icon">✦</span><span className="media-source-tab-label">{t('library.stock')}</span><small>{STOCK_MEDIA.length}</small></button>
-        <button role="tab" aria-selected={mediaSection === 'shapes'} className={mediaSection === 'shapes' ? 'active' : ''} onClick={() => setMediaSection('shapes')}><span className="media-source-tab-icon">◇</span><span className="media-source-tab-label">{t('library.shapes')}</span><small>{SHAPE_PRESETS.length}</small></button>
-      </div>
-      {mediaSection !== 'project' && <p className="media-source-copy">{t(mediaSection === 'stock' ? 'library.stockHint' : 'library.shapesHint')}</p>}
+      <div className="panel-heading media-panel-heading"><div><h2>{t('editor.panel.media')}</h2><small>{t('library.mediaSubtitle')}</small></div><div className="media-heading-actions"><button type="button" className="media-import-primary" onClick={() => fileRef.current?.click()}><span>＋</span>{t('library.addMedia')}</button><button className="panel-more" aria-label={t('library.panelMenu')} onClick={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, panel: true }); }}>•••</button></div></div>
       <input ref={fileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImport(file); event.target.value = ''; }} />
       <input ref={relinkRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void relinkMedia(file); event.target.value = ''; }} />
-      {mediaSection === 'project' && <>
-        <div className="media-library-summary"><div><span className="media-section-kicker">{t('library.projectMedia')}</span><strong>{t('library.files', { count: project.assets.length })}</strong></div><div className="media-library-actions">{derivedMissingAssets.length > 0 && <button type="button" className="media-rebuild-all-button" onClick={() => void rebuildAllDerived()} disabled={bulkRebuildBusy} aria-label={t('library.rebuildAll')} title={t('library.rebuildAll')}><span>{bulkRebuildBusy ? '…' : '⟳'}</span><b>{derivedMissingAssets.length}</b></button>}<button type="button" className="media-import-button" onClick={() => fileRef.current?.click()} aria-label={t('library.addMedia')} title={t('library.addMedia')}>＋</button></div></div>
-        <div className="media-controls">
-          <div className="media-search-field"><span aria-hidden="true">⌕</span><input className="media-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('library.search')} aria-label={t('library.search')} />{search && <button type="button" className="media-search-clear" aria-label={t('library.clearSearch')} onClick={() => setSearch('')}>×</button>}</div>
-          <div className="media-controls-row"><select className="media-filter-select" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} aria-label={t('library.filter')}><option value="all">{t('library.allMedia')}</option><option value="video">{t('library.video')}</option><option value="audio">{t('library.audio')}</option><option value="image">{t('library.image')}</option><option value="unused">{t('library.unused')}</option></select><select className="media-sort-select" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} aria-label={t('library.sort')}><option value="date">{t('library.recent')}</option><option value="name">{t('library.byName')}</option><option value="duration">{t('library.byDuration')}</option></select><div className="media-view-toggle"><button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} title={t('library.listView')} aria-label={t('library.listView')}>☰</button><button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} title={t('library.gridView')} aria-label={t('library.gridView')}>▦</button></div></div>
-        </div>
-        <div className="media-list-heading"><span>{t('library.results', { count: visibleAssets.length })}</span><span>{t(view === 'list' ? 'library.list' : 'library.grid')}</span></div>
-        <div className={`asset-list ${view === 'grid' ? 'asset-grid-view' : ''} ${isDropActive ? 'is-drop-active' : ''}`} role="region" aria-label={t('library.dropRegion')} onDragEnter={handleMediaDragEnter} onDragOver={handleMediaDragOver} onDragLeave={handleMediaDragLeave} onDrop={handleMediaDrop}>{visibleAssets.length === 0 ? <div className="panel-empty"><span>⊘</span><p>{t('library.notFound')}</p><small>{t('library.notFoundHint')}</small></div> : visibleAssets.map((asset) => <AssetCardPro key={asset.id} projectId={project.id} asset={asset} usage={usageCount(asset.id)} health={mediaHealth[asset.id]} view={view} onAdd={() => addAsset(asset)} onPreview={() => setPreviewAsset(asset)} onRebuild={() => void rebuildDerived(asset)} onOpenMenu={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, asset }); }} />)}{isDropActive && <div className="media-drop-overlay" aria-live="polite"><span>＋</span><strong>{t('library.dropFiles')}</strong><small>{t('library.dropHint')}</small></div>}</div>
-      </>}
-      {mediaSection === 'stock' && <StockMediaShelf busyId={stockBusyId} onAdd={(stock) => void addStock(stock)} />}
-      {mediaSection === 'shapes' && <ShapeShelf onAdd={addTextClip} />}
+      {project.assets.length > 0 && <><div className="media-compact-tools"><button type="button" className={searchOpen ? 'media-search-toggle active' : 'media-search-toggle'} aria-label={t('library.search')} aria-expanded={searchOpen} onClick={() => { setSearchOpen((value) => !value); if (searchOpen) setSearch(''); }}>⌕</button><select className="media-filter-compact" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} aria-label={t('library.filter')}><option value="all">{t('library.allMedia')}</option><option value="video">{t('library.video')}</option><option value="audio">{t('library.audio')}</option><option value="image">{t('library.image')}</option><option value="unused">{t('library.unused')}</option></select><button type="button" className="media-view-button" onClick={() => setView((value) => value === 'list' ? 'grid' : 'list')} title={t(view === 'list' ? 'library.gridView' : 'library.listView')} aria-label={t(view === 'list' ? 'library.gridView' : 'library.listView')}>{view === 'list' ? '▦' : '☰'}</button></div>{searchOpen && <div className="media-search-field media-search-expanded"><span aria-hidden="true">⌕</span><input autoFocus className="media-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('library.search')} aria-label={t('library.search')} />{search && <button type="button" className="media-search-clear" aria-label={t('library.clearSearch')} onClick={() => setSearch('')}>×</button>}</div>}</>}
+      <div className={`asset-list media-content-list ${view === 'grid' ? 'asset-grid-view' : ''} ${isDropActive ? 'is-drop-active' : ''}`} role="region" aria-label={t('library.dropRegion')} onDragEnter={handleMediaDragEnter} onDragOver={handleMediaDragOver} onDragLeave={handleMediaDragLeave} onDrop={handleMediaDrop}>{visibleAssets.length === 0 ? <div className="media-empty-state"><span>▧</span><strong>{project.assets.length === 0 ? t('library.emptyTitle') : t('library.notFound')}</strong><small>{project.assets.length === 0 ? t('library.emptyCopy') : t('library.notFoundHint')}</small><button type="button" onClick={() => fileRef.current?.click()}>＋ {t('library.addMedia')}</button></div> : visibleAssets.map((asset) => <AssetCardPro key={asset.id} projectId={project.id} asset={asset} usage={usageCount(asset.id)} health={mediaHealth[asset.id]} view={view} onAdd={() => addAsset(asset)} onPreview={() => setPreviewAsset(asset)} onRebuild={() => void rebuildDerived(asset)} onOpenMenu={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, asset }); }} />)}{isDropActive && <div className="media-drop-overlay" aria-live="polite"><span>＋</span><strong>{t('library.dropFiles')}</strong><small>{t('library.dropHint')}</small></div>}</div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.panel ? panelMenuItems : menu.asset ? assetMenuItems(menu.asset) : []} onClose={closeMenu} />}
       {previewAsset && <MediaPreviewModal projectId={project.id} asset={previewAsset} onClose={() => setPreviewAsset(null)} />}
       {removeCandidate && <ConfirmDialog title={t('library.menu.remove')} message={t('library.removeConfirm')} confirmLabel={t('library.menu.remove')} onConfirm={() => { const asset = removeCandidate; setRemoveCandidate(null); removeAsset(asset); }} onClose={() => setRemoveCandidate(null)} />}
+    </aside>;
+  }
+  if (panel === 'elements') {
+    return <aside className="asset-panel asset-panel-pro elements-panel">
+      <div className="panel-heading compact-panel-heading"><div><h2>{t('editor.panel.elements')}</h2><small>{t('library.elementsSubtitle')}</small></div></div>
+      <div className="elements-source-tabs" role="tablist" aria-label={t('library.elementSources')}><button type="button" role="tab" aria-selected={elementsSection === 'backgrounds'} className={elementsSection === 'backgrounds' ? 'active' : ''} onClick={() => setElementsSection('backgrounds')}>▧ {t('library.backgrounds')}</button><button type="button" role="tab" aria-selected={elementsSection === 'shapes'} className={elementsSection === 'shapes' ? 'active' : ''} onClick={() => setElementsSection('shapes')}>◇ {t('library.shapes')}</button></div>
+      {elementsSection === 'backgrounds' ? <StockMediaShelf busyId={stockBusyId} onAdd={(stock) => void addStock(stock)} /> : <ShapeShelf onAdd={addTextClip} />}
+    </aside>;
+  }
+  if (panel === 'text') {
+    return <aside className="asset-panel asset-panel-pro text-panel">
+      <div className="panel-heading compact-panel-heading"><div><h2>{title}</h2><small>{t('text.panelSubtitle')}</small></div><button className="panel-more" aria-label={t('library.panelMenu')} onClick={(event) => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, panel: true }); }}>•••</button></div>
+      <PanelContent panel={panel} onAddText={addTextClip} onApplyEffect={applyEffect} onOpenSettings={onOpenSettings} />
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.panel ? panelMenuItems : menu.asset ? assetMenuItems(menu.asset) : []} onClose={closeMenu} />}
     </aside>;
   }
   return <aside className="asset-panel asset-panel-pro">
