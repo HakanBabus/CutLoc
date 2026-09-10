@@ -6,6 +6,43 @@ const themes = [
   { name: 'dark', label: /Dark|Koyu/i },
 ];
 
+test('new text clips start without fades or transitions', async ({ page, request }) => {
+  const fixtureName = `Text defaults ${Date.now()}`;
+  const createdResponse = await request.post('/api/projects', { data: { name: fixtureName } });
+  expect(createdResponse.ok()).toBeTruthy();
+  const created = await createdResponse.json();
+  const projectId = created.id;
+
+  try {
+    await page.goto('/');
+    const fixtureCard = page.locator('article.project-card').filter({ hasText: fixtureName });
+    await expect(fixtureCard).toBeVisible();
+    await fixtureCard.getByRole('button').first().click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+
+    await page.locator('.tool-rail button').filter({ hasText: /Text|Metin/ }).click();
+    await page.locator('.text-primary-action').click();
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
+
+    await expect.poll(async () => {
+      const response = await request.get(`/api/projects/${projectId}`);
+      const project = await response.json();
+      return project.tracks.flatMap((track) => track.clips).find((clip) => clip.type === 'text');
+    }).toMatchObject({
+      fadeIn: 0,
+      fadeOut: 0,
+      transitionIn: { type: 'none', duration: 0 },
+      transitionOut: { type: 'none', duration: 0 },
+    });
+  } finally {
+    const deletedResponse = await request.delete(`/api/projects/${projectId}`);
+    if (deletedResponse.ok()) {
+      const deleted = await deletedResponse.json();
+      if (deleted.trashId) await request.delete(`/api/trash/${deleted.trashId}`);
+    }
+  }
+});
+
 test('theme palettes and animation controls stay coherent across the workspace', async ({ page, request }) => {
   test.setTimeout(75_000);
   const fixtureName = `UI polish ${Date.now()}`;

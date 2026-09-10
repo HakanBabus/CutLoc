@@ -47,6 +47,8 @@ function createTextClip(preset: TextPreset, start: number): Clip {
     filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
     // Text appears immediately by default.  Fade is an explicit creative choice
     // in the Animation studio, never a hidden side effect of inserting text.
+    fadeIn: 0,
+    fadeOut: 0,
     transitionIn: { type: 'none', duration: 0 },
     transitionOut: { type: 'none', duration: 0 },
     volume: 1,
@@ -160,7 +162,7 @@ export function AnimationStudio({ compact = false }: { compact?: boolean }) {
   const [easing, setEasing] = useState<TransitionEasing>('ease-in-out');
   const [direction, setDirection] = useState<TransitionDirection>('left');
   const [intensity, setIntensity] = useState(1);
-  const [activePresetId, setActivePresetId] = useState('fade');
+  const [activePresetId, setActivePresetId] = useState('none');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const selected = project?.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
   const visiblePresets = category === 'all' ? ANIMATION_PRESETS : ANIMATION_PRESETS.filter((preset) => preset.category === category);
@@ -232,7 +234,7 @@ export function AnimationStudio({ compact = false }: { compact?: boolean }) {
     setNotice(t(mode === 'both' ? 'animation.appliedBoth' : mode === 'in' ? 'animation.appliedIn' : 'animation.appliedOut', { name: t(preset.labelKey) }));
   };
   const applyAdvanced = () => {
-    const preset = ANIMATION_PRESETS.find((item) => item.id === activePresetId) ?? ANIMATION_PRESETS[1];
+    const preset = ANIMATION_PRESETS.find((item) => item.id === activePresetId) ?? ANIMATION_PRESETS[0];
     apply(preset, direction);
   };
   const updateSelectedDurations = (nextInDuration: number, nextOutDuration: number) => {
