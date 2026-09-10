@@ -31,7 +31,7 @@ This form rebuilds the shared and CLI workspaces before each invocation.
 
 ```powershell
 npm.cmd run --silent cli:agent -- agent guide
-npm.cmd run --silent cli:agent -- agent inspect
+npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20
 ```
 
 `cli:agent` suppresses npm lifecycle output and enables compact one-line JSON.
@@ -85,10 +85,11 @@ npm.cmd run --silent cli:agent -- agent guide
 
 ### `agent inspect [project-id]`
 
-Without an ID, returns server health, settings, projects, jobs, and the guide. With an ID, it also returns the full selected project, media health, backups, and suggested next commands.
+Without an ID, returns server health, settings, a compact paginated project page, recent jobs, and the guide. With an ID, it also returns the full selected project, media health, backups, and suggested next commands. `--no-guide` removes the repeated static contract, `--limit` and `--cursor` page the list, and `--full` includes complete project-list entries.
 
 ```powershell
 npm.cmd run --silent cli:agent -- agent inspect
+npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20 --cursor 0
 npm.cmd run --silent cli:agent -- agent inspect <project-id>
 ```
 
@@ -116,6 +117,7 @@ Get-Content project.json -Raw | npm.cmd run cli -- projects apply <project-id> -
 projects list
 projects create [name]
 projects get <id> [--out <json>]
+projects edit <id> (--file <plan.json> | --data <json> | --stdin) [--dry-run] [--include-project]
 projects apply <id> (--file <json> | --data <json> | --stdin)
 projects duplicate <id>
 projects delete <id>
@@ -123,12 +125,13 @@ projects bundle <id> --out <file>
 projects import <file>
 ```
 
-`projects apply` validates the complete project document. `projects delete` is recoverable through trash until that trash entry is permanently deleted.
+`projects create` accepts `--preset shorts`, or explicit `--aspect`, `--fps`, and `--background` values. `projects edit` applies revision-aware atomic operations including `setName`, `setCanvas`, `addTrack`, `removeTrack`, `addClip`, `updateClip`, `removeClip`, `addMarker`, and `removeMarker`. Use `--dry-run` before mutation. `projects apply` remains available for complete-document replacement. `projects delete` is recoverable through trash until that trash entry is permanently deleted.
 
 ### Media
 
 ```text
-media add <project-id> <file>
+media add <project-id> <file> [--wait] [--include-project]
+media add-many <project-id> <files...> [--wait] [--include-project]
 media remove <project-id> <asset-id>
 media relink <project-id> <asset-id> <file>
 media rebuild <project-id> <asset-id>
@@ -136,7 +139,7 @@ media health <project-id>
 media stock <project-id> <stock-id>
 ```
 
-Use these commands for binary uploads and relinks. Do not put binary data through the generic `api` command.
+Use these commands for binary uploads and relinks. The default upload response is compact. `--wait` waits for the derived-media job and returns `finalRevision`; `--include-project` opts into the complete project payload. Do not put binary data through the generic `api` command.
 
 ### Recovery
 
@@ -157,6 +160,8 @@ export preflight <project-id> [--file <options.json> | --data <json>]
 export start <project-id> [--file <options.json> | --data <json>]
 jobs list
 jobs get <job-id>
+jobs wait <job-id> [--timeout <seconds>] [--interval <seconds>]
+jobs watch <job-id> [--timeout <seconds>] [--interval <seconds>]
 jobs cancel <job-id>
 jobs download <job-id> --out <file>
 ```
@@ -186,7 +191,17 @@ For a selected range, add:
 }
 ```
 
-`export start` returns an asynchronous job. Use `jobs get` until `status` is `completed`, `failed`, or `cancelled`. Only `queued` or `running` jobs can be cancelled; cancelling a terminal job returns `409`. Download only a completed job. UTF-8 output names are preserved through the download header.
+`export start` returns an asynchronous job. Prefer `jobs wait` for one terminal JSON result or `jobs watch` for JSONL progress events. Only `queued` or `running` jobs can be cancelled; cancelling a terminal job returns `409`. Download only a completed job. UTF-8 output names are preserved through the download header.
+
+### Preview frame
+
+Render a timeline frame through the same FFmpeg composition path before a full export:
+
+```powershell
+cutloc preview frame <project-id> --time 12.5 --out frame.png
+```
+
+This is intended for agent visual QA and uses a temporary draft render that is cleaned after the PNG is returned.
 
 ### Settings
 

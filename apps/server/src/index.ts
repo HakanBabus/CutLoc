@@ -756,6 +756,25 @@ function safeExportName(project: Project, requested: string | undefined, extensi
   return `${safe}.${extension}`;
 }
 
+async function runFfmpegStandalone(args: string[], outputPath: string) {
+  const ffmpeg = binaryPath('ffmpeg');
+  if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true });
+    const timeout = setTimeout(() => child.kill(), Math.min(maxFfmpegRuntimeMs, 120_000));
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16_000); });
+    child.once('error', (error) => { clearTimeout(timeout); reject(error); });
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.slice(-2400) || `FFmpeg exit code ${code}`));
+    });
+  });
+  const stat = await fsp.stat(outputPath);
+  if (stat.size <= 0) throw new Error(message('ffmpegEmpty'));
+}
+
 function attachmentContentDisposition(fileName: string) {
   const safeName = path.basename(fileName).replace(/["\r\n]/g, '-');
   const asciiName = safeName
@@ -1187,7 +1206,7 @@ function estimateExportBytes(options: ExportOptions, duration: number) {
 
 async function exportPreflight(project: Project, options: ExportOptions, exportDir: string) {
   const errors: Array<{ code: string; message: string }> = [];
-  const warnings: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string; severity?: 'info' | 'warning'; clipIds?: string[]; properties?: string[] }> = [];
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) errors.push({ code: 'FFMPEG_MISSING', message: message('preflightFfmpegMissing') });
   try {
@@ -1203,8 +1222,14 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
     }
     if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { fps: options.fps }) });
     if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: message('preflightLargeOutput') });
-    if (project.tracks.some((track) => track.clips.some((clip) => clip.textStyle && (Math.abs(clip.transform.rotation) > 0.001 || clip.textStyle.letterSpacing !== 0 || clip.textStyle.textDecoration !== 'none')))) {
-      warnings.push({ code: 'TEXT_RENDER_APPROXIMATION', message: message('preflightTextLimit') });
+    const approximateTextClips = project.tracks.flatMap((track) => track.clips).filter((clip) => clip.textStyle && (Math.abs(clip.transform.rotation) > 0.001 || clip.textStyle.letterSpacing !== 0 || clip.textStyle.textDecoration !== 'none'));
+    if (approximateTextClips.length) {
+      const properties = Array.from(new Set(approximateTextClips.flatMap((clip) => [
+        ...(Math.abs(clip.transform.rotation) > 0.001 ? ['rotation'] : []),
+        ...(clip.textStyle?.letterSpacing !== 0 ? ['letterSpacing'] : []),
+        ...(clip.textStyle?.textDecoration !== 'none' ? ['textDecoration'] : []),
+      ])));
+      warnings.push({ code: 'TEXT_RENDER_APPROXIMATION', message: message('preflightTextLimit'), severity: 'warning', clipIds: approximateTextClips.map((clip) => clip.id), properties });
     }
     return { ok: errors.length === 0, errors, warnings, estimatedBytes };
   } catch (error) {
@@ -1469,11 +1494,27 @@ async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post<{ Body: { name?: string } }>('/api/projects', async (request, reply) => {
+  app.post<{ Body: { name?: string; preset?: string; aspect?: Project['canvas']['aspect']; fps?: number; background?: string } }>('/api/projects', async (request, reply) => {
     const project = defaultProject(id('project'), request.body?.name?.trim() || message('newProject'));
-    await ensureProjectFolders(project.id);
-    await saveProject(project);
-    return reply.code(201).send(project);
+    const presetCanvas = request.body?.preset === 'shorts' ? { width: 1080, height: 1920, aspect: '9:16' as const, fitMode: 'fill' as const, fps: 30, background: '#070B14' } : {};
+    const aspectDimensions: Partial<Record<Project['canvas']['aspect'], { width: number; height: number }>> = {
+      '16:9': { width: 1920, height: 1080 }, '9:16': { width: 1080, height: 1920 }, '1:1': { width: 1080, height: 1080 },
+      '4:5': { width: 1080, height: 1350 }, '3:2': { width: 1620, height: 1080 }, '21:9': { width: 2520, height: 1080 },
+    };
+    const dimensions = request.body?.aspect ? aspectDimensions[request.body.aspect] : undefined;
+    const configured = ProjectSchema.parse({
+      ...project,
+      canvas: {
+        ...project.canvas,
+        ...presetCanvas,
+        ...(dimensions ? { ...dimensions, aspect: request.body!.aspect } : {}),
+        ...(request.body?.fps !== undefined ? { fps: request.body.fps } : {}),
+        ...(request.body?.background ? { background: request.body.background } : {}),
+      },
+    });
+    await ensureProjectFolders(configured.id);
+    await saveProject(configured);
+    return reply.code(201).send(configured);
   });
 
   app.post<{ Params: { projectId: string }; Body: { stockId?: string } }>('/api/projects/:projectId/stock', async (request, reply) => {
@@ -1956,7 +1997,7 @@ async function registerRoutes(app: FastifyInstance) {
             try {
               assertProjectActive(project.id);
               if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
-              updateJob(jobInfo.id, { status: 'running', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
+              updateJob(jobInfo.id, { status: 'running', phase: 'rendering', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
               jobProgressDuration.set(jobInfo.id, render.duration);
               await runFfmpeg(render.args, jobInfo, output);
               assertProjectActive(project.id);
@@ -2019,6 +2060,31 @@ async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
       return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, 'jobNotFound') });
+    }
+  });
+
+  app.get<{ Params: { projectId: string }; Querystring: { time?: string } }>('/api/projects/:projectId/preview-frame', async (request, reply) => {
+    let previewVideo = '';
+    let previewImage = '';
+    try {
+      const project = await readProject(request.params.projectId);
+      const time = Number(request.query.time ?? 0);
+      if (!Number.isFinite(time) || time < 0 || time >= Math.max(project.duration, 0.001)) return reply.code(400).send({ error: message('exportSettingsInvalid') });
+      const previewDir = path.join(projectPath(project.id), 'exports', '.preview');
+      await ensureDir(previewDir);
+      const previewId = crypto.randomBytes(10).toString('hex');
+      previewVideo = path.join(previewDir, `${previewId}.mp4`);
+      previewImage = path.join(previewDir, `${previewId}.png`);
+      const end = Math.min(project.duration, time + Math.max(0.12, 1 / project.canvas.fps));
+      const render = buildExportArgs(project, { format: 'mp4', aspect: project.canvas.aspect, resolution: '720p', fps: nearestExportFps(project.canvas.fps, 30), quality: 'draft', audioBitrateKbps: 128, range: { start: time, end } }, previewVideo);
+      await runFfmpegStandalone(render.args, previewVideo);
+      await runFfmpegStandalone(['-i', previewVideo, '-frames:v', '1', previewImage], previewImage);
+      const bytes = await fsp.readFile(previewImage);
+      return reply.header('Content-Type', 'image/png').header('Content-Length', bytes.length).send(bytes);
+    } catch (error) {
+      return reply.code(400).send({ error: localizedError(error, 'exportPrepareFailed') });
+    } finally {
+      await Promise.all([previewVideo, previewImage].filter(Boolean).map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
     }
   });
 

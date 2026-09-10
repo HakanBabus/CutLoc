@@ -263,6 +263,19 @@ test('cross-origin API mutations are rejected', async () => {
   assert.equal(response.statusCode, 403);
 });
 
+test('project creation supports a validated Shorts canvas preset', async () => {
+  const response = await jsonRequest('POST', '/api/projects', { name: 'Shorts fixture', preset: 'shorts', fps: 30, background: '#08111f' });
+  assert.equal(response.statusCode, 201);
+  const created = response.json();
+  assert.equal(created.canvas.aspect, '9:16');
+  assert.equal(created.canvas.width, 1080);
+  assert.equal(created.canvas.height, 1920);
+  assert.equal(created.canvas.fitMode, 'fill');
+  assert.equal(created.canvas.background, '#08111f');
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
+});
+
 test('CLI access lease force-locks project mutations and releases cleanly', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'CLI lease test' })).json();
   const accessUrl = `/api/projects/${created.id}/access`;
@@ -789,6 +802,24 @@ test('advanced motion, crop, mask, speed curve and adjustment controls render th
     adjustment: true,
     keyframes: [],
   });
+  project.tracks[2].clips.push({
+    id: 'advanced-text-clip',
+    type: 'text',
+    name: 'Approximate text',
+    start: 0,
+    duration: 1.2,
+    sourceStart: 0,
+    sourceDuration: 1.2,
+    speed: 1,
+    transform: { x: 0, y: 0, scale: 1, rotation: 4, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 },
+    transitionOut: { type: 'none', duration: 0 },
+    volume: 1,
+    adjustment: false,
+    keyframes: [],
+    textStyle: { text: 'Agent QA', fontFamily: 'Arial', fontSize: 48, fontWeight: 700, fontStyle: 'normal', textDecoration: 'underline', letterSpacing: 2, lineHeight: 1.2, padding: 4, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' },
+  });
   project.duration = 1.2;
   const saveResponse = await jsonRequest('PATCH', `/api/projects/${created.id}`, project);
   assert.equal(saveResponse.statusCode, 200);
@@ -796,6 +827,14 @@ test('advanced motion, crop, mask, speed curve and adjustment controls render th
   assert.equal(preflightResponse.statusCode, 200);
   assert.equal(preflightResponse.json().ok, true);
   assert.equal(preflightResponse.json().warnings.some((warning) => /FALLBACK/.test(warning.code)), false);
+  const textWarning = preflightResponse.json().warnings.find((warning) => warning.code === 'TEXT_RENDER_APPROXIMATION');
+  assert.deepEqual(textWarning.clipIds, ['advanced-text-clip']);
+  assert.deepEqual(textWarning.properties.sort(), ['letterSpacing', 'rotation', 'textDecoration'].sort());
+  assert.equal(textWarning.severity, 'warning');
+  const previewResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0.5` });
+  assert.equal(previewResponse.statusCode, 200);
+  assert.match(previewResponse.headers['content-type'], /image\/png/);
+  assert.equal(previewResponse.rawPayload.subarray(0, 4).equals(Buffer.from([137, 80, 78, 71])), true);
   const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', fileName: 'advanced-fixture.mp4' });
   assert.equal(exportResponse.statusCode, 202);
   const exportJob = await waitForJob(exportResponse.json().job.id, 60000);

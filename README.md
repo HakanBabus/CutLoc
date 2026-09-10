@@ -1,5 +1,7 @@
 <!-- markdownlint-disable MD013 MD033 MD041 -->
 
+[English](README.md) | [Türkçe](README.tr.md)
+
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logo" />
   <h1>CutLoc</h1>
@@ -198,7 +200,7 @@ For an AI agent or another JSON consumer, start with the machine-readable guide 
 
 ```powershell
 npm.cmd run --silent cli:agent -- agent guide
-npm.cmd run --silent cli:agent -- agent inspect
+npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20
 npm.cmd run --silent cli:agent -- agent inspect <project-id>
 ```
 
@@ -209,6 +211,9 @@ npm.cmd run build:shared
 npm.cmd run build:cli
 node apps/cli/dist/index.js --compact agent inspect <project-id>
 ```
+
+The overview form of `agent inspect` is compact and paginated by default. Use
+`--cursor`, `--limit`, `--no-guide`, or `--full` to control its payload.
 
 The default CLI URL is `http://127.0.0.1:4173`. Use `--url` or `CUTLOC_URL` for another loopback URL; the CLI rejects non-loopback hosts.
 
@@ -222,6 +227,21 @@ npm.cmd run cli -- projects apply <project-id> --file project.json
 ```
 
 The server validates the complete document with the shared **ProjectSchema**. If another client changed the project first, the apply returns a conflict instead of silently overwriting that work.
+
+For safer agent-authored timeline changes, prefer a revision-aware edit plan:
+
+```powershell
+npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json --dry-run
+npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json
+```
+
+Short-form projects can start with the correct canvas immediately:
+
+```powershell
+npm.cmd run --silent cli:agent -- projects create "Short demo" --preset shorts
+npm.cmd run --silent cli:agent -- media add-many <project-id> scene-01.png voice.mp3 --wait
+npm.cmd run --silent cli:agent -- jobs wait <job-id> --timeout 300
+```
 
 For a sequence of JSON operations, use a persistent session:
 
@@ -240,11 +260,11 @@ Project-changing commands acquire an exclusive, short-lived project lease. If th
 
 | Area | Commands |
 | --- | --- |
-| Agent discovery | `agent guide` and `agent inspect [project-id]` |
-| Projects | `projects list/create/get/apply/duplicate/delete/import/bundle` |
-| Media | `media add/remove/relink/rebuild/health/stock` |
+| Agent discovery | `agent guide` and compact/paginated `agent inspect [project-id]` |
+| Projects | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
+| Media | `media add/add-many/remove/relink/rebuild/health/stock` |
 | Recovery | `backups list/restore` and `trash list/restore/delete` |
-| Export | `export preflight/start` and `jobs list/get/cancel/download` |
+| Export | `export preflight/start` and `jobs list/get/wait/watch/cancel/download` |
 | Settings | `settings get/set` |
 | Low-level API | `api <method> </api/path>` |
 

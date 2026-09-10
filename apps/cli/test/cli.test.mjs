@@ -42,7 +42,7 @@ const server = http.createServer(async (request, response) => {
   };
   if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, ffmpeg: true, ffprobe: true });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
-  if (request.method === 'GET' && request.url === '/api/projects') return json(200, [{ id: 'p1', name: project.name, revision: project.revision }]);
+  if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
   if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
   if (request.method === 'GET' && request.url === '/api/projects/p1/media-health') return json(200, []);
   if (request.method === 'GET' && request.url === '/api/projects/p1/backups') return json(200, []);
@@ -54,10 +54,22 @@ const server = http.createServer(async (request, response) => {
     return response.end(Buffer.from([80, 75, 3, 4]));
   }
   if (request.method === 'GET' && request.url === '/api/jobs/j1') return json(200, { id: 'j1', projectId: 'p1', kind: 'export', status: 'running' });
+  if (request.method === 'GET' && request.url === '/api/jobs/j2') return json(200, { id: 'j2', projectId: 'p1', kind: 'export', status: 'completed', progress: 1, phase: 'complete' });
+  if (request.method === 'POST' && request.url === '/api/projects/p1/media' && request.headers['x-cutloc-access-token'] === 'test-token') {
+    return json(201, {
+      asset: { id: 'a1', name: 'image.png', type: 'image', mimeType: 'image/png', path: 'media/a1.png', size: 4, duration: 0, width: 1, height: 1, hasAudio: false, createdAt: '2026-08-23T10:00:00.000Z' },
+      project: { ...project, revision: 1, assets: [{ id: 'a1', name: 'image.png', type: 'image', mimeType: 'image/png', path: 'media/a1.png', size: 4, duration: 0, width: 1, height: 1, hasAudio: false, createdAt: '2026-08-23T10:00:00.000Z' }] },
+      job: { id: 'j2', projectId: 'p1', kind: 'proxy', status: 'queued', progress: 0, createdAt: '2026-08-23T10:00:00.000Z', updatedAt: '2026-08-23T10:00:00.000Z' },
+    });
+  }
   if (request.method === 'DELETE' && request.url === '/api/jobs/j1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ok: true });
   if (request.method === 'GET' && request.url === '/api/jobs/j1/download') {
     response.writeHead(200, { 'content-type': 'video/mp4' });
     return response.end(Buffer.from([0, 1, 2, 3]));
+  }
+  if (request.method === 'GET' && request.url === '/api/projects/p1/preview-frame?time=0.5') {
+    response.writeHead(200, { 'content-type': 'image/png' });
+    return response.end(Buffer.from([137, 80, 78, 71]));
   }
   if (request.method === 'GET' && request.url === '/api/stock/white') {
     response.writeHead(200, { 'content-type': 'image/png' });
@@ -159,7 +171,14 @@ test('agent inspect returns live context and optional project diagnostics', asyn
   assert.equal(overviewBody.ok, true);
   assert.equal(overviewBody.live.server.ffmpeg, true);
   assert.equal(overviewBody.live.projects[0].id, 'p1');
+  assert.equal(overviewBody.live.projects[0].assetCount, 0);
+  assert.equal('assets' in overviewBody.live.projects[0], false);
+  assert.equal(overviewBody.live.projectPage.total, 1);
   assert.equal(overviewBody.live.selectedProject, undefined);
+
+  const noGuide = await runCli(['agent', 'inspect', '--no-guide', '--limit', '1']);
+  assert.equal(noGuide.code, 0, noGuide.stderr);
+  assert.equal('guide' in JSON.parse(noGuide.stdout), false);
 
   const detail = await runCli(['agent', 'inspect', 'p1']);
   assert.equal(detail.code, 0, detail.stderr);
@@ -171,12 +190,17 @@ test('agent inspect returns live context and optional project diagnostics', asyn
   assert.equal(requests.some((entry) => entry.url === '/api/projects/p1/media-health'), true);
 });
 
-test('projects create forwards a positional name and rejects unknown options', async () => {
+test('projects create forwards names and agent-friendly canvas presets', async () => {
   requests.length = 0;
   const created = await runCli(['projects', 'create', 'CLI', 'created', 'project']);
   assert.equal(created.code, 0, created.stderr);
   assert.equal(JSON.parse(created.stdout).name, 'CLI created project');
   assert.equal(requests.find((entry) => entry.method === 'POST' && entry.url === '/api/projects')?.body?.name, 'CLI created project');
+
+  const shorts = await runCli(['projects', 'create', 'Short', 'demo', '--preset', 'shorts', '--fps', '30']);
+  assert.equal(shorts.code, 0, shorts.stderr);
+  const shortsRequest = requests.filter((entry) => entry.method === 'POST' && entry.url === '/api/projects').at(-1);
+  assert.deepEqual(shortsRequest?.body, { name: 'Short demo', preset: 'shorts', fps: 30 });
 
   const requestCount = requests.length;
   const invalid = await runCli(['projects', 'create', 'CLI', '--unexpected']);
@@ -206,6 +230,102 @@ test('projects apply and binary download paths use the executable contract', asy
     const download = await runCli(['jobs', 'download', 'j1', '--out', jobFile]);
     assert.equal(download.code, 0, download.stderr);
     assert.deepEqual([...await fsp.readFile(jobFile)], [0, 1, 2, 3]);
+  } finally {
+    await fsp.rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('projects edit validates an atomic plan in dry-run mode and applies it under a lease', async () => {
+  requests.length = 0;
+  const plan = { baseRevision: 0, operations: [{ op: 'setName', name: 'Planlı kurgu' }, { op: 'setCanvas', canvas: { width: 1080, height: 1920, aspect: '9:16', fitMode: 'fill' } }] };
+  const dryRun = await runCli(['projects', 'edit', 'p1', '--data', JSON.stringify(plan), '--dry-run']);
+  assert.equal(dryRun.code, 0, dryRun.stderr);
+  const preview = JSON.parse(dryRun.stdout);
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.summary.name, 'Planlı kurgu');
+  assert.equal(preview.summary.canvas.aspect, '9:16');
+  assert.equal(requests.some((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/p1'), false);
+
+  const applied = await runCli(['projects', 'edit', 'p1', '--data', JSON.stringify(plan)]);
+  assert.equal(applied.code, 0, applied.stderr);
+  assert.equal(JSON.parse(applied.stdout).revision, 1);
+  assert.equal(requests.some((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/p1'), true);
+});
+
+test('media add has a compact default response and can wait for a stable derived revision', async () => {
+  const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-media-'));
+  try {
+    const file = path.join(outputDir, 'image.png');
+    await fsp.writeFile(file, Buffer.from([137, 80, 78, 71]));
+    const result = await runCli(['media', 'add', 'p1', file]);
+    assert.equal(result.code, 0, result.stderr);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.asset.id, 'a1');
+    assert.equal(body.revision, 1);
+    assert.equal('project' in body, false);
+
+    const waited = await runCli(['media', 'add', 'p1', file, '--wait']);
+    assert.equal(waited.code, 0, waited.stderr);
+    const stable = JSON.parse(waited.stdout);
+    assert.equal(stable.stable, true);
+    assert.equal(stable.job.status, 'completed');
+    assert.equal(stable.finalRevision, 0);
+  } finally {
+    await fsp.rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('media add-many waits for each derived job before starting the next upload', async () => {
+  const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-media-many-'));
+  try {
+    requests.length = 0;
+    const first = path.join(outputDir, 'first.png');
+    const second = path.join(outputDir, 'second.png');
+    await Promise.all([
+      fsp.writeFile(first, Buffer.from([137, 80, 78, 71])),
+      fsp.writeFile(second, Buffer.from([137, 80, 78, 71])),
+    ]);
+
+    const result = await runCli(['media', 'add-many', 'p1', first, second, '--wait']);
+    assert.equal(result.code, 0, result.stderr);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.count, 2);
+    assert.equal(body.results.every((entry) => entry.stable && entry.job.status === 'completed'), true);
+
+    const workflow = requests
+      .filter((entry) => entry.url === '/api/projects/p1/media' || entry.url === '/api/jobs/j2')
+      .map((entry) => `${entry.method} ${entry.url}`);
+    assert.deepEqual(workflow, [
+      'POST /api/projects/p1/media',
+      'GET /api/jobs/j2',
+      'POST /api/projects/p1/media',
+      'GET /api/jobs/j2',
+    ]);
+  } finally {
+    await fsp.rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('jobs wait returns terminal JSON and jobs watch emits JSONL progress', async () => {
+  const waited = await runCli(['jobs', 'wait', 'j2', '--timeout', '1', '--interval', '0.01']);
+  assert.equal(waited.code, 0, waited.stderr);
+  assert.equal(JSON.parse(waited.stdout).status, 'completed');
+
+  const watched = await runCli(['jobs', 'watch', 'j2', '--timeout', '1', '--interval', '0.01']);
+  assert.equal(watched.code, 0, watched.stderr);
+  const lines = watched.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(lines[0].event, 'job');
+  assert.equal(lines.at(-1).event, 'terminal');
+});
+
+test('preview frame writes a binary PNG without leaking it to stdout', async () => {
+  const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-preview-'));
+  try {
+    const outputFile = path.join(outputDir, 'frame.png');
+    const result = await runCli(['preview', 'frame', 'p1', '--time', '0.5', '--out', outputFile]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).time, 0.5);
+    assert.deepEqual([...await fsp.readFile(outputFile)], [137, 80, 78, 71]);
   } finally {
     await fsp.rm(outputDir, { recursive: true, force: true });
   }
