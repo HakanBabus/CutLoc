@@ -52,6 +52,12 @@ export function Editor({ onBack }: { onBack: () => void }) {
     if (settings?.workspaceLayout) setWorkspaceLayout({ ...DEFAULT_WORKSPACE_LAYOUT, ...settings.workspaceLayout });
   }, [settings?.workspaceLayout]);
 
+  useEffect(() => {
+    if (!editorNotice) return;
+    const timeout = window.setTimeout(() => setEditorNotice(''), 5_500);
+    return () => window.clearTimeout(timeout);
+  }, [editorNotice, setEditorNotice]);
+
   const persistWorkspaceLayout = (next: WorkspaceLayout) => {
     setWorkspaceLayout(next);
     if (!settings) return;
@@ -273,9 +279,8 @@ export function Editor({ onBack }: { onBack: () => void }) {
     };
     const poll = () => {
       if (settled) return;
-      setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.polling') }));
       void api<Job>('/api/jobs/' + jobId).then(applyJob).catch(() => {
-        if (!settled) setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.serverReconnecting') }));
+        if (!settled && !source) setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.serverReconnecting') }));
       }).finally(() => {
         if (!settled) pollTimer = window.setTimeout(poll, 1000);
       });
@@ -299,14 +304,15 @@ export function Editor({ onBack }: { onBack: () => void }) {
         setExportStatus((current) => ({ ...current, jobId, status: 'reconnecting', message: t('export.connectionReconnecting') }));
         if (reconnectAttempts <= 3) {
           reconnectTimer = window.setTimeout(connect, 500 * reconnectAttempts);
-        } else {
-          poll();
         }
       };
     };
 
     exportWatchCleanupRef.current = cleanup;
     void api<Job>('/api/jobs/' + jobId).then(applyJob).catch(() => undefined);
+    // SSE is the fast path. Polling closes the race where a short export
+    // finishes between the initial job snapshot and the event connection.
+    pollTimer = window.setTimeout(poll, 1000);
     connect();
   });
 
@@ -364,7 +370,7 @@ export function Editor({ onBack }: { onBack: () => void }) {
     <EditorTopbar project={project} onBack={handleBack} backPending={backPending} onExport={() => setShowExport(true)} exporting={exporting} onSettings={() => setShowSettings(true)} onCommands={() => setShowCommandPalette(true)} />
     <div className="editor-body workspace-layout" style={{ '--workspace-rail-width': `${workspaceLayout.railWidth}px`, '--workspace-library-width': `${workspaceLayout.libraryWidth}px`, '--workspace-inspector-width': `${workspaceLayout.inspectorWidth}px`, '--workspace-timeline-height': `${workspaceLayout.timelineHeight}px` } as React.CSSProperties}><ToolRail onOpenSettings={() => setShowSettings(true)} /><AssetPanelPro onImport={importMedia} onOpenSettings={() => setShowSettings(true)} /><PreviewArea project={project} settings={settings} /><Inspector project={project} /><TimelinePro project={project} /><WorkspaceResizers layout={workspaceLayout} onPreview={setWorkspaceLayout} onCommit={persistWorkspaceLayout} /></div>
     {exportMessage && <div className={`export-toast ${exporting ? 'active' : ''}`}><span className="export-pulse" />{exportMessage}{!exporting && <button onClick={() => setExportMessage('')}>×</button>}</div>}
-    {editorNotice && <div className="export-toast"><span className="export-pulse" />{editorNotice}<button onClick={() => setEditorNotice('')}>×</button></div>}
+    {editorNotice && <div className="export-toast editor-notice" role="status" aria-live="polite"><span className="editor-notice-icon" aria-hidden="true">i</span><span className="editor-notice-copy">{editorNotice}</span><button onClick={() => setEditorNotice('')} aria-label={t('common.close')}>×</button></div>}
     <div className="editor-statusbar"><span><i className="status-dot" /> {t('editor.status.ready')}</span><span>{saveState === 'saving' ? t('common.saving') : saveState === 'offline' ? t('editor.saveOffline') : saveState === 'error' ? t('common.saveError') : t('editor.status.allSaved')}</span><span>{t('editor.status.shortcuts', { undo: shortcutValue(settings, 'undo'), togglePlayback: shortcutValue(settings, 'togglePlayback') })}</span></div>
     {projectAccess && <div className="cli-access-lock" role="alert" aria-live="assertive"><section><span className="cli-access-badge">CLI</span><h2>{t('editor.access.cliTitle')}</h2><p>{t('editor.access.cliCopy', { owner: projectAccess.ownerLabel })}</p><small>{t('editor.access.cliHint')}</small></section></div>}
     {showCommandPalette && <CommandPalette actions={commandActions} onClose={() => setShowCommandPalette(false)} />}
@@ -493,14 +499,28 @@ export function SettingsModal({ settings, onClose }: { settings: Settings | null
       setSettings(saved); setStatus(t('settings.saved')); window.setTimeout(onClose, 450);
     } catch (error) { setStatus(error instanceof Error ? error.message : t('settings.saveFailed')); }
   };
-  const generalSettings = <>
-    <label className="setting-row"><span><strong>{t('settings.language')}</strong><small>{t('settings.languageHint')}</small></span><select aria-label={t('settings.language')} value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as 'en' | 'tr' })}><option value="en">English</option><option value="tr">Türkçe</option></select></label>
-    <label className="setting-row"><span><strong>{t('settings.resolution')}</strong><small>{t('settings.resolutionHint')}</small></span><select value={form.defaultExport.resolution} onChange={(event) => setForm({ ...form, defaultExport: { ...form.defaultExport, resolution: event.target.value as typeof form.defaultExport.resolution } })}><option value="720p">720p · 1280 × 720</option><option value="1080p">1080p · 1920 × 1080</option><option value="2K">1440p · 2560 × 1440</option><option value="4K">4K UHD · 3840 × 2160</option></select></label>
-    <label className="setting-row"><span><strong>{t('settings.previewQuality')}</strong><small>{t('settings.previewQualityHint')}</small></span><select value={form.proxyQuality} onChange={(event) => setForm({ ...form, proxyQuality: event.target.value as 'draft' | 'balanced' | 'high' })}><option value="draft">{t('settings.previewQuality.draft')}</option><option value="balanced">{t('settings.previewQuality.balanced')}</option><option value="high">{t('settings.previewQuality.high')}</option></select></label>
-    <div className="setting-row setting-readonly"><span><strong>{t('settings.encoder')}</strong><small>{t('settings.encoderHint')}</small></span><b>H.264 · CPU</b></div>
-    <div className="workspace-settings-card"><div><strong>{t('settings.layout')}</strong><small>{t('settings.layoutHint')}</small></div><button type="button" className="shortcut-reset" onClick={() => setForm({ ...form, workspaceLayout: { ...DEFAULT_WORKSPACE_LAYOUT } })}>{t('settings.resetLayout')}</button></div>
-  </>;
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="settings-modal"><div className="modal-head"><div><p className="eyebrow">{t('settings.workspace')}</p><h2>{t('settings.title')}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><div className="settings-tabs"><button className={activeTab === 'general' ? 'active' : ''} onClick={() => setActiveTab('general')}>{t('settings.general')}</button><button className={activeTab === 'shortcuts' ? 'active' : ''} onClick={() => setActiveTab('shortcuts')}>{t('settings.shortcuts')}</button></div>{activeTab === 'general' && generalSettings}{activeTab === 'shortcuts' && <div className="shortcut-settings"><div className="settings-intro"><strong>{t('settings.editShortcuts')}</strong><small>{t('settings.shortcutHint')}</small></div>{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => { const label = t(SHORTCUT_LABELS[action].labelKey); return <label className="shortcut-setting-row" key={action}><span><strong>{label}</strong><small>{t(SHORTCUT_LABELS[action].descriptionKey)}</small></span><input type="text" maxLength={40} autoComplete="off" spellCheck={false} aria-label={t('settings.shortcutAria', { label })} value={form.shortcuts[action]} onChange={(event) => setForm({ ...form, shortcuts: { ...form.shortcuts, [action]: event.target.value } })} /></label>; })}</div>}<div className="modal-actions"><span>{status}</span><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" onClick={() => void save()}>{t('common.save')}</button></div></section></div>;
+  const generalSettings = <div className="settings-sections">
+    <section className="settings-section">
+      <div className="settings-section-heading"><span aria-hidden="true">Aa</span><div><strong>{t('settings.interface')}</strong><small>{t('settings.interfaceHint')}</small></div></div>
+      <label className="setting-row"><span><strong>{t('settings.language')}</strong><small>{t('settings.languageHint')}</small></span><select aria-label={t('settings.language')} value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as 'en' | 'tr' })}><option value="en">English</option><option value="tr">Türkçe</option></select></label>
+      <label className="setting-row"><span><strong>{t('settings.previewQuality')}</strong><small>{t('settings.previewQualityHint')}</small></span><select value={form.proxyQuality} onChange={(event) => setForm({ ...form, proxyQuality: event.target.value as 'draft' | 'balanced' | 'high' })}><option value="draft">{t('settings.previewQuality.draft')}</option><option value="balanced">{t('settings.previewQuality.balanced')}</option><option value="high">{t('settings.previewQuality.high')}</option></select></label>
+    </section>
+    <section className="settings-section">
+      <div className="settings-section-heading"><span aria-hidden="true">↗</span><div><strong>{t('settings.exportDefaults')}</strong><small>{t('settings.exportDefaultsHint')}</small></div></div>
+      <div className="settings-control-grid">
+        <label><span>{t('export.format')}</span><select value={form.defaultExport.format} onChange={(event) => setForm({ ...form, defaultExport: { ...form.defaultExport, format: event.target.value as typeof form.defaultExport.format } })}><option value="mp4">MP4</option><option value="mp3">MP3</option><option value="wav">WAV</option></select></label>
+        <label><span>{t('settings.resolution')}</span><select value={form.defaultExport.resolution} onChange={(event) => setForm({ ...form, defaultExport: { ...form.defaultExport, resolution: event.target.value as typeof form.defaultExport.resolution } })}><option value="720p">720p</option><option value="1080p">1080p</option><option value="2K">1440p</option><option value="4K">4K UHD</option></select></label>
+        <label><span>{t('export.frameRate')}</span><select value={form.defaultExport.fps} onChange={(event) => setForm({ ...form, defaultExport: { ...form.defaultExport, fps: Number(event.target.value) as typeof form.defaultExport.fps } })}>{[24, 25, 30, 50, 60].map((fps) => <option key={fps} value={fps}>{fps} FPS</option>)}</select></label>
+        <label><span>{t('export.quality')}</span><select value={form.defaultExport.quality} onChange={(event) => setForm({ ...form, defaultExport: { ...form.defaultExport, quality: event.target.value as typeof form.defaultExport.quality } })}><option value="draft">{t('export.quality.draft')}</option><option value="standard">{t('export.quality.standard')}</option><option value="high">{t('export.quality.high')}</option><option value="custom">{t('export.quality.custom')}</option></select></label>
+      </div>
+      <div className="setting-row setting-readonly"><span><strong>{t('settings.encoder')}</strong><small>{t('settings.encoderHint')}</small></span><b><i /> H.264 · CPU</b></div>
+    </section>
+    <section className="settings-section settings-layout-section">
+      <div className="settings-section-heading"><span aria-hidden="true">▦</span><div><strong>{t('settings.layout')}</strong><small>{t('settings.layoutHint')}</small></div></div>
+      <button type="button" className="settings-reset-layout" onClick={() => setForm({ ...form, workspaceLayout: { ...DEFAULT_WORKSPACE_LAYOUT } })}><span>↺</span><div><strong>{t('settings.resetLayout')}</strong><small>{t('settings.resetLayoutHint')}</small></div></button>
+    </section>
+  </div>;
+  return <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="settings-modal settings-modal-v2" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-head settings-modal-head"><div><p className="eyebrow">{t('settings.workspace')}</p><h2 id="settings-title">{t('settings.title')}</h2><small>{t('settings.copy')}</small></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><div className="settings-layout"><nav className="settings-tabs" aria-label={t('settings.title')}><button className={activeTab === 'general' ? 'active' : ''} onClick={() => setActiveTab('general')}><span aria-hidden="true">⚙</span><div><strong>{t('settings.general')}</strong><small>{t('settings.generalHint')}</small></div></button><button className={activeTab === 'shortcuts' ? 'active' : ''} onClick={() => setActiveTab('shortcuts')}><span aria-hidden="true">⌨</span><div><strong>{t('settings.shortcuts')}</strong><small>{t('settings.shortcutsHint')}</small></div></button><div className="settings-local-card"><span>●</span><strong>{t('settings.localFirst')}</strong><small>{t('settings.localFirstHint')}</small></div></nav><div className="settings-content">{activeTab === 'general' && generalSettings}{activeTab === 'shortcuts' && <div className="shortcut-settings"><div className="settings-intro"><strong>{t('settings.editShortcuts')}</strong><small>{t('settings.shortcutHint')}</small></div>{(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((action) => { const label = t(SHORTCUT_LABELS[action].labelKey); return <label className="shortcut-setting-row" key={action}><span><strong>{label}</strong><small>{t(SHORTCUT_LABELS[action].descriptionKey)}</small></span><input type="text" maxLength={40} autoComplete="off" spellCheck={false} aria-label={t('settings.shortcutAria', { label })} value={form.shortcuts[action]} onChange={(event) => setForm({ ...form, shortcuts: { ...form.shortcuts, [action]: event.target.value } })} /></label>; })}</div>}</div></div><div className="modal-actions settings-actions"><span role="status" aria-live="polite">{status}</span><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" onClick={() => void save()}>{t('common.save')}</button></div></section></div>;
 }
 
 type WorkspaceResizeHandle = 'rail' | 'library' | 'inspector' | 'timeline';

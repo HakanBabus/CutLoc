@@ -1,7 +1,7 @@
 {
   "name": "@cutloc/server",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env --import=tsx/esm --watch src/start.ts",

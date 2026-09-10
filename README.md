@@ -3,27 +3,30 @@
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logo" />
   <h1>CutLoc</h1>
-  <p><strong>An experimental, local-first video editor for creative work.</strong></p>
+  <p><strong>A beta, local-first video editor for creative work.</strong></p>
 
-  [![Experimental](https://img.shields.io/badge/status-experimental-f3b61f)](#project-status)
-  [![Version](https://img.shields.io/badge/version-0.0.2-7c8cff)](#project-status)
+  [![Beta](https://img.shields.io/badge/status-beta-4ea1ff)](#project-status)
+  [![Version](https://img.shields.io/badge/version-0.1.0-7c8cff)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
 > [!WARNING]
-> **CutLoc v0.0.2 is experimental software.** Features are still changing, export and preview parity is not guaranteed for every media or effect combination, and project files may not remain compatible with future versions. Keep independent backups of important media and projects. Do not use this build as the only copy of production work.
+> **CutLoc v0.1.0 is beta software.** The core local editing, recovery, CLI, and export workflows are usable and tested, but preview/export parity still depends on the media and effect combination. Keep independent backups of important projects and source media.
 
 CutLoc is a single-user video editor that runs on your own computer. It combines a media library, multi-track timeline, live canvas, clip **Inspector**, project recovery, and local FFmpeg export in one browser-based workspace.
 
-The project is intentionally small and exploratory: it is an engineering playground with a useful editing loop, not a hosted production platform.
+Use it directly in the browser, automate it from the terminal, or let an **AI coding agent edit through the CutLoc CLI**. The CLI exposes the same local validation, revision, backup, and project-access rules as the web editor, so AI-assisted edits do not need to bypass the application or write project files by hand.
+
+The project remains intentionally focused: it is a practical local editing environment, not a hosted production platform.
 
 ![CutLoc dashboard](assets/screenshots/cutloc-dashboard.jpg)
 
 ## Contents
 
 - [What CutLoc does](#what-cutloc-does)
+- [Edit yourself or with an AI agent](#edit-yourself-or-with-an-ai-agent)
 - [Feature map](#feature-map)
 - [Editor workflow](#editor-workflow)
 - [Project status](#project-status)
@@ -47,7 +50,29 @@ CutLoc is built around a clear local-first boundary:
 - Media probing, derived files, previews, and exports use the FFmpeg/ffprobe binaries supplied through the project dependencies.
 - The local CLI uses the same API and validation boundary as the web editor, which makes it suitable for provider-neutral AI-tool automation.
 
-CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. The experimental build also does not promise long-term project-file compatibility or identical browser/FFmpeg output for every codec and effect combination.
+CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. The beta does not promise identical browser/FFmpeg output for every codec and effect combination.
+
+## Edit yourself or with an AI agent
+
+CutLoc has two first-class control surfaces over the same local project:
+
+| You want to… | Use | What you get |
+| --- | --- | --- |
+| Edit visually | **Web editor** | Media library, canvas, Inspector, timeline, undo/redo, autosave, and export |
+| Ask an agent to make edits | **CutLoc CLI** | Machine-readable project context, complete timeline access, safe revision checks, and exclusive edit leases |
+| Mix both workflows | **Web + CLI** | Work visually, hand the project to an agent, then continue in the browser when the CLI releases access |
+
+An AI agent can inspect a project, add or relink media, edit tracks and clips, change canvas/text/filter/transition/keyframe data, run export preflight, start an export, monitor jobs, and use backups. The CLI remains **provider-neutral**: CutLoc does not upload the project or choose an AI service for you.
+
+```powershell
+# Machine-readable capability and safety guide
+npm.cmd run --silent cli:agent -- agent guide
+
+# Live server, project, media-health, backup, and job context
+npm.cmd run --silent cli:agent -- agent inspect <project-id>
+```
+
+Every successful command above is a single compact JSON value on `stdout`; failures are JSON on `stderr`. This makes the interface predictable for tool-using agents and shell automation.
 
 ## Feature map
 
@@ -87,9 +112,9 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 ## Project status
 
-**Current version: `0.0.2` — experimental.** Treat this table as a snapshot of the current checkout, not as a compatibility promise.
+**Current version: `0.1.0` — beta.** Treat this table as a snapshot of the current checkout, not as a compatibility promise.
 
-| Area | Status in v0.0.2 |
+| Area | Status in v0.1.0 |
 | --- | --- |
 | Dashboard, local projects, and project storage | Available locally |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
@@ -169,6 +194,22 @@ npm.cmd run dev:server
 npm.cmd run cli -- --help
 ```
 
+For an AI agent or another JSON consumer, start with the machine-readable guide and live inspection commands. The `cli:agent` script suppresses npm lifecycle chatter and enables compact JSON automatically:
+
+```powershell
+npm.cmd run --silent cli:agent -- agent guide
+npm.cmd run --silent cli:agent -- agent inspect
+npm.cmd run --silent cli:agent -- agent inspect <project-id>
+```
+
+For many calls, build once and invoke the executable directly to avoid rebuilding on every command:
+
+```powershell
+npm.cmd run build:shared
+npm.cmd run build:cli
+node apps/cli/dist/index.js --compact agent inspect <project-id>
+```
+
 The default CLI URL is `http://127.0.0.1:4173`. Use `--url` or `CUTLOC_URL` for another loopback URL; the CLI rejects non-loopback hosts.
 
 ### AI-tool project editing
@@ -199,6 +240,7 @@ Project-changing commands acquire an exclusive, short-lived project lease. If th
 
 | Area | Commands |
 | --- | --- |
+| Agent discovery | `agent guide` and `agent inspect [project-id]` |
 | Projects | `projects list/create/get/apply/duplicate/delete/import/bundle` |
 | Media | `media add/remove/relink/rebuild/health/stock` |
 | Recovery | `backups list/restore` and `trash list/restore/delete` |
@@ -264,13 +306,13 @@ GitHub CI runs the equivalent sequence: locked install, all-workspace build, sha
 
 ## Documentation map
 
-- [CLI guide](docs/CLI.md) — command groups, JSONL sessions, leases, and low-level API boundaries.
-- [Testing baseline](docs/TESTING.md) — focused checks, browser regression scope, fixtures, and CI gates.
+- [Product and development guide](docs/README.md) — architecture, editing model, media/export behavior, local data, testing, and troubleshooting.
+- [CLI and AI-agent guide](docs/CLI.md) — command groups, JSON workflows, sessions, leases, export automation, and safety boundaries.
 - [Security policy](SECURITY.md) — reporting guidance and deployment boundaries.
 
 ## Contributing
 
-CutLoc is still taking shape. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
+CutLoc is in beta. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
 
 Keep changes reviewable by working on a feature branch and opening a pull request:
 

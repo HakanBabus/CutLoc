@@ -33,6 +33,9 @@ Export and settings:
   settings get | set (--file <json> | --stdin)
 
 Agent access:
+  agent guide | inspect [project-id]
+    Returns machine-readable capabilities, safety rules, and an optional live
+    project snapshot so an AI agent can choose the right command safely.
   session <project-id>
     Holds exclusive project access until stdin closes. Send one JSON request per
     line: {"method":"PATCH","path":"/api/projects/<id>","body":{...}}
@@ -41,6 +44,54 @@ Agent access:
     mutating methods. Use the dedicated media/import commands for uploads.
 
 All successful structured output is JSON. Use --compact for one-line output.`;
+
+const agentGuide = {
+  protocolVersion: 1,
+  product: 'CutLoc',
+  transport: {
+    baseUrl: 'http://127.0.0.1:4173',
+    boundary: 'loopback-only',
+    output: 'Successful commands write JSON to stdout; errors write one JSON object to stderr.',
+    compactFlag: '--compact',
+  },
+  recommendedWorkflow: [
+    'Run agent inspect to verify the server and discover project IDs.',
+    'Run projects get <id> --out <file> immediately before editing.',
+    'Edit the complete JSON document while preserving schemaVersion, id, and revision.',
+    'Run projects apply <id> --file <file>; on a revision conflict, fetch again and reconcile.',
+    'Run export preflight <id> before export start <id>.',
+    'Use session <id> for several related API operations that need one exclusive lease.',
+  ],
+  safetyRules: [
+    'Never edit data/projects/.../project.json directly.',
+    'Use media commands for binary uploads and relinks.',
+    'Treat projects delete, media remove, backup restore, and trash delete as destructive.',
+    'A mutating project command temporarily makes that project read-only in the web editor.',
+    'Do not retry a revision conflict by discarding the newer server project.',
+    'Generic api and session commands do not stream /api/events.',
+  ],
+  projectEditing: {
+    schemaVersion: 1,
+    mutableAreas: ['name', 'canvas', 'tracks', 'clips', 'markers'],
+    clipCapabilities: ['trim', 'timing', 'layout', 'crop', 'speed', 'speed points', 'audio', 'filters', 'mask', 'fade', 'transition', 'keyframes', 'text styling'],
+    managedAreas: ['id', 'revision', 'updatedAt', 'asset file paths', 'derived media paths'],
+    invariants: ['unique IDs', 'valid asset references', 'source ranges within media duration', 'keyframe and speed-point times within clip duration', 'timeline duration derived from clips'],
+  },
+  commands: {
+    discovery: ['agent guide', 'agent inspect [project-id]', 'projects list', 'projects get <id>', 'media health <project-id>', 'backups list <project-id>', 'jobs list', 'settings get'],
+    projects: ['projects create [name]', 'projects apply <id> (--file <json> | --stdin | --data <json>)', 'projects duplicate <id>', 'projects bundle <id> --out <file>', 'projects import <file>', 'projects delete <id>'],
+    media: ['media add <project-id> <file>', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
+    recovery: ['backups restore <project-id> <file-name>', 'trash list', 'trash restore <trash-id>', 'trash delete <trash-id>'],
+    export: ['export preflight <project-id> [--file <options.json>]', 'export start <project-id> [--file <options.json>]', 'jobs get <job-id>', 'jobs cancel <job-id>', 'jobs download <job-id> --out <file>'],
+    advanced: ['session <project-id>', 'api <method> <api-path> [--file <json> | --data <json> | --out <file>]', 'settings set (--file <json> | --stdin | --data <json>)'],
+  },
+  examples: [
+    'agent inspect',
+    'projects get <project-id> --out project.json',
+    'projects apply <project-id> --file project.json',
+    'export preflight <project-id> --data {"format":"mp4","resolution":"1080p","fps":30,"quality":"standard"}',
+  ],
+} as const;
 
 function takeFlag(args: string[], name: string) {
   const index = args.indexOf(name);
@@ -256,6 +307,36 @@ async function main() {
   }
 
   const action = args.shift();
+  if (group === 'agent') {
+    if (action === 'guide') {
+      ensureNoArgs(args);
+      return print(agentGuide);
+    }
+    if (action === 'inspect') {
+      const projectId = args.shift();
+      ensureNoArgs(args);
+      const [server, settings, projects, jobs] = await Promise.all([
+        jsonRequest('/api/health'),
+        jsonRequest('/api/settings'),
+        jsonRequest('/api/projects'),
+        jsonRequest('/api/jobs'),
+      ]);
+      const selectedProject = projectId ? await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`) : undefined;
+      const [mediaHealth, backups] = projectId ? await Promise.all([
+        jsonRequest(`/api/projects/${encodeURIComponent(projectId)}/media-health`),
+        jsonRequest(`/api/projects/${encodeURIComponent(projectId)}/backups`),
+      ]) : [undefined, undefined];
+      return print({
+        ok: true,
+        guide: agentGuide,
+        live: { server, settings, projects, jobs, selectedProject, mediaHealth, backups },
+        next: projectId
+          ? [`projects get ${projectId} --out project.json`, `projects apply ${projectId} --file project.json`, `export preflight ${projectId} --file export-options.json`]
+          : ['Choose a project ID from live.projects, then run agent inspect <project-id>.'],
+      });
+    }
+    throw new Error('agent action must be guide or inspect.');
+  }
   if (group === 'projects') {
     if (action === 'list') { ensureNoArgs(args); return print(await jsonRequest('/api/projects')); }
     if (action === 'create') { ensureNoOptionArgs(args); return print(await jsonRequest('/api/projects', 'POST', { name: args.join(' ') || undefined })); }

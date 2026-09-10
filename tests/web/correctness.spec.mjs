@@ -55,7 +55,7 @@ test('custom editor shortcuts are used and persist after reopening the project',
     await page.locator('.primary-button.large').click();
     await expect(page.locator('.editor-shell')).toBeVisible();
     await page.locator('.project-name-input').fill(fixtureName);
-    await page.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
 
@@ -156,7 +156,7 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
     await pageA.goto('/');
     await pageA.locator('.primary-button.large').click();
     await pageA.locator('.project-name-input').fill(fixtureName);
-    await pageA.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await pageA.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
 
@@ -174,8 +174,8 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
     await pageA.locator('.timeline-clip').click();
     await pageB.locator('.timeline-clip').click();
 
-    const scaleA = pageA.getByRole('spinbutton', { name: 'Scale' });
-    const positionXB = pageB.getByRole('spinbutton', { name: /^X$/ });
+    const scaleA = pageA.getByRole('spinbutton', { name: /Scale|Ölçek/ });
+    const positionXB = pageB.getByRole('spinbutton', { name: /^X(?: px)?$/ });
     await scaleA.fill('1.25');
     await scaleA.press('Tab');
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
@@ -191,7 +191,7 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
     await scaleA.fill('1.5');
     await scaleA.press('Tab');
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
-    const scaleB = pageB.getByRole('spinbutton', { name: 'Scale' });
+    const scaleB = pageB.getByRole('spinbutton', { name: /Scale|Ölçek/ });
     await scaleB.fill('1.75');
     await scaleB.press('Tab');
     await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
@@ -224,18 +224,18 @@ test('two tabs surface delete-versus-edit conflicts without deleting the saved c
   try {
     await pageA.goto('/'); await pageA.locator('.primary-button.large').click();
     await pageA.locator('.project-name-input').fill(fixtureName);
-    await pageA.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await pageA.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
     projectId = (await (await request.get('/api/projects')).json()).find((project) => project.name === fixtureName)?.id;
     await pageB.goto('/'); await pageB.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
     await expect(pageB.locator('.timeline-clip')).toHaveCount(1);
     await pageA.locator('.timeline-clip').click();
-    const scale = pageA.getByRole('spinbutton', { name: 'Scale' });
+    const scale = pageA.getByRole('spinbutton', { name: /Scale|Ölçek/ });
     await scale.fill('1.5'); await scale.press('Tab');
     await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
     await pageB.locator('.timeline-clip').click({ button: 'right' });
-    await pageB.getByRole('menuitem', { name: /Delete/i }).click();
+    await pageB.getByRole('menuitem', { name: /Delete|Sil/i }).click();
     await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
     const detail = await (await request.get(`/api/projects/${projectId}`)).json();
     expect(detail.tracks.flatMap((track) => track.clips)).toHaveLength(1);
@@ -255,7 +255,7 @@ test('server refresh cannot resurrect a locally deleted asset', async ({ page, r
   try {
     await page.locator('.primary-button.large').click();
     await page.locator('.project-name-input').fill(fixtureName);
-    await page.getByRole('tab', { name: /Stock|Stok/ }).click();
+    await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i, { timeout: 10_000 });
     const projects = await (await request.get('/api/projects')).json();
@@ -263,22 +263,34 @@ test('server refresh cannot resurrect a locally deleted asset', async ({ page, r
     expect(projectId).toBeTruthy();
     await expect.poll(async () => (await (await request.get(`/api/projects/${projectId}`)).json()).assets.length, { timeout: 10_000 }).toBe(1);
 
-    await page.getByRole('tab', { name: /Media 1|Medya 1/ }).click();
+    await page.locator('.tool-rail button').filter({ hasText: /Media|Medya/ }).click();
+    await expect(page.locator('.asset-item.pro')).toHaveCount(1);
     await page.clock.install();
     clockInstalled = true;
-    await page.locator('.asset-item.pro .asset-dots').click();
-    await page.getByRole('menuitem', { name: /Remove from project|Projeden kald[ıi]r/ }).click();
-    const removeDialog = page.getByRole('dialog', { name: /Remove from project|Projeden kald[ıi]r/ });
-    await expect(removeDialog).toBeVisible();
-    await removeDialog.getByRole('button', { name: /Remove from project|Projeden kald[ıi]r/ }).click();
-    await expect(page.getByRole('tab', { name: /Media 0|Medya 0/ })).toBeVisible();
+    await page.evaluate(() => (document.querySelector('.asset-item.pro .asset-dots'))?.click());
+    await page.evaluate(() => {
+      const removeItem = [...document.querySelectorAll('[role="menuitem"]')].find((item) => /Remove from project|Projeden kaldır/i.test(item.textContent ?? ''));
+      if (!(removeItem instanceof HTMLElement)) throw new Error('Remove media menu item did not open');
+      removeItem.click();
+    });
+    await page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]');
+      const confirmButton = dialog && [...dialog.querySelectorAll('button')].find((button) => /Remove from project|Projeden kaldır/i.test(button.textContent ?? ''));
+      if (!(confirmButton instanceof HTMLElement)) throw new Error('Remove media confirmation did not open');
+      confirmButton.click();
+    });
+    await expect(page.locator('.asset-item.pro')).toHaveCount(0);
 
     const current = await (await request.get(`/api/projects/${projectId}`)).json();
     const remote = { ...current, assets: current.assets.map((asset) => ({ ...asset, name: `${asset.name} refreshed` })), revision: current.revision };
     expect((await request.patch(`/api/projects/${projectId}`, { data: remote })).ok()).toBeTruthy();
-    await page.getByRole('button', { name: /Panel menu|Panel men[uü]s[uü]/ }).click();
-    await page.getByRole('menuitem', { name: /Refresh library|K[uü]t[uü]phaneyi yenile/ }).click();
-    await expect(page.getByRole('tab', { name: /Media 0|Medya 0/ })).toBeVisible();
+    await page.evaluate(() => (document.querySelector('.media-panel-heading .panel-more'))?.click());
+    await page.evaluate(() => {
+      const refreshItem = [...document.querySelectorAll('[role="menuitem"]')].find((item) => /Refresh library|Kütüphaneyi yenile/i.test(item.textContent ?? ''));
+      if (!(refreshItem instanceof HTMLElement)) throw new Error('Refresh library menu item did not open');
+      refreshItem.click();
+    });
+    await expect(page.locator('.asset-item.pro')).toHaveCount(0);
     await page.clock.runFor(700);
     await page.clock.resume();
     clockInstalled = false;
@@ -286,7 +298,8 @@ test('server refresh cannot resurrect a locally deleted asset', async ({ page, r
 
     await page.reload();
     await page.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
-    await expect(page.getByRole('tab', { name: /Media 0|Medya 0/ })).toBeVisible();
+    await page.locator('.tool-rail button').filter({ hasText: /Media|Medya/ }).click();
+    await expect(page.locator('.asset-item.pro')).toHaveCount(0);
     await expect(page.locator('.timeline-clip')).toHaveCount(0);
   } finally {
     if (clockInstalled) await page.clock.resume().catch(() => undefined);

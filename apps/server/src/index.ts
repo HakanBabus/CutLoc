@@ -756,6 +756,17 @@ function safeExportName(project: Project, requested: string | undefined, extensi
   return `${safe}.${extension}`;
 }
 
+function attachmentContentDisposition(fileName: string) {
+  const safeName = path.basename(fileName).replace(/["\r\n]/g, '-');
+  const asciiName = safeName
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7e]/g, '')
+    .replace(/["\\]/g, '-')
+    .trim() || 'export';
+  const encodedName = encodeURIComponent(safeName).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`;
+}
+
 function uniqueOutputPath(exportDir: string, fileName: string) {
   const parsed = path.parse(fileName);
   let candidate = path.join(exportDir, fileName);
@@ -1983,8 +1994,7 @@ async function registerRoutes(app: FastifyInstance) {
     const contentType = job.format === 'mp4' ? 'video/mp4' : job.format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
     const fileName = path.basename(job.fileName).replace(/["\r\n]/g, '-');
     return reply.header('Content-Type', contentType)
-
-      .header('Content-Disposition', `attachment; filename="${fileName}"`)
+      .header('Content-Disposition', attachmentContentDisposition(fileName))
       .header('Content-Length', stat.size)
       .send(fs.createReadStream(file));
   });
@@ -1998,6 +2008,7 @@ async function registerRoutes(app: FastifyInstance) {
   app.delete<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
     const job = jobs.get(request.params.jobId);
     if (!job) return reply.code(404).send({ error: message('jobNotFound') });
+    if (!['queued', 'running'].includes(job.status)) return reply.code(409).send({ error: message('jobAlreadyFinished') });
     try {
       return await withProjectLock(job.projectId, async () => {
         const process = jobProcesses.get(request.params.jobId);

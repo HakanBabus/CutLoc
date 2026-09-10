@@ -469,10 +469,11 @@ test('stock media is enumerated, copied into a project, and served without path 
   project.duration = asset.duration;
   const saveResponse = await jsonRequest('PATCH', `/api/projects/${created.id}`, project);
   assert.equal(saveResponse.statusCode, 200);
-  const preflightResponse = await jsonRequest('POST', `/api/projects/${created.id}/export/preflight`, { format: 'mp4', fileName: 'stock-fixture.mp4' });
+  const unicodeFileName = 'Türkçe-çıktı.mp4';
+  const preflightResponse = await jsonRequest('POST', `/api/projects/${created.id}/export/preflight`, { format: 'mp4', fileName: unicodeFileName });
   assert.equal(preflightResponse.statusCode, 200);
   assert.equal(preflightResponse.json().ok, true);
-  const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', fileName: 'stock-fixture.mp4' });
+  const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', fileName: unicodeFileName });
   assert.equal(exportResponse.statusCode, 202);
   assert.equal('absoluteOutputPath' in exportResponse.json().job, false);
   assert.equal('outputPath' in exportResponse.json().job, false);
@@ -489,6 +490,7 @@ test('stock media is enumerated, copied into a project, and served without path 
   const downloadResponse = await app.inject({ method: 'GET', url: exportJob.downloadUrl });
   assert.equal(downloadResponse.statusCode, 200);
   assert.match(downloadResponse.headers['content-disposition'], /attachment/);
+  assert.match(downloadResponse.headers['content-disposition'], /filename\*=UTF-8''T%C3%BCrk%C3%A7e-%C3%A7%C4%B1kt%C4%B1\.mp4/);
   assert.equal(downloadResponse.headers['content-type'], 'video/mp4');
   const [concurrentA, concurrentB] = await Promise.all([
     jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', range: { start: 0, end: 0.12 }, fileName: 'same-name.mp4' }),
@@ -910,12 +912,10 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(exportJob.status, 'completed', exportJob.error ?? 'audio export failed');
   const outputPath = exportFilePath(created.id, exportJob.fileName);
   assert.equal((await fsp.stat(outputPath)).size > 0, true);
-  const jobLeaseResponse = await jsonRequest('POST', `/api/projects/${created.id}/access`, { ownerId: 'job-cli', ownerLabel: 'Job CLI', client: 'cli', ttlMs: 15_000, force: false });
-  assert.equal(jobLeaseResponse.statusCode, 200);
-  const jobLeaseToken = jobLeaseResponse.json().token;
-  assert.equal((await app.inject({ method: 'DELETE', url: `/api/jobs/${exportJob.id}` })).statusCode, 423);
-  assert.equal((await app.inject({ method: 'DELETE', url: `/api/jobs/${exportJob.id}`, headers: { 'x-cutloc-access-token': jobLeaseToken } })).statusCode, 200);
-  await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/access`, headers: { 'x-cutloc-access-token': jobLeaseToken } });
+  const terminalCancelResponse = await app.inject({ method: 'DELETE', url: `/api/jobs/${exportJob.id}` });
+  assert.equal(terminalCancelResponse.statusCode, 409);
+  assert.match(terminalCancelResponse.json().error, /cannot be cancelled|iptal edilemez/i);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/jobs/${exportJob.id}` })).json().status, 'completed');
   const wavExportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'fixture.wav' });
   assert.equal(wavExportResponse.statusCode, 202);
   const wavExportJob = await waitForJob(wavExportResponse.json().job.id);

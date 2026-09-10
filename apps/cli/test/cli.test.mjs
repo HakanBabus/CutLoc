@@ -40,6 +40,12 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, ffmpeg: true, ffprobe: true });
+  if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
+  if (request.method === 'GET' && request.url === '/api/projects') return json(200, [{ id: 'p1', name: project.name, revision: project.revision }]);
+  if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
+  if (request.method === 'GET' && request.url === '/api/projects/p1/media-health') return json(200, []);
+  if (request.method === 'GET' && request.url === '/api/projects/p1/backups') return json(200, []);
   if (request.method === 'POST' && request.url === '/api/projects') return json(200, { ...project, id: 'created', name: body?.name ?? 'Untitled' });
   if (request.method === 'GET' && request.url === '/api/projects/p1') return json(200, project);
   if (request.method === 'PATCH' && request.url === '/api/projects/p1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ...project, ...body, revision: 1 });
@@ -131,6 +137,38 @@ test('CLI keeps startup validation errors machine-readable', async () => {
   assert.equal(missingUrl.code, 1);
   assert.equal(missingUrl.stdout, '');
   assert.match(JSON.parse(missingUrl.stderr).error, /--url requires a value/i);
+});
+
+test('agent guide is machine-readable and documents the safe full-project workflow', async () => {
+  const result = await runCli(['agent', 'guide']);
+  assert.equal(result.code, 0, result.stderr);
+  const guide = JSON.parse(result.stdout);
+  assert.equal(guide.protocolVersion, 1);
+  assert.equal(guide.transport.boundary, 'loopback-only');
+  assert.ok(guide.recommendedWorkflow.some((step) => /projects get/i.test(step)));
+  assert.ok(guide.recommendedWorkflow.some((step) => /revision conflict/i.test(step)));
+  assert.ok(guide.projectEditing.clipCapabilities.includes('keyframes'));
+  assert.ok(guide.commands.media.some((command) => /media add/i.test(command)));
+});
+
+test('agent inspect returns live context and optional project diagnostics', async () => {
+  requests.length = 0;
+  const overview = await runCli(['agent', 'inspect']);
+  assert.equal(overview.code, 0, overview.stderr);
+  const overviewBody = JSON.parse(overview.stdout);
+  assert.equal(overviewBody.ok, true);
+  assert.equal(overviewBody.live.server.ffmpeg, true);
+  assert.equal(overviewBody.live.projects[0].id, 'p1');
+  assert.equal(overviewBody.live.selectedProject, undefined);
+
+  const detail = await runCli(['agent', 'inspect', 'p1']);
+  assert.equal(detail.code, 0, detail.stderr);
+  const detailBody = JSON.parse(detail.stdout);
+  assert.equal(detailBody.live.selectedProject.id, 'p1');
+  assert.deepEqual(detailBody.live.mediaHealth, []);
+  assert.deepEqual(detailBody.live.backups, []);
+  assert.ok(detailBody.next.some((command) => /projects apply p1/i.test(command)));
+  assert.equal(requests.some((entry) => entry.url === '/api/projects/p1/media-health'), true);
 });
 
 test('projects create forwards a positional name and rejects unknown options', async () => {

@@ -5978,3 +5978,709 @@ body {
   border-color: var(--theme-accent-line);
   background: var(--theme-accent-soft);
 }
+
+/* Typography v1: one UI family, one technical family, and no microtype. */
+.app-shell {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', Arial, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell :where(button, input, select, textarea, label, small, strong, p, h1, h2, h3, h4, output) {
+  font-family: var(--font-ui) !important;
+}
+
+.app-shell :where(.preview-time, .preview-time *, .preview-timecode-input, .ruler-tick span, .clip-body small, .asset-thumb small, .asset-health, .save-indicator, .zoom-label, .editor-statusbar, kbd) {
+  font-family: var(--font-mono) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-shell :where(.panel-heading h2, .inspector-heading h2, .inspector-mode-header strong, .section-toggle strong, .text-library-head strong, .stock-shelf-heading strong) {
+  letter-spacing: -.015em;
+}
+
+.app-shell[data-theme] .inspector-heading {
+  min-height: 34px;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.app-shell[data-theme] .inspector-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.app-shell[data-theme] .inspector-heading > button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.app-shell[data-theme] .selected-file-copy strong {
+  font-size: 12px;
+  font-weight: 680;
+  letter-spacing: -.01em;
+}
+
+.app-shell[data-theme] .selected-file-copy small {
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .inspector-tool-tabs button span,
+.app-shell[data-theme] .animation-studio-compact .animation-card-copy strong,
+.app-shell[data-theme] .appearance-preset-grid button span,
+.app-shell[data-theme] .text-look-grid span {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.app-shell[data-theme] .inspector-mode-header small,
+.app-shell[data-theme] .appearance-preset-panel > div:first-child small,
+.app-shell[data-theme] .text-look-heading small {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.app-shell[data-theme] .timeline-pro .timeline-marker {
+  overflow: visible;
+}
+
+.app-shell[data-theme] .timeline-pro .timeline-marker span {
+  top: 8px;
+  left: 6px;
+  max-width: 168px;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--pink) 35%, transparent);
+  border-radius: 6px;
+  color: color-mix(in srgb, var(--pink) 24%, var(--theme-text));
+  background: color-mix(in srgb, var(--pink) 10%, var(--theme-panel-raised));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .18);
+  font-family: var(--font-ui) !important;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+  text-overflow: ellipsis;
+  text-shadow: none;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .timeline-pro .ruler-tick span {
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.app-shell[data-theme] .timeline-pro .timeline-clip .clip-body strong {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  text-shadow: none;
+}
+
+.app-shell[data-theme] .timeline-pro .timeline-clip .clip-body small {
+  font-size: 8px;
+}
+
+.app-shell[data-theme] .tool-rail button small,
+.app-shell[data-theme] .media-filter-compact,
+.app-shell[data-theme] .media-view-button,
+.app-shell[data-theme] .text-category-chips button,
+.app-shell[data-theme] .animation-category-tabs button {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.app-shell[data-theme] .asset-item.pro .asset-info strong,
+.app-shell[data-theme] .text-preset-meta strong,
+.app-shell[data-theme] .shape-card strong {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+
+.app-shell[data-theme] .asset-item.pro .asset-info > small,
+.app-shell[data-theme] .asset-health {
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .asset-item.pro {
+  padding-right: 8px;
+}
+
+.app-shell[data-theme] .asset-item.pro .asset-add-button {
+  min-width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 15px;
+}
+
+.app-shell[data-theme] .asset-item.pro .asset-dots {
+  min-width: 28px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+/* Settings v2: scannable navigation, grouped controls, and readable states. */
+.app-shell[data-theme] .settings-backdrop {
+  padding: 24px;
+}
+
+.app-shell[data-theme] .settings-modal-v2 {
+  width: min(860px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: 0;
+  overflow: hidden;
+  border-color: var(--theme-line-strong);
+  border-radius: 18px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .settings-modal-head {
+  min-height: 92px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--theme-line);
+  background: linear-gradient(120deg, var(--theme-accent-soft), transparent 55%);
+}
+
+.app-shell[data-theme] .settings-modal-head h2 {
+  margin-top: 2px;
+  font-size: 24px;
+}
+
+.app-shell[data-theme] .settings-modal-head small {
+  display: block;
+  max-width: 560px;
+  margin-top: 6px;
+  color: var(--theme-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.app-shell[data-theme] .settings-modal-head > button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .settings-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 18px 14px;
+  border: 0;
+  border-right: 1px solid var(--theme-line);
+  background: var(--theme-panel-soft);
+  overflow-y: auto;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--theme-muted);
+  background: transparent;
+  text-align: left;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button > span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--theme-subtle);
+  background: var(--theme-panel-raised);
+  font-size: 14px;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs button strong,
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs button small {
+  display: block;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs button strong {
+  color: inherit;
+  font-size: 11px;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs button small {
+  margin-top: 3px;
+  color: var(--theme-subtle);
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button:hover,
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button.active {
+  border-color: var(--theme-accent-line);
+  color: var(--theme-text);
+  background: var(--theme-accent-soft);
+}
+
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button.active > span {
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+}
+
+.app-shell[data-theme] .settings-local-card {
+  margin-top: auto;
+  padding: 12px;
+  border: 1px solid var(--theme-line);
+  border-radius: 10px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .settings-local-card > span {
+  color: var(--theme-accent);
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .settings-local-card strong,
+.app-shell[data-theme] .settings-local-card small {
+  display: block;
+}
+
+.app-shell[data-theme] .settings-local-card strong {
+  margin-top: 7px;
+  color: var(--theme-text);
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .settings-local-card small {
+  margin-top: 4px;
+  color: var(--theme-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.app-shell[data-theme] .settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 18px;
+}
+
+.app-shell[data-theme] .settings-sections {
+  display: grid;
+  gap: 12px;
+}
+
+.app-shell[data-theme] .settings-section {
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid var(--theme-line);
+  border-radius: 12px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .settings-section-heading {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.app-shell[data-theme] .settings-section-heading > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--theme-accent);
+  background: var(--theme-accent-soft);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.app-shell[data-theme] .settings-section-heading strong,
+.app-shell[data-theme] .settings-section-heading small {
+  display: block;
+}
+
+.app-shell[data-theme] .settings-section-heading strong {
+  color: var(--theme-text);
+  font-size: 12px;
+}
+
+.app-shell[data-theme] .settings-section-heading small {
+  margin-top: 3px;
+  color: var(--theme-muted);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .setting-row {
+  min-height: 58px;
+  padding: 7px 2px;
+  border-bottom-color: var(--theme-line);
+}
+
+.app-shell[data-theme] .settings-modal-v2 .setting-row:last-child {
+  border-bottom: 0;
+}
+
+.app-shell[data-theme] .settings-modal-v2 :is(select, input[type='text']) {
+  min-height: 34px;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 8px;
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .settings-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.app-shell[data-theme] .settings-control-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.app-shell[data-theme] .settings-control-grid label > span {
+  color: var(--theme-muted);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .settings-control-grid select {
+  width: 100%;
+}
+
+.app-shell[data-theme] .setting-readonly b {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .setting-readonly b i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--theme-accent);
+  box-shadow: 0 0 8px var(--theme-accent);
+}
+
+.app-shell[data-theme] .settings-reset-layout {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+  text-align: left;
+}
+
+.app-shell[data-theme] .settings-reset-layout > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--theme-accent);
+  background: var(--theme-accent-soft);
+}
+
+.app-shell[data-theme] .settings-reset-layout strong,
+.app-shell[data-theme] .settings-reset-layout small {
+  display: block;
+}
+
+.app-shell[data-theme] .settings-reset-layout small {
+  margin-top: 3px;
+  color: var(--theme-muted);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .shortcut-settings {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.app-shell[data-theme] .settings-modal-v2 .shortcut-setting-row {
+  padding-inline: 10px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .settings-actions {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--theme-line);
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .settings-actions > span {
+  font-size: 10px;
+}
+
+/* Animation timing v2: precise input plus fast, legible presets. */
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid {
+  gap: 8px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--theme-line);
+  border-radius: 10px;
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .animation-duration-head {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 67px;
+  align-items: center;
+  gap: 7px;
+}
+
+.app-shell[data-theme] .animation-duration-head > span {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--animation-accent);
+  background: var(--animation-accent-soft);
+  font-size: 12px;
+}
+
+.app-shell[data-theme] .animation-duration-head strong,
+.app-shell[data-theme] .animation-duration-head small {
+  display: block;
+}
+
+.app-shell[data-theme] .animation-duration-head strong {
+  color: var(--theme-text);
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .animation-duration-head small {
+  margin-top: 2px;
+  color: var(--theme-subtle);
+  font-size: 8px;
+}
+
+.app-shell[data-theme] .animation-duration-head label {
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .animation-duration-head input[type='number'] {
+  width: 44px;
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  color: var(--theme-text);
+  background: transparent;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.app-shell[data-theme] .animation-duration-head label b {
+  margin-left: 3px;
+  color: var(--theme-muted);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-duration-range {
+  width: 100%;
+  margin: 10px 0 8px;
+  accent-color: var(--animation-accent);
+  background: linear-gradient(90deg, var(--animation-accent) var(--duration-fill), var(--theme-line) var(--duration-fill));
+}
+
+.app-shell[data-theme] .animation-duration-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.app-shell[data-theme] .animation-duration-presets button {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--theme-line);
+  border-radius: 7px;
+  color: var(--theme-muted);
+  background: var(--theme-panel-soft);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-shell[data-theme] .animation-duration-presets button:hover,
+.app-shell[data-theme] .animation-duration-presets button.active {
+  border-color: var(--animation-accent);
+  color: var(--theme-text);
+  background: var(--animation-accent-soft);
+}
+
+/* Temporary editor feedback must be readable and clearly dismissible. */
+.app-shell[data-theme] .editor-notice {
+  right: 24px;
+  bottom: 42px;
+  width: min(420px, calc(100vw - 48px));
+  min-height: 48px;
+  gap: 10px;
+  padding: 9px 10px;
+  border-color: var(--theme-accent-line);
+  border-radius: 12px;
+  color: var(--theme-text);
+  background: color-mix(in srgb, var(--theme-panel-raised) 94%, var(--theme-accent));
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .46);
+  font-family: var(--font-ui) !important;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.app-shell[data-theme] .editor-notice-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  font-weight: 800;
+}
+
+.app-shell[data-theme] .editor-notice-copy {
+  flex: 1;
+}
+
+.app-shell[data-theme] .editor-notice button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  border-radius: 8px;
+  color: var(--theme-muted);
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .timeline-toolbar-right .zoom-label {
+  min-width: 142px;
+  color: var(--theme-muted);
+  font-family: var(--font-ui) !important;
+  font-size: 9px;
+  text-align: right;
+}
+
+.app-shell[data-theme] .timeline-empty-guide {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  width: min(430px, calc(100% - 56px));
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px dashed var(--theme-accent-line);
+  border-radius: 11px;
+  color: var(--theme-text);
+  background: color-mix(in srgb, var(--theme-panel-raised) 92%, var(--theme-accent));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .28);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.app-shell[data-theme] .timeline-empty-guide > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.app-shell[data-theme] .timeline-empty-guide strong,
+.app-shell[data-theme] .timeline-empty-guide small {
+  display: block;
+}
+
+.app-shell[data-theme] .timeline-empty-guide strong {
+  font-size: 11px;
+}
+
+.app-shell[data-theme] .timeline-empty-guide small {
+  margin-top: 3px;
+  color: var(--theme-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .app-shell[data-theme] .settings-backdrop { padding: 10px; }
+  .app-shell[data-theme] .settings-modal-v2 { width: calc(100vw - 20px); max-height: calc(100vh - 20px); }
+  .app-shell[data-theme] .settings-layout { grid-template-columns: 1fr; }
+  .app-shell[data-theme] .settings-modal-v2 .settings-tabs { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--theme-line); }
+  .app-shell[data-theme] .settings-modal-v2 .settings-tabs > button { flex: 1; }
+  .app-shell[data-theme] .settings-local-card { display: none; }
+  .app-shell[data-theme] .settings-control-grid { grid-template-columns: 1fr; }
+}

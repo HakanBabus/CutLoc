@@ -1,7 +1,7 @@
 {
   "name": "cutloc-editor",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "CutLoc local-first video editor",
   "workspaces": [
     "apps/*",
@@ -17,6 +17,7 @@
     "build:server": "npm --workspace apps/server run build",
     "build:cli": "npm --workspace apps/cli run build",
     "cli": "npm run build:shared && npm run build:cli && node apps/cli/dist/index.js",
+    "cli:agent": "npm run --silent build:shared && npm run --silent build:cli && node apps/cli/dist/index.js --compact",
     "start": "npm run build && npm --workspace apps/server run start",
     "test": "npm --workspace packages/shared run test && npm --workspace apps/server run test && npm --workspace apps/cli run test",
     "test:shared": "npm --workspace packages/shared run test",
