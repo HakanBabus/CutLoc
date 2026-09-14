@@ -14,6 +14,8 @@ npm.cmd run dev:server
 
 The default URL is `http://127.0.0.1:4173`. Override it with `--url` or `CUTLOC_URL`. Only HTTP(S) loopback hosts are accepted.
 
+The root `npm.cmd run cli` and `cli:agent` scripts load the optional root `.env` file. When `CUTLOC_URL` is not set, the CLI follows its local `HOST` and `PORT` values, matching the development server and web proxy. A command-line `--url` remains the highest-priority override.
+
 `agent guide` is static and can run without the server.
 
 ## Invocation modes

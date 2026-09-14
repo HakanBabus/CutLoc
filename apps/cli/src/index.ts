@@ -17,8 +17,8 @@ Usage:
 
 Projects:
   projects list | create [name] [--preset shorts] [--aspect <aspect>] [--fps <fps>]
-  projects get <id> [--out <json>] | apply <id> (--file <json> | --stdin)
-  projects edit <id> (--file <plan.json> | --stdin) [--dry-run] [--include-project]
+  projects get <id> [--out <json>] | apply <id> (--file <json> | --data <json> | --stdin)
+  projects edit <id> (--file <plan.json> | --data <json> | --stdin) [--dry-run] [--include-project]
   projects duplicate <id> | delete <id> | bundle <id> --out <file>
   projects import <file>
 
@@ -32,12 +32,12 @@ Media and recovery:
   trash list | restore <trash-id> | delete <trash-id>
 
 Export and settings:
-  export preflight|start <project-id> [--file <options.json>]
+  export preflight|start <project-id> [--file <options.json> | --data <json>]
   jobs list | get <job-id> | wait <job-id> [--timeout <seconds>] [--interval <seconds>]
   jobs watch <job-id> [--timeout <seconds>] [--interval <seconds>]
   jobs cancel <job-id> | download <job-id> --out <file>
   preview frame <project-id> --time <seconds> --out <png>
-  settings get | set (--file <json> | --stdin)
+  settings get | set (--file <json> | --data <json> | --stdin)
 
 Agent access:
   agent guide | inspect [project-id] [--full] [--limit <n>] [--cursor <n>] [--no-guide]
@@ -156,11 +156,22 @@ let compact = false;
 let parsedBaseUrl!: URL;
 
 function initialize() {
-  const baseUrl = takeFlag(args, '--url') ?? process.env.CUTLOC_URL ?? 'http://127.0.0.1:4173';
+  const configuredHost = process.env.HOST?.trim();
+  const configuredPort = process.env.PORT?.trim();
+  if (configuredPort !== undefined) {
+    const port = Number(configuredPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('CutLoc CLI port must be an integer between 1 and 65535.');
+  }
+  const environmentUrl = configuredHost || configuredPort
+    ? `http://${configuredHost === '::1' || configuredHost === '[::1]' ? '[::1]' : configuredHost || '127.0.0.1'}:${configuredPort || '4173'}`
+    : undefined;
+  const baseUrl = takeFlag(args, '--url') ?? (process.env.CUTLOC_URL?.trim() || environmentUrl || 'http://127.0.0.1:4173');
   compact = takeBooleanFlag(args, '--compact');
   parsedBaseUrl = new URL(baseUrl);
   if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) throw new Error('CutLoc CLI only connects to HTTP(S) loopback servers.');
   if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedBaseUrl.hostname)) throw new Error('CutLoc CLI only connects to a loopback server.');
+  const parsedPort = parsedBaseUrl.port ? Number(parsedBaseUrl.port) : undefined;
+  if (parsedPort !== undefined && (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)) throw new Error('CutLoc CLI port must be an integer between 1 and 65535.');
 }
 
 function print(value: unknown) {
@@ -327,25 +338,36 @@ function applyEditPlan(current: Project, input: unknown) {
   }
   if (!Array.isArray(plan.operations) || plan.operations.length === 0) throw new Error('Edit plan requires a non-empty operations array.');
   const project = structuredClone(current);
-  for (const operation of plan.operations) {
+  for (const [operationIndex, operation] of plan.operations.entries()) {
     if (!operation || typeof operation !== 'object' || typeof operation.op !== 'string') throw new Error('Each edit operation requires an op value.');
+    const operationPath = `operations[${operationIndex}]`;
     if (operation.op === 'setName') project.name = requireArg(operation.name, 'project name');
     else if (operation.op === 'setCanvas') project.canvas = { ...project.canvas, ...operation.canvas };
     else if (operation.op === 'addTrack') project.tracks.push(operation.track);
     else if (operation.op === 'removeTrack') project.tracks = project.tracks.filter((track) => track.id !== operation.trackId);
     else if (operation.op === 'addClip') {
-      const track = project.tracks.find((item) => item.id === operation.trackId);
-      if (!track) throw new Error(`Track not found: ${operation.trackId}`);
+      const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
+      if (!operation.clip || typeof operation.clip !== 'object') throw new Error(`${operationPath}.clip is required.`);
+      const track = project.tracks.find((item) => item.id === trackId);
+      if (!track) throw new Error(`Track not found for ${operationPath}: ${trackId}`);
       track.clips.push(operation.clip);
     } else if (operation.op === 'updateClip') {
-      const track = project.tracks.find((item) => item.id === operation.trackId);
-      const clip = track?.clips.find((item) => item.id === operation.clipId);
-      if (!clip) throw new Error(`Clip not found: ${operation.trackId}/${operation.clipId}`);
+      const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
+      const clipId = requireArg(operation.clipId, `${operationPath}.clipId`);
+      if (!operation.patch || typeof operation.patch !== 'object') throw new Error(`${operationPath}.patch is required.`);
+      const track = project.tracks.find((item) => item.id === trackId);
+      if (!track) throw new Error(`Track not found for ${operationPath}: ${trackId}`);
+      const clip = track.clips.find((item) => item.id === clipId);
+      if (!clip) throw new Error(`Clip not found for ${operationPath}: ${trackId}/${clipId}`);
       Object.assign(clip, operation.patch, { id: clip.id });
     } else if (operation.op === 'removeClip') {
-      const track = project.tracks.find((item) => item.id === operation.trackId);
-      if (!track) throw new Error(`Track not found: ${operation.trackId}`);
-      track.clips = track.clips.filter((clip) => clip.id !== operation.clipId);
+      const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
+      const clipId = requireArg(operation.clipId, `${operationPath}.clipId`);
+      const track = project.tracks.find((item) => item.id === trackId);
+      if (!track) throw new Error(`Track not found for ${operationPath}: ${trackId}`);
+      const clipIndex = track.clips.findIndex((clip) => clip.id === clipId);
+      if (clipIndex < 0) throw new Error(`Clip not found for ${operationPath}: ${trackId}/${clipId}`);
+      track.clips.splice(clipIndex, 1);
     } else if (operation.op === 'addMarker') project.markers.push(operation.marker);
     else if (operation.op === 'removeMarker') project.markers = project.markers.filter((marker) => marker.id !== operation.markerId);
     else throw new Error(`Unsupported edit operation: ${(operation as { op: string }).op}`);

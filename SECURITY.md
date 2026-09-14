@@ -6,7 +6,8 @@ CutLoc is experimental, local-only software. It is designed to run on the user's
 
 | Version | Supported |
 | --- | --- |
-| `0.0.x` | Yes, for the current experimental line |
+| Current `0.x` beta | Yes |
+| Older beta snapshots | No guaranteed fixes |
 
 ## Reporting a vulnerability
 

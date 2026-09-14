@@ -148,7 +148,7 @@ Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili müh
 ### Gereksinimler
 
 - Güncel birincil hedef Windows 10 veya 11'dir.
-- Node.js 24.x ve npm önerilir.
+- Kaynaktan kurulum için Node.js 24.x ve npm 11.x gereklidir.
 - Mevcut web arayüzü ve tarayıcı testleri için Chromium tabanlı bir tarayıcı önerilir.
 - Desteklenen yerel iş akışı için FFmpeg ve ffprobe proje bağımlılıklarıyla sağlanır.
 
@@ -157,7 +157,8 @@ Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili müh
 ```powershell
 git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
-npm ci
+npm.cmd ci
+npm.cmd run doctor
 ```
 
 ### Geliştirme modunda çalıştırma
@@ -183,7 +184,7 @@ npm start
 
 Bu komut tüm çalışma alanlarını derler ve yerel sunucuyu `http://127.0.0.1:4173` adresinde başlatır. Windows'ta `NO_OPEN=1` ayarlanmadıkça sunucu yerel URL'yi otomatik açar.
 
-`npm run dev` ve `npm start` ile başlayan yerel sunucu, isteğe bağlı kök `.env` dosyasını Node.js 24'ün yerleşik ortam dosyası desteğiyle yükler. Mevcut süreç ortam değişkenleri önceliklidir ve `.env` dosyasının bulunmaması kabul edilir.
+`npm run dev` ve `npm start` ile başlayan yerel sunucu, isteğe bağlı kök `.env` dosyasını Node.js 24'ün yerleşik ortam dosyası desteğiyle yükler. Vite geliştirme proxy'si ve kök CLI script'leri aynı yerel `HOST` ve `PORT` değerlerini izler; böylece API portu değiştirildiğinde üç yüzey birbirinden kopmaz. Mevcut süreç ortam değişkenleri önceliklidir ve `.env` dosyasının bulunmaması kabul edilir.
 
 ## CLI ve otomasyon
 
@@ -300,11 +301,12 @@ Geliştirme sırasında odaklı kontrolleri, pull request açmadan önce ise tam
 | Ortak sözleşme testleri | `npm run test:shared` | Zod modelleri, varsayılanlar, zaman çizelgesi yardımcıları ve çıktı boyutları |
 | Sunucu entegrasyon testleri | `npm run test:server` | Yerel API, proje/medya/kurtarma akışları, kilitler, FFmpeg işleri ve dışa aktarma |
 | CLI entegrasyon testleri | `npm run test:cli` | CLI yürütülebilir dosyası, JSON çıktısı, argüman doğrulama, oturumlar ve API yönlendirme |
-| Tarayıcı dışı tüm testler | `npm test` | Ortak paket, sunucu ve CLI testleri |
+| Tarayıcı dışı tüm testler | `npm test` | Ortak paket, sunucu, CLI ve web yapılandırma testleri |
 | Tarayıcı regresyonu | `npm run test:web` | Kontrol paneli, editör, otomatik kayıt, çakışmalar, kısayollar ve CLI kilit devri için Playwright Chromium kapsamı |
 | Yerel temel | `npm run verify` | Derleme ve `npm test`; tarayıcı testleri ayrıdır |
 | Tam otomatik temel | `npm run verify:all` | Derleme, tarayıcı dışı testler ve tarayıcı testleri |
 | Üretim bağımlılığı denetimi | `npm audit --omit=dev --audit-level=high` | Yüksek veya daha ciddi üretim bağımlılığı uyarıları |
+| Release adayı kapısı | `npm run release:check` | Önkoşullar, tam otomatik temel ve üretim bağımlılığı denetimi |
 
 PowerShell'de tam yerel kontrol:
 
@@ -312,6 +314,8 @@ PowerShell'de tam yerel kontrol:
 npm.cmd run verify:all
 npm.cmd audit --omit=dev --audit-level=high
 ```
+
+Etiketli bir sürüm hazırlamadan önce birleşik aday kapısı olarak `npm.cmd run release:check` komutunu çalıştırın.
 
 GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma alanlarının derlenmesi, ortak/sunucu/CLI testleri, Playwright Chromium kurulumu ve tarayıcı testleri, ardından üretim bağımlılığı denetimi.
 
@@ -327,6 +331,7 @@ GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma a
 
 - [Ürün ve geliştirme rehberi](docs/README.md) — mimari, kurgu modeli, medya/çıktı davranışı, yerel veri, test ve sorun giderme.
 - [CLI ve yapay zekâ ajanı rehberi](docs/CLI.md) — komut grupları, JSON iş akışları, oturumlar, kilitler, dışa aktarma otomasyonu ve güvenlik sınırları.
+- [Release kontrol listesi](docs/RELEASE.md) — aday kapıları, sürüm eşitleme, kurulum kolaylığı ve yayın sınırları.
 - [Güvenlik politikası](SECURITY.md) — bildirim rehberi ve dağıtım sınırları.
 
 ## Katkıda bulunma

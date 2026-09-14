@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner --host 127.0.0.1 --port 5173",
-    "build": "tsc -p tsconfig.json && vite build --configLoader runner"
+    "build": "tsc -p tsconfig.json && vite build --configLoader runner",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@cutloc/shared": "*",

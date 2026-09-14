@@ -96,9 +96,9 @@ after(async () => {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
 
-function runRawCli(cliArgs, input = '') {
+function runRawCli(cliArgs, input = '', environment = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliFile, ...cliArgs], { cwd: repoRoot, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cliFile, ...cliArgs], { cwd: repoRoot, env: { ...process.env, ...environment }, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
@@ -132,6 +132,17 @@ test('CLI executable returns clean JSON and validates missing arguments', async 
   } finally {
     await fsp.rm(outputDir, { recursive: true, force: true });
   }
+});
+
+test('CLI follows local HOST and PORT configuration when no URL override is passed', async () => {
+  const address = server.address();
+  const result = await runRawCli(['--compact', 'api', 'GET', '/api/health'], '', {
+    CUTLOC_URL: '',
+    HOST: '127.0.0.1',
+    PORT: String(address.port),
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).ok, true);
 });
 
 test('CLI keeps startup validation errors machine-readable', async () => {
@@ -250,6 +261,15 @@ test('projects edit validates an atomic plan in dry-run mode and applies it unde
   assert.equal(applied.code, 0, applied.stderr);
   assert.equal(JSON.parse(applied.stdout).revision, 1);
   assert.equal(requests.some((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/p1'), true);
+});
+
+test('projects edit reports the operation index and missing trackId before mutation', async () => {
+  requests.length = 0;
+  const invalidPlan = { baseRevision: 0, operations: [{ op: 'removeClip', clipId: 'subtitle-1' }] };
+  const result = await runCli(['projects', 'edit', 'p1', '--data', JSON.stringify(invalidPlan), '--dry-run']);
+  assert.equal(result.code, 1);
+  assert.match(JSON.parse(result.stderr).error, /operations\[0\]\.trackId is required/i);
+  assert.equal(requests.some((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/p1'), false);
 });
 
 test('media add has a compact default response and can wait for a stable derived revision', async () => {

@@ -33,7 +33,7 @@ jobs:
       - name: Build all workspaces
         run: npm run build
 
-      - name: Run shared and server tests
+      - name: Run non-browser tests
         run: npm test
 
       - name: Install Playwright Chromium
@@ -44,3 +44,29 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  windows-verify:
+    name: Windows build and non-browser tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm.cmd ci
+
+      - name: Check local prerequisites
+        run: npm.cmd run doctor
+
+      - name: Build all workspaces
+        run: npm.cmd run build
+
+      - name: Run non-browser tests
+        run: npm.cmd test

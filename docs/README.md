@@ -55,6 +55,7 @@ flowchart LR
 - Select clips from the canvas or timeline.
 - Edit position, scale, rotation, opacity, framing, crop, speed, speed curves, and keyframes.
 - Edit audio level, fades, filters, masks, transitions, and text styling.
+- Use physical line breaks, `\\n`, or `/n` in text; preview and FFmpeg export normalize them to the same multiline layout.
 - Apply entrance and exit animation presets with duration, direction, easing, and intensity controls.
 
 ## Project integrity
@@ -88,6 +89,7 @@ FFmpeg and ffprobe are supplied through npm dependencies for the supported local
 git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
 npm.cmd ci
+npm.cmd run doctor
 npm.cmd run dev
 ```
 
@@ -186,9 +188,11 @@ Use focused checks during development and the full baseline before publishing:
 | `npm.cmd run test:shared` | Schemas, timeline operations, merge rules, and export dimensions |
 | `npm.cmd run test:server` | API, persistence, media, recovery, leases, jobs, and real FFmpeg exports |
 | `npm.cmd run test:cli` | Executable behavior, JSON output, sessions, routing, and agent discovery |
+| `npm.cmd --workspace apps/web run test` | Development proxy and local runtime configuration |
 | `npm.cmd run test:web` | Dashboard/editor behavior, autosave, conflicts, shortcuts, and UI regressions |
 | `npm.cmd run verify:all` | Complete build plus every automated test layer |
 | `npm.cmd audit --omit=dev --audit-level=high` | Production dependency audit |
+| `npm.cmd run release:check` | Prerequisites plus the complete automated and dependency gate |
 
 Also run `git diff --check` before committing. Browser tests use a temporary `DATA_DIR`; they must never operate on real user projects.
 
@@ -221,5 +225,6 @@ Use `npm.cmd`, as shown throughout this guide.
 ## Documentation
 
 - [CLI and AI-agent guide](CLI.md)
+- [Release checklist](RELEASE.md)
 - [Project README](../README.md)
 - [Security policy](../SECURITY.md)

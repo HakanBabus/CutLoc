@@ -148,7 +148,7 @@ The exact import/export boundaries and development contracts are maintained as i
 ### Requirements
 
 - Windows 10 or 11 is the current primary target.
-- Node.js 24.x and npm are recommended.
+- Node.js 24.x and npm 11.x are required for a source installation.
 - A Chromium-based browser is recommended for the current web interface and browser tests.
 - FFmpeg and ffprobe are supplied through the project dependencies for the supported local workflow.
 
@@ -157,7 +157,8 @@ The exact import/export boundaries and development contracts are maintained as i
 ```powershell
 git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
-npm ci
+npm.cmd ci
+npm.cmd run doctor
 ```
 
 ### Run in development mode
@@ -183,7 +184,7 @@ npm start
 
 This builds all workspaces and starts the local server at `http://127.0.0.1:4173`. On Windows, the server opens the local URL automatically unless `NO_OPEN=1` is set.
 
-The local server started by `npm run dev` and `npm start` loads the optional root `.env` file through Node.js 24's native environment-file support. Existing process environment variables take precedence, and a missing `.env` file is allowed.
+The local server started by `npm run dev` and `npm start` loads the optional root `.env` file through Node.js 24's native environment-file support. The Vite development proxy and root CLI scripts follow the same local `HOST` and `PORT` values, so changing the API port does not split the three surfaces. Existing process environment variables take precedence, and a missing `.env` file is allowed.
 
 ## CLI and automation
 
@@ -301,11 +302,12 @@ Run the focused checks while developing, or use the full baseline before opening
 | Shared contract tests | `npm run test:shared` | Zod models, defaults, timeline helpers, and export dimensions |
 | Server integration tests | `npm run test:server` | Local API, project/media/recovery flows, leases, FFmpeg jobs, and export |
 | CLI integration tests | `npm run test:cli` | CLI executable, JSON output, argument validation, sessions, and API routing |
-| All non-browser tests | `npm test` | Shared, server, and CLI tests |
+| All non-browser tests | `npm test` | Shared, server, CLI, and web configuration tests |
 | Browser regression | `npm run test:web` | Playwright Chromium coverage for dashboard, editor, autosave, conflicts, shortcuts, and CLI lease handoff |
 | Local baseline | `npm run verify` | Build plus `npm test`; browser tests remain separate |
 | Full automated baseline | `npm run verify:all` | Build plus all non-browser and browser tests |
 | Production dependency audit | `npm audit --omit=dev --audit-level=high` | High-or-higher production dependency advisories |
+| Release candidate gate | `npm run release:check` | Prerequisites, full automated baseline, and production audit |
 
 For a full local check in PowerShell:
 
@@ -313,6 +315,8 @@ For a full local check in PowerShell:
 npm.cmd run verify:all
 npm.cmd audit --omit=dev --audit-level=high
 ```
+
+Before preparing a tagged build, run `npm.cmd run release:check` as the combined candidate gate.
 
 GitHub CI runs the equivalent sequence: locked install, all-workspace build, shared/server/CLI tests, Playwright Chromium installation and browser tests, then the production dependency audit.
 
@@ -328,6 +332,7 @@ GitHub CI runs the equivalent sequence: locked install, all-workspace build, sha
 
 - [Product and development guide](docs/README.md) — architecture, editing model, media/export behavior, local data, testing, and troubleshooting.
 - [CLI and AI-agent guide](docs/CLI.md) — command groups, JSON workflows, sessions, leases, export automation, and safety boundaries.
+- [Release checklist](docs/RELEASE.md) — candidate gates, version synchronization, onboarding, and publish boundaries.
 - [Security policy](SECURITY.md) — reporting guidance and deployment boundaries.
 
 ## Contributing

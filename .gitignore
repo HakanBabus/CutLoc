@@ -10,5 +10,6 @@ coverage/
 test-results/
 .vite/
 .codex/
+.codex-runtime/
 tmp/
 AGENTS.md
