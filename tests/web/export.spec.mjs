@@ -51,6 +51,9 @@ test('export polling watchdog catches completion when SSE emits no job event', a
 
     await page.locator('.export-button').click();
     const exportModal = page.locator('.export-modal');
+    await expect(exportModal).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(exportModal.locator(':focus')).toHaveCount(1);
     await exportModal.locator('select').first().selectOption('mp3');
     await expect(exportModal.getByText(/Resolution|Çözünürlük/, { exact: true })).toHaveCount(0);
     await expect(exportModal.getByText(/Frame rate|Kare hızı/, { exact: true })).toHaveCount(0);

@@ -383,6 +383,7 @@ export function Editor({ onBack }: { onBack: () => void }) {
 
 function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: ExportStatus; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLElement>(null);
   const defaults = settings?.defaultExport;
   // Export always follows the project canvas.  Aspect changes belong to the
   // Preview toolbar; keeping a second profile picker here made output sizing
@@ -400,6 +401,34 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [fileName, setFileName] = useState(`${project.name}-export`);
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState<ExportPreflight | null>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape' && !exporting) {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled), a[href]') ?? []);
+    if (!focusable.length) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1)!;
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   const done = status.status === 'completed';
   const isVideo = format === 'mp4';
   const usesCompressedAudio = format !== 'wav';
@@ -437,7 +466,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
     try { setPreflight(await onStart(options())); }
     catch (submitError) { setError(submitError instanceof Error ? submitError.message : t('export.failedToStart')); }
   };
-  return <div className="modal-backdrop export-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) onClose(); }}><section className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+  return <div className="modal-backdrop export-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) onClose(); }}><section ref={dialogRef} className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title" tabIndex={-1} onKeyDown={handleDialogKeyDown}>
     <div className="modal-head"><div><p className="eyebrow">{t('export.studio')}</p><h2 id="export-title">{t('export.title')}</h2><small>{project.name} · {t('export.timelineDuration', { duration: formatTime(project.duration, true, project.canvas.fps) })}</small></div><button onClick={onClose} disabled={exporting} aria-label={t('common.close')}>×</button></div>
     <div className="export-layout">
       <div className="export-form">
