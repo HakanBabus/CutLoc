@@ -428,6 +428,7 @@ test('settings validation returns a client error without leaking a server failur
   assert.equal('openAiKey' in validResponse.json(), false);
   assert.equal(validResponse.json().shortcuts.split, 'K');
   assert.equal(validResponse.json().defaultExport.resolution, '1080p');
+  assert.equal(validResponse.json().defaultExport.audioBitrateKbps, 256);
   assert.equal(validResponse.json().workspaceLayout.libraryWidth, 270);
   const persistedResponse = await app.inject({ method: 'GET', url: '/api/settings' });
   assert.equal(persistedResponse.json().shortcuts.togglePlayback, 'P');

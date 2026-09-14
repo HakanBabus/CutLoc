@@ -160,7 +160,7 @@ CutLoc performs a creative render and re-encodes output; it is not a lossless re
 | Format | Video | Audio | Notes |
 | --- | --- | --- | --- |
 | MP4 | H.264 `libx264` | AAC | `yuv420p`, fast-start metadata |
-| MP3 | — | `libmp3lame` | 128, 192, or 256 kbps |
+| MP3 | — | `libmp3lame` | 128, 192, or 256 kbps; new exports default to 256 kbps |
 | WAV | — | 16-bit PCM | Local uncompressed audio |
 
 MP4 exports support 720p, 1080p, 2K/1440p, and 4K; 24, 25, 30, 50, and 60 FPS; draft, standard, high, and custom rate controls. Resolution follows the project aspect ratio and is rounded to valid even dimensions.

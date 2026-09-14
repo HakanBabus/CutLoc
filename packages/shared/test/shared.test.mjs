@@ -84,6 +84,7 @@ test('normalizes professional export profiles', () => {
   assert.equal(options.videoBitrateKbps, 18000);
   assert.equal(options.audioBitrateKbps, 256);
   assert.equal(ExportOptionsSchema.parse({ aspect: '4:5' }).aspect, '4:5');
+  assert.equal(ExportOptionsSchema.parse({}).audioBitrateKbps, 256);
 });
 
 test('maps export resolution to exact even output dimensions', () => {

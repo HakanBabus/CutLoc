@@ -595,7 +595,7 @@ export const SettingsSchema = z.object({
     resolution: z.enum(['720p', '1080p', '2K', '4K']).default('1080p'),
     fps: z.number().positive().default(30),
     quality: z.enum(['draft', 'standard', 'high', 'custom']).default('standard'),
-    audioBitrateKbps: z.union([z.literal(128), z.literal(192), z.literal(256)]).default(192),
+    audioBitrateKbps: z.union([z.literal(128), z.literal(192), z.literal(256)]).default(256),
   }),
   // Video export currently uses libx264 on the CPU.  Hardware encoders must be
   // detected and tested before they can be exposed as a real preference.
@@ -667,7 +667,7 @@ export const ExportOptionsSchema = z.object({
   rateMode: z.enum(['crf', 'bitrate']).default('crf'),
   crf: z.number().int().min(16).max(32).optional(),
   videoBitrateKbps: z.number().int().min(500).max(50000).optional(),
-  audioBitrateKbps: z.union([z.literal(128), z.literal(192), z.literal(256)]).default(192),
+  audioBitrateKbps: z.union([z.literal(128), z.literal(192), z.literal(256)]).default(256),
   range: ExportRangeSchema.optional(),
   fileName: z.string().max(120).optional(),
 });
@@ -733,7 +733,7 @@ export const defaultProject = (id: string, name = 'Yeni proje'): Project => {
 export const defaultSettings = (): Settings => SettingsSchema.parse({
   language: 'en',
   proxyQuality: 'balanced',
-  defaultExport: { format: 'mp4', aspect: '16:9', resolution: '1080p', fps: 30, quality: 'standard', audioBitrateKbps: 192 },
+  defaultExport: { format: 'mp4', aspect: '16:9', resolution: '1080p', fps: 30, quality: 'standard', audioBitrateKbps: 256 },
   hardwareAcceleration: 'software',
   experimentalAi: false,
   aiProvider: 'openai',

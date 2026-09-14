@@ -740,7 +740,7 @@ function normalizeExportOptions(project: Project, request: ExportRequest = {}): 
     resolution: request.resolution ?? '1080p',
     fps: nearestExportFps(request.fps, numberOr(project.canvas.fps, 30)),
     quality: request.quality ?? 'standard',
-    audioBitrateKbps: request.audioBitrateKbps ?? 192,
+    audioBitrateKbps: request.audioBitrateKbps ?? 256,
   });
 }
 

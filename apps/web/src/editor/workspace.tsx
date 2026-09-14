@@ -396,7 +396,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [rateMode, setRateMode] = useState<ExportOptions['rateMode']>('crf');
   const [crf, setCrf] = useState(23);
   const [videoBitrateKbps, setVideoBitrateKbps] = useState(7000);
-  const [audioBitrateKbps, setAudioBitrateKbps] = useState<128 | 192 | 256>(defaults?.audioBitrateKbps ?? 192);
+  const [audioBitrateKbps, setAudioBitrateKbps] = useState<128 | 192 | 256>(defaults?.audioBitrateKbps ?? 256);
   const [scope, setScope] = useState<'all' | 'range'>('all');
   const [fileName, setFileName] = useState(`${project.name}-export`);
   const [error, setError] = useState('');
@@ -517,7 +517,7 @@ export function SettingsModal({ settings, onClose }: { settings: Settings | null
       resolution: settings?.defaultExport?.resolution ?? '1080p',
       fps: settings?.defaultExport?.fps ?? 30,
       quality: settings?.defaultExport?.quality ?? 'standard',
-      audioBitrateKbps: settings?.defaultExport?.audioBitrateKbps ?? 192,
+      audioBitrateKbps: settings?.defaultExport?.audioBitrateKbps ?? 256,
     },
     workspaceLayout: { ...DEFAULT_WORKSPACE_LAYOUT, ...(settings?.workspaceLayout ?? {}) },
     experimentalAi: false as const,
