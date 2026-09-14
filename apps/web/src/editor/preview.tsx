@@ -194,6 +194,10 @@ function EditableTimecode({ value, duration, fps, onChange }: { value: number; d
   const [draft, setDraft] = useState(() => formatTime(value, true, fps));
   const [editing, setEditing] = useState(false);
   const [invalid, setInvalid] = useState(false);
+  const formatted = formatTime(value, true, fps);
+  const frameSeparator = formatted.lastIndexOf(':');
+  const clock = formatted.slice(0, frameSeparator);
+  const frames = formatted.slice(frameSeparator + 1);
   useEffect(() => {
     if (!editing) setDraft(formatTime(value, true, fps));
   }, [editing, fps, value]);
@@ -207,7 +211,10 @@ function EditableTimecode({ value, duration, fps, onChange }: { value: number; d
     setInvalid(false);
     onChange(clamp(parsed, 0, duration));
   };
-  return <input className="preview-timecode-input" aria-label={t('preview.timecode')} aria-invalid={invalid} title={invalid ? t('preview.invalidTimecode') : t('preview.timecodeHint')} value={draft} onFocus={(event) => { setEditing(true); setInvalid(false); event.currentTarget.select(); }} onChange={(event) => setDraft(event.target.value)} onBlur={() => { commit(); setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(formatTime(value, true, fps)); setInvalid(false); event.currentTarget.blur(); } }} />;
+  if (!editing) {
+    return <button type="button" className="preview-timecode-display" aria-label={t('preview.timecode')} title={t('preview.timecodeHint')} onClick={() => setEditing(true)}><span>{clock}</span><i>:</i><b>{frames}</b></button>;
+  }
+  return <input autoFocus className="preview-timecode-input" aria-label={t('preview.timecode')} aria-invalid={invalid} title={invalid ? t('preview.invalidTimecode') : t('preview.timecodeHint')} value={draft} onFocus={(event) => { setInvalid(false); event.currentTarget.select(); }} onChange={(event) => setDraft(event.target.value)} onBlur={() => { commit(); setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(formatTime(value, true, fps)); setInvalid(false); event.currentTarget.blur(); } }} />;
 }
 
 export function PreviewArea({ project, settings }: { project: Project; settings: Settings | null }) {
@@ -464,10 +471,16 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       playbackStartRef.current = null;
       return;
     }
-    const start = { projectTime: useEditor.getState().currentTime, wallTime: performance.now() };
+    let start = { projectTime: useEditor.getState().currentTime, wallTime: performance.now() };
+    let lastPlaybackTime = start.projectTime;
     playbackStartRef.current = start;
     let frame = 0;
     const tick = (now: number) => {
+      const requestedTime = useEditor.getState().currentTime;
+      if (requestedTime !== lastPlaybackTime) {
+        start = { projectTime: requestedTime, wallTime: now };
+        playbackStartRef.current = start;
+      }
       const next = playbackTime(start.projectTime, start.wallTime, now, project.duration);
       if (next >= project.duration) {
         setPlaying(false);
@@ -475,6 +488,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
         return;
       }
       setCurrentTime(next);
+      lastPlaybackTime = next;
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
@@ -577,5 +591,5 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
         </div>
       </div>
     </div>
-    <div className="preview-controls"><span className="preview-time"><EditableTimecode value={currentTime} duration={project.duration} fps={project.canvas.fps} onChange={setCurrentTime} /><i>/</i><b>{formatTime(project.duration, true, project.canvas.fps)}</b></span><div className="transport-center"><button className="control-button" aria-label={t('preview.previousFrame')} title={t('preview.previousFrame')} onClick={() => stepFrame(-1)}><UiIcon name="previous" /></button><button className="play-button" aria-label={t(playing ? 'preview.pause' : 'preview.play')} onClick={() => setPlaying(!playing)}><UiIcon name={playing ? 'pause' : 'play'} /></button><button className="control-button" aria-label={t('preview.nextFrame')} title={t('preview.nextFrame')} onClick={() => stepFrame(1)}><UiIcon name="next" /></button></div><div className="transport-right"><button className="control-button" aria-label={t('preview.rewind')} title={t('preview.rewind')} onClick={() => { setPlaying(false); setCurrentTime(0); }}><UiIcon name="rewind" /></button><button className="quality-button" onClick={cycleQuality} title={t('preview.quality')}><UiIcon name="quality" /><span>{t(`settings.previewQuality.${settings?.proxyQuality ?? 'balanced'}` as TranslationKey)}</span><b>⌄</b></button></div></div></main>;
+    <div className="preview-controls"><span className="preview-time"><EditableTimecode value={currentTime} duration={project.duration} fps={project.canvas.fps} onChange={setCurrentTime} /><span className="preview-time-divider">/</span><b className="preview-time-duration">{formatTime(project.duration, true, project.canvas.fps)}</b><small className="preview-time-fps">{project.canvas.fps} FPS</small></span><div className="transport-center"><button className="control-button" aria-label={t('preview.previousFrame')} title={t('preview.previousFrame')} onClick={() => stepFrame(-1)}><UiIcon name="previous" /></button><button className="play-button" aria-label={t(playing ? 'preview.pause' : 'preview.play')} onClick={() => setPlaying(!playing)}><UiIcon name={playing ? 'pause' : 'play'} /></button><button className="control-button" aria-label={t('preview.nextFrame')} title={t('preview.nextFrame')} onClick={() => stepFrame(1)}><UiIcon name="next" /></button></div><div className="transport-right"><button className="control-button" aria-label={t('preview.rewind')} title={t('preview.rewind')} onClick={() => { setPlaying(false); setCurrentTime(0); }}><UiIcon name="rewind" /></button><button className="quality-button" onClick={cycleQuality} title={t('preview.quality')}><UiIcon name="quality" /><span>{t(`settings.previewQuality.${settings?.proxyQuality ?? 'balanced'}` as TranslationKey)}</span><b>⌄</b></button></div></div></main>;
 }

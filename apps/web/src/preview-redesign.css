@@ -251,7 +251,7 @@ body,
   height: 56px;
   flex: 0 0 56px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr);
   gap: 12px;
   margin: 0;
   padding: 0 16px;

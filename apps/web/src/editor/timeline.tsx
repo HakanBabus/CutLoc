@@ -138,6 +138,7 @@ export function TimelinePro({ project }: { project: Project }) {
         setCurrentTime(at);
         setDrag({ kind: 'marker', markerId: nearest.id, historyGroup });
       } else {
+        if (target.closest('.tracks-canvas')) setSelected(null, null);
         setCurrentTime(at);
         setDrag({ kind: 'playhead' });
       }

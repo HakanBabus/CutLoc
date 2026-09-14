@@ -38,6 +38,61 @@ test('dashboard quick cards and advertised editor shortcuts execute their labele
   }
 });
 
+test('timeline seeking continues from the clicked position during playback and empty space clears selection', async ({ page, request }) => {
+  const fixtureName = `Playback seek ${Date.now()}`;
+  const beforeResponse = await request.get('/api/projects');
+  const beforeIds = new Set(beforeResponse.ok() ? (await beforeResponse.json()).map((project) => project.id) : []);
+  let projectId;
+
+  await page.goto('/');
+  try {
+    await page.locator('.primary-button.large').click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+    await page.locator('.project-name-input').fill(fixtureName);
+    await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
+    await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
+
+    const clip = page.locator('.timeline-clip').first();
+    await expect(clip).toHaveAttribute('aria-pressed', 'true');
+    const timecode = page.locator('.preview-timecode-display');
+    await expect(timecode).toBeVisible();
+    await expect(timecode).toHaveText(/^\d{2}:\d{2}:\d{2}:\d{2}$/);
+    await expect(timecode.locator('b')).toBeVisible();
+    const playButton = page.locator('.play-button');
+    await playButton.click();
+    await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
+
+    const ruler = page.locator('.ruler');
+    const rulerBox = await ruler.boundingBox();
+    expect(rulerBox).toBeTruthy();
+    const seekX = Math.min(220, rulerBox.width * 0.6);
+    await ruler.click({ position: { x: seekX, y: rulerBox.height / 2 } });
+    await page.waitForTimeout(250);
+
+    const playheadLeft = await page.locator('.playhead').evaluate((element) => Number.parseFloat(element.style.left));
+    expect(playheadLeft).toBeGreaterThanOrEqual(seekX - 5);
+    await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
+
+    await playButton.click();
+    const emptyTrack = page.locator('.track-row:not(:has(.timeline-clip))').first();
+    await expect(emptyTrack).toBeVisible();
+    await emptyTrack.click({ position: { x: 120, y: 12 } });
+    await expect(clip).toHaveAttribute('aria-pressed', 'false');
+
+    const projects = await (await request.get('/api/projects')).json();
+    projectId = projects.find((project) => !beforeIds.has(project.id))?.id;
+    expect(projectId).toBeTruthy();
+  } finally {
+    if (projectId) {
+      const deletedResponse = await request.delete(`/api/projects/${projectId}`);
+      if (deletedResponse.ok()) {
+        const deleted = await deletedResponse.json();
+        if (deleted.trashId) await request.delete(`/api/trash/${deleted.trashId}`);
+      }
+    }
+  }
+});
+
 test('custom editor shortcuts are used and persist after reopening the project', async ({ page, request }) => {
   test.setTimeout(45_000);
   const fixtureName = `Shortcut persistence ${Date.now()}`;
