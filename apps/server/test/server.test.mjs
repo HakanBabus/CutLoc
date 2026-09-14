@@ -96,6 +96,29 @@ function sampleVideoPixel(filePath, time) {
   return (result.stdout[0] + result.stdout[1] + result.stdout[2]) / 3;
 }
 
+function brightPixelBounds(filePath, time, width, height) {
+  const result = spawnSync(ffmpegPath, ['-v', 'error', '-ss', String(time), '-i', filePath, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], { maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(result.status, 0, result.stderr?.toString() || 'frame extraction failed');
+  assert.equal(result.stdout.length, width * height * 3);
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 3;
+      const brightness = (result.stdout[offset] + result.stdout[offset + 1] + result.stdout[offset + 2]) / 3;
+      if (brightness < 100) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  assert.notEqual(maxX, -1, 'expected bright text pixels');
+  return { width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
 test('health endpoint reports a local server without leaking the absolute data path', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/health' });
   assert.equal(response.statusCode, 200);
@@ -845,6 +868,42 @@ test('advanced motion, crop, mask, speed curve and adjustment controls render th
   const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   const purgedResponse = await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
   assert.equal(purgedResponse.statusCode, 200);
+});
+
+test('multiline text shorthands render as separate lines in FFmpeg exports', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Multiline text fixture' })).json();
+  const project = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  project.tracks[0].clips.push({
+    id: 'multiline-text',
+    type: 'text',
+    name: 'Multiline text',
+    start: 0,
+    duration: 0.4,
+    sourceStart: 0,
+    sourceDuration: 0.4,
+    speed: 1,
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 },
+    transitionOut: { type: 'none', duration: 0 },
+    volume: 1,
+    adjustment: false,
+    keyframes: [],
+    textStyle: { text: 'TEST/nLINE', fontFamily: 'Arial', fontSize: 64, fontWeight: 700, fontStyle: 'normal', textDecoration: 'none', letterSpacing: 0, lineHeight: 1.2, padding: 0, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: false, align: 'center' },
+  });
+  project.duration = 0.4;
+  const saveResponse = await jsonRequest('PATCH', `/api/projects/${created.id}`, project);
+  assert.equal(saveResponse.statusCode, 200);
+  const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', resolution: '720p', fileName: 'multiline-text.mp4' });
+  assert.equal(exportResponse.statusCode, 202);
+  const job = await waitForJob(exportResponse.json().job.id, 30000);
+  assert.equal(job.status, 'completed', job.error ?? 'multiline export failed');
+  const outputPath = exportFilePath(created.id, job.fileName);
+  const dimensions = probeVideoDimensions(outputPath);
+  const bounds = brightPixelBounds(outputPath, 0.2, dimensions.width, dimensions.height);
+  assert.equal(bounds.height > 70, true, `expected two rendered lines, received ${JSON.stringify(bounds)}`);
+  const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
 });
 
 test('adjustment layers affect only their own timeline interval during export', async () => {

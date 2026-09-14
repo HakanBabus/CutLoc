@@ -16,6 +16,7 @@ import {
   defaultProject,
   defaultSettings,
   clamp,
+  normalizeTextLineBreaks,
   exportDimensions,
   projectDuration,
   ProjectSchema,
@@ -66,7 +67,6 @@ const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
 type InternalProjectAccessLease = ProjectAccessLease & { token: string };
 const projectAccessLeases = new Map<string, InternalProjectAccessLease>();
 let settings: Settings = defaultSettings();
-const transientKeys = { openai: '', gemini: '' };
 
 function message(key: ServerTranslationKey, values?: ServerTranslationValues) {
   return serverT(settings.language, key, values);
@@ -293,8 +293,6 @@ async function loadSettings() {
   } catch {
     settings = defaultSettings();
   }
-  if (process.env.OPENAI_API_KEY) transientKeys.openai = process.env.OPENAI_API_KEY;
-  if (process.env.GEMINI_API_KEY) transientKeys.gemini = process.env.GEMINI_API_KEY;
   settings = { ...settings, experimentalAi: false, hasOpenAiKey: false, hasGeminiKey: false };
 }
 
@@ -884,13 +882,12 @@ function ffmpegColor(value: string) {
 }
 
 function ffmpegText(value: string) {
-  return String(value ?? '')
+  return normalizeTextLineBreaks(value)
     .replaceAll('\\', '\\\\')
     .replaceAll("'", "\\'")
     .replaceAll(':', '\\:')
     .replaceAll('%', '\\%')
-    .replaceAll('\r', '')
-    .replaceAll('\n', '\\n');
+    .replaceAll('\r', '\n');
 }
 
 function ffmpegFont(value: string) {

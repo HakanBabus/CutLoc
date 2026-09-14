@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+/** Normalize physical and encoded line breaks across preview and export. */
+export function normalizeTextLineBreaks(value: string) {
+  return String(value ?? '')
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '\n')
+    .replaceAll('\\n', '\n')
+    .replaceAll('/n', '\n');
+}
+
 export const AssetType = z.enum(['video', 'audio', 'image']);
 export type AssetType = z.infer<typeof AssetType>;
 
@@ -327,6 +336,13 @@ export const ClipSchema = z.object({
   }).optional(),
 });
 export type Clip = z.infer<typeof ClipSchema>;
+
+/** Keep imminent media mounted so hard cuts do not wait on load/seek at the boundary. */
+export function shouldMountPreviewMedia(clip: Pick<Clip, 'type' | 'start' | 'duration'>, currentTime: number, lookAheadSeconds = 3) {
+  if (clip.type !== 'video' && clip.type !== 'image') return false;
+  const lookAhead = Math.max(0, Number.isFinite(lookAheadSeconds) ? lookAheadSeconds : 0);
+  return currentTime >= Math.max(0, clip.start - lookAhead) && currentTime < clip.start + clip.duration;
+}
 
 /**
  * Keep time-based motion attached to a clip when its timeline duration

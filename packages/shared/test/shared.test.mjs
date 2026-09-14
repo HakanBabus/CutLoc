@@ -10,6 +10,7 @@ import {
   ExportRangeSchema,
   interpolateKeyframes,
   mergeProjectThreeWay,
+  normalizeTextLineBreaks,
   AssetSchema,
   adjustmentLayersForVisual,
   ClipSchema,
@@ -22,6 +23,7 @@ import {
   rippleDeleteAcrossTimeline,
   retimeClipMotion,
   sourceTimeAt,
+  shouldMountPreviewMedia,
   speedCurveSegments,
   snapTime,
   sliceClipForRange,
@@ -31,6 +33,20 @@ import {
   trimClipToPlayhead,
   visualLayerPlan,
 } from '../dist/index.js';
+
+test('normalizes physical and encoded text line breaks for preview/export parity', () => {
+  assert.equal(normalizeTextLineBreaks('Bir/niki\\nüç\r\ndört\rbeş'), 'Bir\niki\nüç\ndört\nbeş');
+});
+
+test('mounts upcoming preview media before a hard-cut boundary', () => {
+  const clip = { type: 'image', start: 5, duration: 2 };
+  assert.equal(shouldMountPreviewMedia(clip, 1.99), false);
+  assert.equal(shouldMountPreviewMedia(clip, 2), true);
+  assert.equal(shouldMountPreviewMedia(clip, 4.99), true);
+  assert.equal(shouldMountPreviewMedia(clip, 6.99), true);
+  assert.equal(shouldMountPreviewMedia(clip, 7), false);
+  assert.equal(shouldMountPreviewMedia({ ...clip, type: 'text' }, 5), false);
+});
 
 test('formats timeline time with frames', () => {
   assert.equal(formatTime(65.5, true, 30), '00:01:05:15');
