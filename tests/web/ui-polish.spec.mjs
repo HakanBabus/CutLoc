@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { sourceTimeAt } from '@cutloc/shared';
 
 const themes = [
   { name: 'light', label: /Light|Beyaz/i },
@@ -96,6 +97,16 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await timelineClip.focus();
     await page.keyboard.press('Enter');
     await expect(timelineClip).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('.inspector-tool-tabs').getByRole('tab', { name: /Speed|Hız/ }).click();
+    await expect(page.locator('.speed-metrics')).toContainText(/Source|Kaynak/);
+    await page.locator('.speed-mode-grid button').filter({ hasText: /Speed up|Hızlan/ }).click();
+    await expect.poll(async () => {
+      const response = await request.get(`/api/projects/${projectId}`);
+      const saved = await response.json();
+      const clip = saved.tracks.flatMap((track) => track.clips).find((item) => item.type === 'image');
+      if (!clip?.speedCurve?.length) return Number.POSITIVE_INFINITY;
+      return Math.abs(sourceTimeAt(clip.speedCurve, clip.speed, clip.duration) - clip.sourceDuration);
+    }).toBeLessThan(0.001);
     await page.locator('.inspector-tool-tabs').getByRole('tab', { name: /Animation|Animasyon/ }).click();
     await expect(page.locator('.animation-card')).toHaveCount(9);
     const animationStudio = page.locator('.animation-studio-v3');

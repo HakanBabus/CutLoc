@@ -50,6 +50,14 @@ test('export polling watchdog catches completion when SSE emits no job event', a
     });
 
     await page.locator('.export-button').click();
+    const exportModal = page.locator('.export-modal');
+    await exportModal.locator('select').first().selectOption('mp3');
+    await expect(exportModal.getByText(/Resolution|Çözünürlük/, { exact: true })).toHaveCount(0);
+    await expect(exportModal.getByText(/Frame rate|Kare hızı/, { exact: true })).toHaveCount(0);
+    await expect(exportModal.locator('.quality-tabs')).toHaveCount(0);
+    await exportModal.locator('select').first().selectOption('wav');
+    await expect(exportModal.locator('.export-format-note').getByText(/PCM/)).toBeVisible();
+    await exportModal.locator('select').first().selectOption('mp4');
     await page.locator('.export-start-button').click();
     await expect(page.locator('.export-complete')).toBeVisible({ timeout: 6_000 });
     expect(jobReads).toBeGreaterThanOrEqual(2);

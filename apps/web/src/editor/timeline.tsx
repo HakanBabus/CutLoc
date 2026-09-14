@@ -146,7 +146,9 @@ export function TimelinePro({ project }: { project: Project }) {
     root.addEventListener('pointerdown', handlePointerDown, true);
     return () => root.removeEventListener('pointerdown', handlePointerDown, true);
   }, [assetDragId, currentTime, mutateProject, project, px, setCurrentTime, setSelected, snapEnabled]);
-  const maxTime = Math.max(project.duration + 5, 10);
+  const maxTime = project.duration > 0
+    ? Math.max(3, project.duration + Math.max(1, project.duration * 0.12))
+    : 10;
   const rulerTicks = Array.from({ length: Math.ceil(maxTime) + 1 }, (_, index) => index).filter((tick) => tick % (px < 60 ? 5 : px < 100 ? 2 : 1) === 0);
   const timeFromClientX = (clientX: number) => { const box = timelineRef.current?.getBoundingClientRect(); if (!box) return 0; return clamp((clientX - box.left + (timelineRef.current?.scrollLeft ?? 0) - TIMELINE_LABEL_WIDTH) / px, 0, project.duration); };
   const trackIdAtClientY = (clientY: number) => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, formatTime, interpolateKeyframes, projectDuration, retimeClipMotion, speedAt, type Clip, type Project } from '@cutloc/shared';
+import { clamp, formatTime, interpolateKeyframes, projectDuration, retimeClipMotion, sourceTimeAt, speedAt, type Clip, type Project } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { UiIcon, type UiIconName } from '../components/ui-icon';
 import { DEFAULT_TEXT_STYLE, TEXT_FONT_OPTIONS, TEXT_PRESETS } from './text-model';
@@ -45,8 +45,17 @@ export function Inspector({ project }: { project: Project }) {
   });
   const textStyle = selected.textStyle ?? { ...DEFAULT_TEXT_STYLE, text: t('preset.text.clean-title.text') };
   const setSpeed = (value: number) => update((clip) => {
-    clip.speed = clamp(value, 0.25, 4);
-    retimeClipMotion(clip, Math.max(0.05, clip.sourceDuration / clip.speed));
+    const nextSpeed = clamp(value, 0.25, 4);
+    if (clip.speedCurve?.length) {
+      const ratio = nextSpeed / Math.max(0.25, clip.speed);
+      retimeVariableSpeed(clip, () => {
+        clip.speed = nextSpeed;
+        clip.speedCurve = clip.speedCurve?.map((point) => ({ ...point, speed: clamp(point.speed * ratio, 0.25, 4) }));
+      });
+    } else {
+      clip.speed = nextSpeed;
+      retimeClipMotion(clip, Math.max(0.05, clip.sourceDuration / clip.speed));
+    }
   });
   const addKeyframe = (property: Clip['keyframes'][number]['property']) => {
     setKeyframeProperty(property);
@@ -98,22 +107,40 @@ export function Inspector({ project }: { project: Project }) {
     const y = 86 - ((Math.log2(value) + 2) / 4) * 64;
     return `${x},${y}`;
   }).join(' ');
+  function retimeVariableSpeed(clip: Clip, changeCurve: () => void) {
+    const previousDuration = Math.max(0.05, clip.duration);
+    changeCurve();
+    const consumedSource = sourceTimeAt(clip.speedCurve, clip.speed, previousDuration);
+    if (consumedSource <= 0.000001) return;
+    // Curve point times are clip-local. Scaling the duration and every point by
+    // the same ratio preserves the curve shape while consuming the exact source
+    // range, keeping preview, timeline and FFmpeg export on one duration.
+    retimeClipMotion(clip, Math.max(0.05, previousDuration * clip.sourceDuration / consumedSource));
+  }
   const setSpeedCurveMode = (mode: 'constant' | 'rampUp' | 'rampDown' | 'pulse') => update((clip) => {
     if (clip.type === 'text' || clip.type === 'subtitle') return;
     const base = clamp(clip.speed, 0.25, 4);
     const slow = clamp(base * 0.5, 0.25, 4);
     const fast = clamp(base * 1.75, 0.25, 4);
-    clip.speedCurve = mode === 'constant' ? undefined : mode === 'rampUp'
-      ? [{ time: 0, speed: slow, easing: 'ease-in' }, { time: clip.duration / 2, speed: base, easing: 'ease-in-out' }, { time: clip.duration, speed: fast, easing: 'ease-out' }]
-      : mode === 'rampDown'
-        ? [{ time: 0, speed: fast, easing: 'ease-out' }, { time: clip.duration / 2, speed: base, easing: 'ease-in-out' }, { time: clip.duration, speed: slow, easing: 'ease-in' }]
-        : [{ time: 0, speed: base, easing: 'ease-in-out' }, { time: clip.duration * 0.3, speed: fast, easing: 'ease-out' }, { time: clip.duration * 0.7, speed: slow, easing: 'ease-in' }, { time: clip.duration, speed: base, easing: 'ease-in-out' }];
+    retimeVariableSpeed(clip, () => {
+      clip.speedCurve = mode === 'constant' ? undefined : mode === 'rampUp'
+        ? [{ time: 0, speed: slow, easing: 'ease-in' }, { time: clip.duration / 2, speed: base, easing: 'ease-in-out' }, { time: clip.duration, speed: fast, easing: 'ease-out' }]
+        : mode === 'rampDown'
+          ? [{ time: 0, speed: fast, easing: 'ease-out' }, { time: clip.duration / 2, speed: base, easing: 'ease-in-out' }, { time: clip.duration, speed: slow, easing: 'ease-in' }]
+          : [{ time: 0, speed: base, easing: 'ease-in-out' }, { time: clip.duration * 0.3, speed: fast, easing: 'ease-out' }, { time: clip.duration * 0.7, speed: slow, easing: 'ease-in' }, { time: clip.duration, speed: base, easing: 'ease-in-out' }];
+    });
   });
   const addSpeedPoint = () => update((clip) => {
     if (clip.type === 'text' || clip.type === 'subtitle') return;
     const time = clamp(currentTime - clip.start, 0, clip.duration);
     const point = { time, speed: speedAt(clip.speedCurve, clip.speed, time), easing: 'ease-in-out' as const };
-    clip.speedCurve = [...(clip.speedCurve ?? [{ time: 0, speed: clip.speed, easing: 'linear' as const }, { time: clip.duration, speed: clip.speed, easing: 'linear' as const }]), point].sort((a, b) => a.time - b.time);
+    retimeVariableSpeed(clip, () => {
+      const points = [...(clip.speedCurve ?? [{ time: 0, speed: clip.speed, easing: 'linear' as const }, { time: clip.duration, speed: clip.speed, easing: 'linear' as const }])];
+      const existingIndex = points.findIndex((candidate) => Math.abs(candidate.time - time) < 1 / project.canvas.fps);
+      if (existingIndex >= 0) points[existingIndex] = point;
+      else points.push(point);
+      clip.speedCurve = points.sort((a, b) => a.time - b.time);
+    });
   });
 
   const applyAppearancePreset = (preset: 'original' | 'vivid' | 'warm' | 'mono' | 'soft') => update((clip) => {
@@ -148,7 +175,7 @@ export function Inspector({ project }: { project: Project }) {
   return <aside className="inspector inspector-pro">
     {selectedClipIds.length > 1 && <div className="multi-selection-hint">{t('inspector.multiSelection', { count: selectedClipIds.length })}</div>}
     <div className="inspector-heading"><h2>{t('inspector.clipTitle', { type: typeLabel })}</h2><button onClick={() => setSelected(null, null)} aria-label={t('inspector.clearSelection')}>×</button></div>
-    <div className="selected-file"><div className={`mini-thumb ${selected.type} ${selected.adjustment ? 'adjustment' : ''}`}>{selected.adjustment ? '✦' : selected.type === 'video' ? '▶' : selected.type === 'audio' ? '♫' : selected.type === 'image' ? '▧' : 'T'}</div><div className="selected-file-copy"><strong title={selected.name}>{selected.name}</strong><small>{formatTime(selected.duration)} · {selected.speed.toFixed(2)}×{selectedAsset ? ` · ${selectedAsset.mimeType}` : ''}</small></div></div>
+    <div className="selected-file"><div className={`mini-thumb ${selected.type} ${selected.adjustment ? 'adjustment' : ''}`}>{selected.adjustment ? '✦' : selected.type === 'video' ? '▶' : selected.type === 'audio' ? '♫' : selected.type === 'image' ? '▧' : 'T'}</div><div className="selected-file-copy"><strong title={selected.name}>{selected.name}</strong><small>{formatTime(selected.duration, true, project.canvas.fps)} · {selected.speed.toFixed(2)}×{selectedAsset ? ` · ${selectedAsset.mimeType}` : ''}</small></div></div>
     <div className="inspector-tool-tabs" role="tablist" aria-label={t('inspector.tools')}>
       {inspectorTabs.map(([key, labelKey, icon]) => <button key={key} role="tab" aria-selected={activeInspectorTab === key} className={activeInspectorTab === key ? 'active' : ''} title={t(labelKey)} onClick={() => setActiveInspectorTab(key)}><UiIcon name={icon} /><span>{t(labelKey)}</span></button>)}
     </div>
@@ -195,22 +222,27 @@ export function Inspector({ project }: { project: Project }) {
 
     {resolvedGroup === 'speed' && !selected.adjustment && (supportsSpeedCurve || isTextClip) && <InspectorSection id="inspector-media" title={t(isTextClip ? 'inspector.textSpeed' : selected.type === 'image' ? 'inspector.imageSpeed' : selected.type === 'audio' ? 'inspector.audioSpeed' : 'inspector.videoSpeed')}>
       <div className="speed-editor">
+        <div className="speed-metrics" aria-label={t('inspector.speedSummary')}><span><small>{t('inspector.sourceLength')}</small><strong>{formatTime(selected.sourceDuration, true, project.canvas.fps)}</strong></span><i>→</i><span><small>{t('inspector.timelineLength')}</small><strong>{formatTime(selected.duration, true, project.canvas.fps)}</strong></span><span className="speed-average"><small>{t('inspector.averageSpeed')}</small><strong>{(selected.sourceDuration / Math.max(0.05, selected.duration)).toFixed(2)}×</strong></span></div>
         <div className="speed-value-card"><span>{t('inspector.speedValue')}</span><output>{selected.speed.toFixed(2)}×</output><input className="speed-slider" aria-label={t('inspector.clipSpeed')} type="range" min="0.25" max="4" step="0.05" value={selected.speed} onChange={(event) => setSpeed(Number(event.target.value))} /></div>
         <div className="speed-control-label"><strong>{t('inspector.speedPresets')}</strong><small>0.25× — 4×</small></div>
         <div className="speed-preset-grid">{speedPresets.map((value) => <button key={value} className={Math.abs(selected.speed - value) < 0.001 ? 'active' : ''} aria-pressed={Math.abs(selected.speed - value) < 0.001} onClick={() => setSpeed(value)}>{value}×</button>)}</div>
         <div className="speed-curve-card">
           <div className="speed-control-label"><strong>{t('inspector.speedGraph')}</strong><small>{supportsSpeedCurve ? t('inspector.speedGraphHint') : t('inspector.textSpeedHint')}</small></div>
           <svg className="speed-curve-graph" viewBox="0 0 240 100" role="img" aria-label={t('inspector.speedGraphAria')}>
-            <path className="speed-graph-grid" d="M12 22H228M12 38H228M12 54H228M12 70H228M12 86H228" />
+            <defs><linearGradient id={`speed-fill-${selected.id}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="currentColor" stopOpacity=".28" /><stop offset="1" stopColor="currentColor" stopOpacity=".02" /></linearGradient></defs>
+            <path className="speed-graph-grid" d="M12 22H228M12 38H228M12 54H228M12 70H228M12 86H228M12 14V86M66 14V86M120 14V86M174 14V86M228 14V86" />
+            <polygon className="speed-graph-fill" points={`12,86 ${speedGraphPoints} 228,86`} fill={`url(#speed-fill-${selected.id})`} />
             <polyline points={speedGraphPoints} />
+            <line className="speed-graph-playhead" x1={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} x2={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} y1="14" y2="88" />
             {curvePoints.map((point, index) => { const x = 12 + clamp(point.time / Math.max(selected.duration, 0.05), 0, 1) * 216; const y = 86 - ((Math.log2(clamp(point.speed, 0.25, 4)) + 2) / 4) * 64; return <circle key={`${point.time}-${index}`} cx={x} cy={y} r="3.5" />; })}
           </svg>
           <div className="speed-graph-scale" aria-hidden="true"><span>4×</span><span>2×</span><span>1×</span><span>0.5×</span><span>0.25×</span></div>
+          <div className="speed-graph-time" aria-hidden="true"><span>0:00</span><span>{formatTime(selected.duration, true, project.canvas.fps)}</span></div>
         </div>
         {supportsSpeedCurve && <>
           <div className="speed-control-label"><strong>{t('inspector.speedModes')}</strong><small>{t('inspector.speedCurve')}</small></div>
-          <div className="speed-mode-grid">{(['constant', 'rampUp', 'rampDown', 'pulse'] as const).map((value) => <button key={value} className={speedCurveMode === value ? 'active' : ''} aria-pressed={speedCurveMode === value} onClick={() => setSpeedCurveMode(value)}>{t(`inspector.speedMode.${value}` as TranslationKey)}</button>)}</div>
-          {curvePoints.length > 0 && <div className="speed-point-list"><div className="keyframe-graph-head"><strong>{t('inspector.speedPoints')}</strong><small>{t('inspector.points', { count: curvePoints.length })}</small></div>{curvePoints.map((point, index) => <div className="speed-point-row" key={`${point.time}-${index}`}><NumberField label={t('inspector.time')} value={point.time} min={0} max={selected.duration} step={0.05} onChange={(value) => update((clip) => { if (clip.speedCurve?.[index]) { clip.speedCurve[index].time = clamp(value, 0, clip.duration); clip.speedCurve.sort((a, b) => a.time - b.time); } })} /><NumberField label={t('inspector.speed')} value={point.speed} min={0.25} max={4} step={0.05} onChange={(value) => update((clip) => { if (clip.speedCurve?.[index]) clip.speedCurve[index].speed = clamp(value, 0.25, 4); })} /><button className="keyframe-delete" aria-label={t('inspector.deleteSpeedPoint')} onClick={() => update((clip) => { clip.speedCurve = clip.speedCurve?.filter((_, pointIndex) => pointIndex !== index); })}>×</button></div>)}</div>}
+          <div className="speed-mode-grid">{(['constant', 'rampUp', 'rampDown', 'pulse'] as const).map((value) => <button key={value} className={speedCurveMode === value ? 'active' : ''} aria-pressed={speedCurveMode === value} onClick={() => setSpeedCurveMode(value)}><svg viewBox="0 0 48 18" aria-hidden="true"><path d={value === 'constant' ? 'M3 9H45' : value === 'rampUp' ? 'M3 15C19 15 27 5 45 3' : value === 'rampDown' ? 'M3 3C20 3 28 13 45 15' : 'M3 10C10 2 16 2 23 10S36 18 45 8'} /></svg><span>{t(`inspector.speedMode.${value}` as TranslationKey)}</span>{speedCurveMode === value && <b>✓</b>}</button>)}</div>
+          {curvePoints.length > 0 && <div className="speed-point-list"><div className="keyframe-graph-head"><strong>{t('inspector.speedPoints')}</strong><small>{t('inspector.points', { count: curvePoints.length })}</small></div>{curvePoints.map((point, index) => <div className="speed-point-row" key={`${point.time}-${index}`}><NumberField label={t('inspector.time')} value={point.time} min={0} max={selected.duration} step={0.05} onChange={(value) => update((clip) => { if (clip.speedCurve?.[index]) retimeVariableSpeed(clip, () => { if (clip.speedCurve?.[index]) { clip.speedCurve[index].time = clamp(value, 0, clip.duration); clip.speedCurve.sort((a, b) => a.time - b.time); } }); })} /><NumberField label={t('inspector.speed')} value={point.speed} min={0.25} max={4} step={0.05} onChange={(value) => update((clip) => { if (clip.speedCurve?.[index]) retimeVariableSpeed(clip, () => { if (clip.speedCurve?.[index]) clip.speedCurve[index].speed = clamp(value, 0.25, 4); }); })} /><button className="keyframe-delete" aria-label={t('inspector.deleteSpeedPoint')} onClick={() => update((clip) => { retimeVariableSpeed(clip, () => { clip.speedCurve = clip.speedCurve?.filter((_, pointIndex) => pointIndex !== index); }); })}>×</button></div>)}</div>}
           <button className="speed-add-point" onClick={addSpeedPoint}>＋ {t('inspector.addSpeedPoint')}</button>
         </>}
       </div>
