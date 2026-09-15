@@ -217,6 +217,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'recent' | 'name'>('recent');
   const [bundleError, setBundleError] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const visibleProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase(language === 'tr' ? 'tr-TR' : 'en-US');
     return [...projects]
@@ -253,12 +254,12 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
     </section>
     <input ref={mediaFileRef} className="hidden-input" type="file" accept="video/*,audio/*,image/*" aria-label={t('dashboard.mediaPicker')} onChange={(event) => { const file = event.target.files?.[0]; if (file) onStartWithMedia(file); event.target.value = ''; }} />
     <section className="projects-section">
-      <div className="section-heading dashboard-project-heading"><div><p className="eyebrow">{t('dashboard.workspace')}</p><h2>{t('dashboard.drafts')}</h2></div><span className="project-count">{query ? t('dashboard.filteredCount', { visible: visibleProjects.length, total: projects.length }) : t('common.projects', { count: projects.length })}</span></div>
+      <div className="section-heading dashboard-project-heading"><div><p className="eyebrow">{t('dashboard.workspace')}</p><h2>{t('dashboard.drafts')}</h2></div><div className="dashboard-heading-actions"><button className={`trash-trigger ${trashOpen ? 'active' : ''}`} type="button" aria-expanded={trashOpen} onClick={() => setTrashOpen((open) => !open)}><UiIcon name="trash" /><span>{t('dashboard.trash')}</span>{trash.length > 0 && <b>{trash.length}</b>}</button><span className="project-count">{query ? t('dashboard.filteredCount', { visible: visibleProjects.length, total: projects.length }) : t('common.projects', { count: projects.length })}</span></div></div>
+      {trashOpen && <TrashSection entries={trash} onRestore={onRestoreTrash} onPurge={onPurgeTrash} />}
       <div className="dashboard-project-tools"><label className="project-search"><span><UiIcon name="search" /></span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('dashboard.searchPlaceholder')} aria-label={t('dashboard.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('common.close')}>×</button>}</label><select value={sort} onChange={(event) => setSort(event.target.value as 'recent' | 'name')} aria-label={t('common.search')}><option value="recent">{t('dashboard.sortRecent')}</option><option value="name">{t('dashboard.sortName')}</option></select></div>
       <div className="dashboard-insights"><span><b>{projects.reduce((total, item) => total + item.assets.length, 0)}</b> {t('dashboard.mediaAssets', { count: projects.reduce((total, item) => total + item.assets.length, 0) }).replace(/^\d+\s*/, '')}</span><span><b>{projects.filter((item) => item.duration > 0).length}</b> {t('dashboard.activeTimelines', { count: projects.filter((item) => item.duration > 0).length }).replace(/^\d+\s*/, '')}</span><span><b>Ctrl / ⌘ Z</b> {t('dashboard.undoHint')}</span></div>
       {loading ? <div className="empty-state"><div className="spinner" /> {t('dashboard.loading')}</div> : projects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">✦</div><h3>{t('dashboard.emptyTitle')}</h3><p>{t('dashboard.emptyCopy')}</p><button className="secondary-button" onClick={onCreate}>{t('dashboard.command.new')}</button></div> : visibleProjects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">⌕</div><h3>{t('dashboard.noSearchTitle')}</h3><p>{t('dashboard.noSearchCopy')}</p></div> : <div className="project-grid">{visibleProjects.map((item) => <ProjectCard key={item.id} project={item} onOpen={() => onOpen(item.id)} onDelete={() => onDelete(item.id)} />)}</div>}
     </section>
-    <TrashSection entries={trash} onRestore={onRestoreTrash} onPurge={onPurgeTrash} />
     <footer className="dashboard-footer"><span>{t('dashboard.footer')}</span><span>CutLoc <b>v0.1.0 beta</b></span></footer>
     {bundleError && <MessageDialog title={t('dashboard.importFailed')} message={t('dashboard.bundleError')} onClose={() => setBundleError(false)} />}
   </main>;
@@ -267,8 +268,8 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
 function TrashSection({ entries, onRestore, onPurge }: { entries: TrashEntry[]; onRestore: (trashId: string) => void; onPurge: (trashId: string) => void }) {
   const { language, t, formatDate } = useI18n();
   return <section key={language} className="trash-section" aria-label={t('dashboard.trash')}>
-    <div className="section-heading"><div><p className="eyebrow">{t('dashboard.recovery')}</p><h2>{t('dashboard.trash')}</h2></div><span className="project-count">{t('common.items', { count: entries.length })}</span></div>
-    {entries.length === 0 ? <div className="trash-empty">{t('dashboard.trashEmpty')}</div> : <div className="trash-grid">{entries.map((entry) => <article className="trash-card" key={entry.trashId}><div className="trash-card-main"><strong>{entry.name}</strong><small>{formatDate(entry.deletedAt, { dateStyle: 'short', timeStyle: 'short' })} · {entry.assetCount} {t('common.media')}</small></div><div className="trash-card-actions"><button className="secondary-button" onClick={() => onRestore(entry.trashId)}>{t('common.restore')}</button><button className="danger-button" onClick={() => onPurge(entry.trashId)}>{t('common.deletePermanently')}</button></div></article>)}</div>}
+    <div className="trash-heading"><div><p className="eyebrow">{t('dashboard.recovery')}</p><h3>{t('dashboard.trash')}</h3></div><p>{t('dashboard.trashRetention')}</p></div>
+    {entries.length === 0 ? <div className="trash-empty">{t('dashboard.trashEmpty')}</div> : <div className="trash-grid">{entries.map((entry) => { const days = Math.max(1, Math.ceil((new Date(entry.expiresAt).getTime() - Date.now()) / (24 * 60 * 60 * 1000))); return <article className="trash-card" key={entry.trashId}><div className="trash-card-main"><strong>{entry.name}</strong><small>{formatDate(entry.deletedAt, { dateStyle: 'short' })} · {entry.assetCount} {t('common.media')} · {formatBytes(entry.sizeBytes, language)}</small><span>{t('dashboard.trashExpires', { days })}</span></div><div className="trash-card-actions"><button className="secondary-button" onClick={() => onRestore(entry.trashId)}>{t('common.restore')}</button><button className="danger-button" onClick={() => onPurge(entry.trashId)}>{t('common.deletePermanently')}</button></div></article>; })}</div>}
   </section>;
 }
 

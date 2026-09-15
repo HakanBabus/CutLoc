@@ -6,7 +6,7 @@ import type { TranslationKey } from '../i18n';
 export type Theme = 'dark' | 'gray' | 'light';
 export type Panel = 'media' | 'text' | 'elements' | 'project' | 'transitions' | 'effects' | 'color' | 'animation';
 export type InspectorTab = 'primary' | 'audio' | 'speed' | 'motion' | 'adjust';
-export type TrashEntry = { trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; duration: number; assetCount: number };
+export type TrashEntry = { trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; expiresAt: string; duration: number; assetCount: number; sizeBytes: number };
 type HistoryState = { past: Project[]; future: Project[] };
 type HistoryMutationOptions = { historyGroup?: string };
 export type ShortcutAction = keyof ShortcutSettings;

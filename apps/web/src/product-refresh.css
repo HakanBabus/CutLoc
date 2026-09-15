@@ -6716,6 +6716,51 @@ body {
   color: var(--theme-line-strong);
 }
 
+.app-shell[data-theme] .dashboard-heading-actions,
+.app-shell[data-theme] .trash-trigger {
+  display: flex;
+  align-items: center;
+}
+
+.app-shell[data-theme] .dashboard-heading-actions { gap: 9px; }
+
+.app-shell[data-theme] .trash-trigger {
+  min-height: 34px;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  color: var(--theme-muted);
+  background: var(--theme-panel-soft);
+  font-size: 11px;
+}
+
+.app-shell[data-theme] .trash-trigger:hover,
+.app-shell[data-theme] .trash-trigger.active {
+  border-color: color-mix(in srgb, #ff8585 30%, var(--theme-line));
+  color: var(--theme-text);
+  background: color-mix(in srgb, #ff8585 6%, var(--theme-panel-raised));
+}
+
+.app-shell[data-theme] .trash-trigger .ui-icon { width: 15px; height: 15px; }
+.app-shell[data-theme] .trash-trigger b { min-width: 18px; padding: 2px 5px; border-radius: 999px; color: #ffb1b1; background: color-mix(in srgb, #ff7373 12%, transparent); font-size: 9px; }
+
+.app-shell[data-theme] .trash-section {
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 15px;
+  border: 1px solid var(--theme-line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--theme-panel) 88%, var(--theme-panel-soft));
+}
+
+.app-shell[data-theme] .trash-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 11px; }
+.app-shell[data-theme] .trash-heading h3 { margin: 2px 0 0; color: var(--theme-text); font-size: 16px; }
+.app-shell[data-theme] .trash-heading > p { margin: 0; color: var(--theme-subtle); font-size: 10px; }
+.app-shell[data-theme] .trash-grid { grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 8px; }
+.app-shell[data-theme] .trash-card { border-color: var(--theme-line); background: var(--theme-panel-soft); }
+.app-shell[data-theme] .trash-card-main span { display: block; margin-top: 5px; color: #e6a0a0; font-size: 9px; }
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;
