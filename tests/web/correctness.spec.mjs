@@ -136,7 +136,7 @@ test('editor shortcuts are fixed and ignore attempted settings overrides', async
     await page.locator('.settings-modal').getByRole('button', { name: /Close|Kapat/i }).click();
 
     const playButton = page.locator('.play-button');
-    await page.locator('.editor-statusbar').click();
+    await page.locator('.preview-stage').click({ position: { x: 8, y: 8 } });
     await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
     await page.keyboard.press('p');
     await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
@@ -145,6 +145,7 @@ test('editor shortcuts are fixed and ignore attempted settings overrides', async
 
     const persistedSettings = await (await request.get('/api/settings')).json();
     expect(persistedSettings.shortcuts.togglePlayback).toBe('Space');
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     const projects = await (await request.get('/api/projects')).json();
     projectId = projects.find((project) => !beforeIds.has(project.id))?.id;
     expect(projectId).toBeTruthy();
@@ -152,7 +153,8 @@ test('editor shortcuts are fixed and ignore attempted settings overrides', async
     await page.reload();
     await page.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
     await expect(page.locator('.editor-shell')).toBeVisible();
-    await page.locator('.editor-statusbar').click();
+    await expect(page.locator('.route-transition')).toHaveCount(0);
+    await page.locator('.preview-stage').click({ position: { x: 8, y: 8 } });
     await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
     await page.keyboard.press('Space');
     await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Pause|Duraklat/);

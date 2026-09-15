@@ -16,6 +16,23 @@ test('dashboard project cards expose direct recovery and storage details', async
     await page.goto('/');
     const card = page.locator('article.project-card').filter({ hasText: fixtureName });
     await expect(card).toBeVisible();
+    const dashboardGeometry = await page.locator('.dashboard').evaluate((dashboard) => {
+      const hero = dashboard.querySelector('.dashboard-hero');
+      const projects = dashboard.querySelector('.projects-section');
+      const firstCard = dashboard.querySelector('.project-card');
+      const toolbar = dashboard.querySelector('.dashboard-project-heading .dashboard-project-tools');
+      return {
+        heroHeight: hero?.getBoundingClientRect().height ?? 0,
+        projectsTop: projects?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY,
+        cardTop: firstCard?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY,
+        toolbarHasTrash: Boolean(toolbar?.querySelector('.trash-trigger')),
+      };
+    });
+    expect(dashboardGeometry.heroHeight).toBeLessThanOrEqual(390);
+    expect(dashboardGeometry.projectsTop).toBeLessThan(560);
+    expect(dashboardGeometry.cardTop).toBeLessThan(720);
+    expect(dashboardGeometry.toolbarHasTrash).toBeTruthy();
+    await expect(page.locator('.dashboard-command-strip .command-card > .command-icon')).toHaveCount(3);
     await expect(card.locator('.project-preview')).toHaveCSS('aspect-ratio', '16 / 9');
     await expect(card.locator('.project-meta')).toContainText(/B|KB|MB|GB/);
     await expect(card.locator('.more-button')).toHaveCount(0);
@@ -117,9 +134,9 @@ test('theme palettes and animation controls stay coherent across the workspace',
       });
       expect(palette.background).not.toBe('');
       expect(palette.text).not.toBe('');
-      expect(palette.headerBackground).not.toBe('rgba(0, 0, 0, 0)');
-      expect(palette.cardRadius).toBe('15px');
-      expect(palette.cardShadow).not.toBe('none');
+      expect(palette.headerBackground).toBe('rgba(0, 0, 0, 0)');
+      expect(palette.cardRadius).toBe('9px');
+      expect(palette.cardShadow).toBe('none');
       expect(palette.scheme).toBe(theme.name === 'light' ? 'light' : 'dark');
     }
 
