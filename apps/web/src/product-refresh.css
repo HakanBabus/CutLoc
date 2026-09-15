@@ -6643,6 +6643,32 @@ body {
   height: 17px;
 }
 
+.app-shell[data-theme] .project-delete-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--theme-subtle);
+  background: transparent;
+  cursor: pointer;
+  transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.app-shell[data-theme] .project-delete-button .ui-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.app-shell[data-theme] .project-delete-button:hover,
+.app-shell[data-theme] .project-delete-button:focus-visible {
+  border-color: color-mix(in srgb, #ff7373 38%, var(--theme-line));
+  color: #ff9292;
+  background: color-mix(in srgb, #ff7373 9%, var(--theme-panel-soft));
+}
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;
