@@ -55,7 +55,7 @@ test('server metadata refresh keeps a dirty local timeline edit until autosave',
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i, { timeout: 10_000 });
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     await expect.poll(async () => {
       const response = await request.get('/api/projects');
       if (!response.ok()) return null;
@@ -84,9 +84,9 @@ test('server metadata refresh keeps a dirty local timeline edit until autosave',
       if (!(refreshItem instanceof HTMLElement)) throw new Error('Refresh library menu item did not open');
       refreshItem.click();
     });
-    await expect(page.locator('.editor-statusbar')).toContainText(/Saving|Kaydediliyor/i, { timeout: 5_000 });
+    await expect(page.locator('.save-indicator')).toContainText(/Saving|Kaydediliyor/i, { timeout: 5_000 });
     await page.clock.runFor(600);
-    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i, { timeout: 10_000 });
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     await page.clock.resume();
     clockInstalled = false;
     await page.locator('.back-button').click();
