@@ -18,7 +18,7 @@
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "mime-types": "^3.0.1",
-    "nanoid": "^5.1.5"
+    "nanoid": "^6.0.1"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
