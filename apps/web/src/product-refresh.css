@@ -6587,6 +6587,48 @@ body {
   font-size: 10px;
 }
 
+.app-shell[data-theme] .hero-product-shot {
+  position: relative;
+  width: min(54vw, 650px);
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 20px;
+  background: var(--theme-panel);
+  box-shadow: 0 28px 70px color-mix(in srgb, var(--theme-bg) 70%, transparent), 0 0 0 7px color-mix(in srgb, var(--theme-panel) 56%, transparent);
+  transform: perspective(1100px) rotateY(-2deg) rotateX(1deg);
+}
+
+.app-shell[data-theme] .hero-product-shot img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center;
+}
+
+.app-shell[data-theme] .hero-product-shot figcaption {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--theme-text) 14%, transparent);
+  border-radius: 9px;
+  color: #eef7f4;
+  background: rgba(7, 11, 10, .78);
+  box-shadow: 0 9px 25px rgba(0, 0, 0, .3);
+  backdrop-filter: blur(12px);
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .hero-product-shot figcaption b {
+  margin-left: 3px;
+  color: #93f0cf;
+}
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;

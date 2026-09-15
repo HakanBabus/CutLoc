@@ -225,15 +225,10 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
     </header>
     <section className="dashboard-hero">
       <div><p className="eyebrow">{t('dashboard.hero.eyebrow')}</p><h1>{t('dashboard.hero.titleLead')} <em>{t('dashboard.hero.titleAccent')}</em><br />{t('dashboard.hero.titleTail')}</h1><p className="hero-copy">{t('dashboard.hero.copy')}</p><button className="primary-button large" onClick={onCreate}><Glyph>＋</Glyph> {t('dashboard.newProject')}</button></div>
-      <div className="hero-editor-demo" aria-hidden="true">
-        <div className="hero-editor-top"><span className="hero-window-dots"><i /><i /><i /></span><strong>{t('dashboard.heroDemo.project')}</strong><span className="hero-demo-export">{t('common.export')} ↗</span></div>
-        <div className="hero-editor-workspace">
-          <div className="hero-demo-rail"><i className="active">▣</i><i>T</i><i>◈</i><i>⌁</i></div>
-          <div className="hero-demo-stage"><span className="hero-demo-stage-label">{t('dashboard.heroDemo.preview')} · 16:9</span><div className="hero-demo-canvas"><div className="hero-demo-subject"><i /><b>CUT<br />WITH<br /><em>INTENT</em></b></div><span className="hero-demo-play">▶</span></div></div>
-          <div className="hero-demo-speed"><div><small>{t('dashboard.heroDemo.speed')}</small><strong>1.50×</strong></div><svg viewBox="0 0 118 56"><path className="grid" d="M4 12H114M4 28H114M4 44H114" /><path className="curve" d="M4 43C29 43 39 34 55 27S87 12 114 10" /><circle cx="55" cy="27" r="3" /></svg><span><i>{t('dashboard.heroDemo.source')}</i><b>00:12</b><i>→</i><b>00:08</b></span></div>
-        </div>
-        <div className="hero-demo-timeline"><div className="hero-demo-time"><span>00:00:04:12</span><i>{t('dashboard.heroDemo.localPreview')}</i></div><div className="hero-demo-tracks"><span className="hero-demo-playhead" /><div><b /><b /><b /></div><div><b /><b /></div><div className="wave"><b /></div></div></div>
-      </div>
+      <figure className="hero-product-shot">
+        <img src="/showcase/cutloc-editor.jpg" alt={t('dashboard.heroPreviewAlt')} />
+        <figcaption><span className="status-dot" />{t('dashboard.heroPreviewCaption')}<b>16:9</b></figcaption>
+      </figure>
     </section>
     <section className="dashboard-command-strip" aria-label={t('dashboard.quickStart')}>
       <button className="command-card command-primary" onClick={onCreate}><span className="command-icon">＋</span><span><strong>{t('dashboard.command.new')}</strong><small>{t('dashboard.command.newHint')}</small></span><b>↗</b></button>
