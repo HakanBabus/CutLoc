@@ -58,6 +58,12 @@ test('timeline seeking continues from the clicked position during playback and e
     await expect(timecode).toBeVisible();
     await expect(timecode).toHaveText(/^\d{2}:\d{2}:\d{2}:\d{2}$/);
     await expect(timecode.locator('b')).toBeVisible();
+    const frameStyle = await timecode.locator('b').evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, radius: style.borderRadius };
+    });
+    expect(frameStyle.background).toBe('rgba(0, 0, 0, 0)');
+    expect(frameStyle.radius).toBe('0px');
     const playButton = page.locator('.play-button');
     await playButton.click();
     await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
