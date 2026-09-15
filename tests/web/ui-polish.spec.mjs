@@ -7,6 +7,45 @@ const themes = [
   { name: 'dark', label: /Dark|Koyu/i },
 ];
 
+test('dashboard project cards expose direct recovery and storage details', async ({ page, request }) => {
+  const fixtureName = `Dashboard release ${Date.now()}`;
+  const created = await (await request.post('/api/projects', { data: { name: fixtureName } })).json();
+  let trashId;
+
+  try {
+    await page.goto('/');
+    const card = page.locator('article.project-card').filter({ hasText: fixtureName });
+    await expect(card).toBeVisible();
+    await expect(card.locator('.project-preview')).toHaveCSS('aspect-ratio', '16 / 9');
+    await expect(card.locator('.project-meta')).toContainText(/B|KB|MB|GB/);
+    await expect(card.locator('.more-button')).toHaveCount(0);
+
+    const search = page.getByRole('textbox', { name: /Search projects|Projelerde ara/i });
+    await expect(search.locator('xpath=..').locator('.ui-icon')).toBeVisible();
+    await search.fill(fixtureName);
+    await expect(card).toBeVisible();
+
+    await card.getByRole('button', { name: /Move to trash|Çöp kutusuna taşı/i }).click();
+    const dialog = page.locator('.confirm-dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: /Move to trash|Çöp kutusuna taşı/i }).click();
+    await expect(card).toHaveCount(0);
+
+    const trashResponse = await request.get('/api/trash');
+    trashId = (await trashResponse.json()).find((entry) => entry.projectId === created.id)?.trashId;
+    expect(trashId).toBeTruthy();
+    await page.getByRole('button', { name: /Trash|Çöp kutusu/i }).click();
+    await expect(page.locator('.trash-section')).toContainText(/30 days|30 gün/i);
+    await expect(page.locator('.trash-card').filter({ hasText: fixtureName })).toBeVisible();
+  } finally {
+    if (!trashId) {
+      const deleted = await request.delete(`/api/projects/${created.id}`);
+      if (deleted.ok()) trashId = (await deleted.json()).trashId;
+    }
+    if (trashId) await request.delete(`/api/trash/${trashId}`);
+  }
+});
+
 test('new text clips start without fades or transitions', async ({ page, request }) => {
   const fixtureName = `Text defaults ${Date.now()}`;
   const createdResponse = await request.post('/api/projects', { data: { name: fixtureName } });
