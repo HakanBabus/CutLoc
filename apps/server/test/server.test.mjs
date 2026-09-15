@@ -159,6 +159,9 @@ test('project CRUD and revision conflicts work in an isolated data directory', a
   const listResponse = await app.inject({ method: 'GET', url: '/api/projects' });
   assert.equal(listResponse.statusCode, 200);
   assert.equal(listResponse.json().some((item) => item.id === created.id), true);
+  const listedProject = listResponse.json().find((item) => item.id === created.id);
+  assert.equal(Number.isFinite(listedProject?.sizeBytes), true);
+  assert.equal(listedProject.sizeBytes > 0, true);
 
   const updatedResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'Güncel proje', revision: 0 });
   assert.equal(updatedResponse.statusCode, 200);

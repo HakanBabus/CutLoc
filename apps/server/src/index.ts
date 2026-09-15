@@ -144,14 +144,14 @@ async function ensureDir(dir: string) {
 }
 
 async function directorySize(dir: string): Promise<number> {
-  let total = 0;
   const entries = await fsp.readdir(dir, { withFileTypes: true });
-  await Promise.all(entries.map(async (entry) => {
+  const sizes = await Promise.all(entries.map(async (entry) => {
     const item = path.join(dir, entry.name);
-    if (entry.isDirectory()) total += await directorySize(item);
-    else if (entry.isFile()) total += (await fsp.stat(item)).size;
+    if (entry.isDirectory()) return directorySize(item);
+    if (entry.isFile()) return (await fsp.stat(item)).size;
+    return 0;
   }));
-  return total;
+  return sizes.reduce((total, size) => total + size, 0);
 }
 
 function projectPath(projectId: string) {
