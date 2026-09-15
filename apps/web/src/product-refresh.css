@@ -673,6 +673,170 @@ body,
   .inspector-tool-tabs button { flex-basis: 48px; min-width: 48px; }
 }
 
+/* Release workbench: a denser, neutral desktop editing system. */
+.app-shell[data-theme='light'] {
+  --theme-bg: #edf0f2;
+  --theme-panel: #ffffff;
+  --theme-panel-raised: #f7f8f8;
+  --theme-panel-soft: #f1f3f4;
+  --theme-line: #d9dfe1;
+  --theme-line-strong: #c8d0d2;
+  --theme-text: #182321;
+  --theme-muted: #566762;
+  --theme-subtle: #6f7d79;
+  --theme-accent: #2f6f54;
+  --theme-accent-line: #74a88f;
+  --theme-on-accent: #ffffff;
+  --theme-selection: #e7f2ec;
+  color-scheme: light;
+}
+
+.app-shell[data-theme] {
+  --radius-control: 6px;
+  --radius-surface: 8px;
+  --radius-dialog: 12px;
+}
+
+.app-shell[data-theme] :where(button, input, select, textarea):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--theme-accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.app-shell[data-theme] :where(.editor-topbar, .asset-panel, .inspector, .timeline-pro, .preview-toolbar, .preview-controls, .editor-statusbar) {
+  border-color: var(--theme-line);
+  box-shadow: none;
+}
+
+.app-shell[data-theme='light'] :where(.editor-topbar, .tool-rail, .asset-panel, .inspector, .timeline-pro, .timeline-toolbar, .editor-statusbar) {
+  color: var(--theme-text);
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme='light'] .editor-body.workspace-layout {
+  background: var(--theme-line);
+}
+
+.app-shell[data-theme] .editor-topbar {
+  height: 48px;
+  flex-basis: 48px;
+  padding: 0 10px;
+}
+
+.app-shell[data-theme] :where(.topbar-left, .topbar-center, .topbar-right) { gap: 5px; }
+.app-shell[data-theme] .topbar-left { min-width: 310px; }
+.app-shell[data-theme] .topbar-center { padding: 0 6px; border-inline: 1px solid var(--theme-line); }
+.app-shell[data-theme] .project-name-input { width: 132px; font-size: 11px; }
+.app-shell[data-theme] :where(.back-button, .history-button, .icon-button.editor-settings) { width: 28px; height: 28px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .topbar-command-button { min-height: 28px; padding: 0 7px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .export-button { min-height: 30px; padding: 0 11px; border-radius: var(--radius-control); }
+
+.app-shell[data-theme] .editor-body.workspace-layout {
+  grid-template-columns:
+    clamp(48px, var(--workspace-rail-width), 72px)
+    minmax(210px, min(var(--workspace-library-width), 23vw))
+    minmax(420px, 1fr)
+    minmax(240px, min(var(--workspace-inspector-width), 25vw));
+  grid-template-rows: minmax(300px, 1fr) clamp(180px, var(--workspace-timeline-height), 400px);
+  gap: 1px;
+}
+
+.app-shell[data-theme] .tool-rail { padding: 7px 0; gap: 3px; }
+.app-shell[data-theme] .tool-rail::before { writing-mode: initial; transform: none; height: auto; margin: 2px 0 5px; font-size: 7px; letter-spacing: .08em; }
+.app-shell[data-theme] .tool-rail button { width: 42px; height: 42px; border: 0; border-radius: var(--radius-control); }
+.app-shell[data-theme] .tool-rail button.active { color: var(--theme-accent); background: var(--theme-selection); box-shadow: inset 2px 0 var(--theme-accent); }
+
+.app-shell[data-theme] .asset-panel { padding: 10px; }
+.app-shell[data-theme] .panel-heading { margin-bottom: 8px; }
+.app-shell[data-theme] .panel-heading h2 { font-size: 15px; letter-spacing: -.02em; }
+.app-shell[data-theme] :where(.panel-copy, .panel-note, .library-interaction-hint, .stock-shelf-heading small) { display: none; }
+.app-shell[data-theme] :where(.import-zone, .blank-text-card) { min-height: 60px; padding: 8px; border-radius: var(--radius-surface); background: var(--theme-panel-raised); }
+.app-shell[data-theme] :where(.asset-item.pro, .media-card, .text-template, .stock-media-card, .shape-shelf-grid button, .restore-point-card, .snapshot-card) {
+  border-color: var(--theme-line);
+  border-radius: var(--radius-surface);
+  background: var(--theme-panel);
+  box-shadow: none;
+}
+.app-shell[data-theme] :where(.asset-item.pro, .media-card) { padding: 5px; }
+.app-shell[data-theme] .text-template { min-height: 58px; padding: 9px; }
+.app-shell[data-theme] .text-template strong { font-size: 14px; }
+.app-shell[data-theme] :where(.stock-media-shelf, .restore-points, .snapshot-list, .project-backups) { padding: 8px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel-raised); }
+.app-shell[data-theme] .stock-media-card .stock-preview { height: 42px; }
+
+.app-shell[data-theme] .preview-area { background: var(--theme-panel-soft); }
+.app-shell[data-theme] .preview-toolbar { height: 36px; flex-basis: 36px; padding: 0 10px; background: var(--theme-panel); }
+.app-shell[data-theme] .preview-breadcrumb { min-width: 0; gap: 5px; }
+.app-shell[data-theme] .preview-breadcrumb select { min-width: 0; max-width: 132px; height: 26px; padding: 0 22px 0 7px; border-radius: var(--radius-control); font-size: 9px; }
+.app-shell[data-theme] .preview-stage { padding: 14px 18px 10px; background: #e6e9ea; }
+.app-shell[data-theme] .preview-controls { height: 40px; padding: 0 10px; gap: 3px; background: var(--theme-panel); }
+.app-shell[data-theme] .play-button { width: 28px; height: 28px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .preview-time { margin-left: 6px; }
+.app-shell[data-theme] .timecode-frame { padding: 4px 6px; border: 1px solid var(--theme-line); border-radius: var(--radius-control); color: var(--theme-text); background: var(--theme-panel-raised); }
+
+.app-shell[data-theme] .inspector-pro { padding: 9px 9px 18px; }
+.app-shell[data-theme] .inspector-heading h2 { font-size: 14px; }
+.app-shell[data-theme] .selected-file { gap: 7px; min-height: 42px; padding: 6px 0; margin: 0; }
+.app-shell[data-theme] .selected-file .mini-thumb { width: 34px; height: 26px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .inspector-tool-tabs { gap: 2px; margin: 5px 0; padding: 2px; border: 0; border-radius: var(--radius-surface); background: var(--theme-panel-soft); }
+.app-shell[data-theme] .inspector-tool-tabs button { min-width: 0; min-height: 38px; padding: 4px 2px; border: 0; border-radius: var(--radius-control); background: transparent; box-shadow: none; outline: 0; }
+.app-shell[data-theme] .inspector-tool-tabs button.active { border: 0; color: var(--theme-accent); background: var(--theme-selection); box-shadow: none; outline: 0; }
+.app-shell[data-theme] .inspector-mode-header { min-height: 28px; margin: 4px 0 0; padding: 5px 7px; border: 0; border-radius: var(--radius-control); background: transparent; }
+.app-shell[data-theme] .inspector-mode-header > .ui-icon { width: 14px; height: 14px; }
+.app-shell[data-theme] .inspector-section { padding: 7px 0; }
+.app-shell[data-theme] .section-toggle { min-height: 26px; margin: 0 0 5px; }
+.app-shell[data-theme] .number-field { min-height: 30px; padding: 3px 5px; border: 1px solid var(--theme-line); border-radius: var(--radius-control); background: var(--theme-panel-raised); }
+.app-shell[data-theme] .number-field button { width: 20px; height: 20px; }
+.app-shell[data-theme] :where(.speed-editor, .speed-value-card, .speed-curve-card, .appearance-preset-panel, .animation-studio) { padding: 7px; border-color: var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel); box-shadow: none; }
+.app-shell[data-theme] .appearance-preset-grid button { padding: 4px; border: 0; border-radius: var(--radius-control); background: transparent; }
+.app-shell[data-theme] .look-swatch { height: 34px; border-radius: 5px; background-image: linear-gradient(135deg, #263c45 0 38%, #d9b18c 39% 64%, #719078 65%); }
+.app-shell[data-theme] .look-vivid { filter: saturate(1.55) contrast(1.12); }
+.app-shell[data-theme] .look-warm { filter: sepia(.28) saturate(1.2); }
+.app-shell[data-theme] .look-mono { filter: grayscale(1) contrast(1.12); }
+.app-shell[data-theme] .look-soft { filter: saturate(.78) brightness(1.12); }
+
+.app-shell[data-theme] .timeline-pro { grid-column: 2 / 4; overflow: hidden; }
+.app-shell[data-theme] .timeline-toolbar { height: 34px; padding: 0 8px; }
+.app-shell[data-theme] .timeline-toolbar-left { gap: 5px; }
+.app-shell[data-theme] .timeline-tool-group { display: inline-flex; align-items: center; gap: 1px; padding-right: 5px; border-right: 1px solid var(--theme-line); }
+.app-shell[data-theme] .timeline-tool-group:last-child { padding-right: 0; border-right: 0; }
+.app-shell[data-theme] .timeline-tool { width: 25px; height: 25px; border: 0; outline: 0; }
+.app-shell[data-theme] .timeline-tool.active { color: var(--theme-accent); background: var(--theme-selection); box-shadow: none; outline: 0; }
+.app-shell[data-theme] .timeline-fit-row { position: absolute; z-index: 3; top: 4px; right: 168px; width: auto; height: 26px; padding: 0; border: 0; background: transparent; }
+.app-shell[data-theme] .timeline-fit-button { height: 25px; padding: 0 7px; }
+.app-shell[data-theme] .timeline-scroll { height: calc(100% - 34px); }
+.app-shell[data-theme] .timeline-pro .track-row,
+.app-shell[data-theme] .timeline-pro .track-label { height: 32px; }
+.app-shell[data-theme] .timeline-pro .timeline-clip { top: 3px; height: 26px; border-radius: 4px; }
+.app-shell[data-theme] .timeline-pro .timeline-clip.selected { border-color: var(--theme-accent); outline: 0; box-shadow: inset 0 0 0 1px var(--theme-accent); }
+.app-shell[data-theme] .timeline-pro .tracks-canvas { min-height: 128px; }
+
+.app-shell[data-theme] .editor-statusbar { height: 20px; min-height: 20px; padding: 0 8px; justify-content: flex-start; font-size: 8px; background: var(--theme-panel-raised); }
+
+.app-shell[data-theme] .settings-modal-v2 { width: min(760px, calc(100vw - 40px)); max-height: min(700px, calc(100vh - 40px)); border: 1px solid var(--theme-line); border-radius: var(--radius-dialog); box-shadow: 0 18px 50px rgba(23, 35, 31, .18); }
+.app-shell[data-theme] .settings-layout { grid-template-columns: 150px minmax(0, 1fr); }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs { width: auto; padding: 8px; }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button { min-height: 44px; padding: 6px; border: 0; border-radius: var(--radius-control); }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button.active { border: 0; background: var(--theme-selection); box-shadow: inset 2px 0 var(--theme-accent); }
+.app-shell[data-theme] .settings-content { padding: 10px; }
+.app-shell[data-theme] .settings-section { padding: 10px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel); }
+.app-shell[data-theme] .settings-modal-v2 :is(select, input[type='text']) { min-height: 30px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .shortcut-setting-row { min-height: 42px; padding: 6px 8px; }
+.app-shell[data-theme] .shortcut-setting-row kbd { min-width: 92px; padding: 5px 7px; border: 1px solid var(--theme-line-strong); border-radius: var(--radius-control); color: var(--theme-text); background: var(--theme-panel-raised); font: 10px 'DM Mono', monospace; text-align: center; }
+
+.app-shell[data-theme] .export-modal { width: min(820px, calc(100vw - 40px)); border: 1px solid var(--theme-line); border-radius: var(--radius-dialog); box-shadow: 0 18px 50px rgba(23, 35, 31, .18); }
+.app-shell[data-theme] .export-body { grid-template-columns: minmax(0, 1fr) 220px; gap: 10px; padding: 10px; }
+.app-shell[data-theme] .export-summary { min-height: 0; padding: 12px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); color: var(--theme-text); background: var(--theme-panel-raised); box-shadow: none; }
+.app-shell[data-theme] .export-summary .summary-icon { width: 30px; height: 30px; }
+.app-shell[data-theme] .export-summary > p { margin: 4px 0 10px; }
+.app-shell[data-theme] .export-section { padding: 8px 0; }
+
+.app-shell[data-theme] :where(.asset-panel, .inspector, .settings-content, .shortcut-settings, .stock-media-grid, .snapshot-list) {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--theme-muted) 28%, transparent) transparent;
+}
+.app-shell[data-theme] :where(.asset-panel, .inspector, .settings-content, .shortcut-settings, .stock-media-grid, .snapshot-list)::-webkit-scrollbar { width: 5px; }
+.app-shell[data-theme] :where(.asset-panel, .inspector, .settings-content, .shortcut-settings, .stock-media-grid, .snapshot-list)::-webkit-scrollbar-thumb { border-radius: 999px; background: color-mix(in srgb, var(--theme-muted) 24%, transparent); }
+.app-shell[data-theme] :where(.asset-panel, .inspector, .settings-content, .shortcut-settings, .stock-media-grid, .snapshot-list):hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--theme-muted) 46%, transparent); }
+
 /* v0.0.3 interaction polish */
 .screen-view {
   position: relative;
@@ -7524,3 +7688,97 @@ body {
     box-shadow: 0 -12px 24px color-mix(in srgb, var(--theme-bg) 72%, transparent);
   }
 }
+
+/* Final release-workbench cascade. Keep this last: legacy polish above is retained
+   for compatibility, while these rules define the shipping desktop hierarchy. */
+.app-shell[data-theme='light'] {
+  --theme-bg: #edf0f2;
+  --theme-panel: #fff;
+  --theme-panel-raised: #f7f8f8;
+  --theme-panel-soft: #f1f3f4;
+  --theme-line: #d9dfe1;
+  --theme-line-strong: #c8d0d2;
+  --theme-text: #182321;
+  --theme-muted: #566762;
+  --theme-subtle: #6f7d79;
+  --theme-accent: #2f6f54;
+  --theme-accent-line: #74a88f;
+  --theme-on-accent: #fff;
+  --theme-selection: #e7f2ec;
+}
+.app-shell[data-theme] { --radius-control: 6px; --radius-surface: 8px; --radius-dialog: 12px; }
+.app-shell[data-theme] .editor-topbar { height: 48px; flex-basis: 48px; padding: 0 10px; box-shadow: none; }
+.app-shell[data-theme] :where(.topbar-left, .topbar-center, .topbar-right) { gap: 5px; }
+.app-shell[data-theme] .topbar-center { padding: 0 6px; border-inline: 1px solid var(--theme-line); }
+.app-shell[data-theme] .project-name-input { width: 132px; font-size: 11px; }
+.app-shell[data-theme] :where(.back-button, .history-button, .icon-button.editor-settings) { width: 28px; height: 28px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .editor-body.workspace-layout {
+  grid-template-columns: clamp(48px, var(--workspace-rail-width), 72px) minmax(210px, min(var(--workspace-library-width), 23vw)) minmax(420px, 1fr) minmax(240px, min(var(--workspace-inspector-width), 25vw));
+  grid-template-rows: minmax(300px, 1fr) clamp(180px, var(--workspace-timeline-height), 400px);
+  gap: 1px;
+}
+.app-shell[data-theme] .tool-rail { padding: 7px 0; gap: 3px; }
+.app-shell[data-theme] .tool-rail button { width: 42px; height: 42px; border: 0; border-radius: var(--radius-control); }
+.app-shell[data-theme] .tool-rail button.active { color: var(--theme-accent); background: var(--theme-selection); box-shadow: inset 2px 0 var(--theme-accent); outline: 0; }
+.app-shell[data-theme] .asset-panel { padding: 10px; }
+.app-shell[data-theme] .panel-heading { margin-bottom: 8px; }
+.app-shell[data-theme] .panel-heading h2 { font-size: 15px; }
+.app-shell[data-theme] :where(.panel-copy, .panel-note, .library-interaction-hint, .stock-shelf-heading small, .project-backup-heading small) { display: none; }
+.app-shell[data-theme] :where(.import-zone, .blank-text-card) { min-height: 60px; padding: 8px; border-radius: var(--radius-surface); background: var(--theme-panel-raised); }
+.app-shell[data-theme] :where(.asset-item.pro, .media-card, .text-template, .stock-media-card, .shape-shelf-grid button, .project-backup-item) { padding: 6px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel); box-shadow: none; }
+.app-shell[data-theme] .text-template { min-height: 58px; }
+.app-shell[data-theme] :where(.stock-media-shelf, .project-backup-panel) { padding: 8px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel-raised); box-shadow: none; }
+.app-shell[data-theme] .project-backup-item { min-height: 38px; }
+.app-shell[data-theme] .preview-toolbar { height: 36px; flex-basis: 36px; padding: 0 10px; background: var(--theme-panel); }
+.app-shell[data-theme] .preview-breadcrumb { min-width: 0; gap: 5px; }
+.app-shell[data-theme] .preview-breadcrumb select { min-width: 0; max-width: 132px; height: 26px; padding: 0 22px 0 7px; border-radius: var(--radius-control); font-size: 9px; }
+.app-shell[data-theme='light'] .preview-stage { padding: 14px 18px 10px; background: #e6e9ea; }
+.app-shell[data-theme] .preview-controls { height: 40px; padding: 0 10px; gap: 3px; background: var(--theme-panel); }
+.app-shell[data-theme] .play-button { width: 28px; height: 28px; border-radius: var(--radius-control); }
+.app-shell[data-theme] .timecode-frame { padding: 4px 6px; border: 1px solid var(--theme-line); border-radius: var(--radius-control); color: var(--theme-text); background: var(--theme-panel-raised); }
+.app-shell[data-theme] .inspector-pro { padding: 9px 9px 18px; }
+.app-shell[data-theme] .inspector-heading h2 { font-size: 14px; }
+.app-shell[data-theme] .selected-file { gap: 7px; min-height: 42px; padding: 6px 0; margin: 0; }
+.app-shell[data-theme] .selected-file .mini-thumb { width: 34px; height: 26px; }
+.app-shell[data-theme] .inspector-tool-tabs { gap: 2px; margin: 5px 0; padding: 2px; border: 0; border-radius: var(--radius-surface); background: var(--theme-panel-soft); box-shadow: none; }
+.app-shell[data-theme] .inspector-tool-tabs button { min-width: 0; min-height: 38px; padding: 4px 2px; border: 0; border-radius: var(--radius-control); background: transparent; box-shadow: none; outline: 0; }
+.app-shell[data-theme] .inspector-tool-tabs button.active { border: 0; color: var(--theme-accent); background: var(--theme-selection); box-shadow: none; outline: 0; }
+.app-shell[data-theme] .inspector-mode-header { min-height: 28px; margin: 4px 0 0; padding: 5px 7px; border: 0; background: transparent; box-shadow: none; }
+.app-shell[data-theme] .inspector-section { padding: 7px 0; }
+.app-shell[data-theme] .section-toggle { min-height: 26px; margin: 0 0 5px; }
+.app-shell[data-theme] .number-field { min-height: 30px; padding: 3px 5px; border: 1px solid var(--theme-line); border-radius: var(--radius-control); background: var(--theme-panel-raised); box-shadow: none; }
+.app-shell[data-theme] :where(.speed-editor, .speed-value-card, .speed-curve-card, .appearance-preset-panel, .animation-studio) { padding: 7px; border-color: var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel); box-shadow: none; }
+.app-shell[data-theme] .look-swatch { height: 34px; border-radius: 5px; background-image: linear-gradient(135deg, #263c45 0 38%, #d9b18c 39% 64%, #719078 65%); }
+.app-shell[data-theme] .look-vivid { filter: saturate(1.55) contrast(1.12); }
+.app-shell[data-theme] .look-warm { filter: sepia(.28) saturate(1.2); }
+.app-shell[data-theme] .look-mono { filter: grayscale(1) contrast(1.12); }
+.app-shell[data-theme] .look-soft { filter: saturate(.78) brightness(1.12); }
+.app-shell[data-theme] .timeline-pro { grid-column: 2 / 4; position: relative; overflow: hidden; }
+.app-shell[data-theme] .timeline-toolbar { height: 34px; padding: 0 8px; }
+.app-shell[data-theme] .timeline-toolbar-left { gap: 5px; }
+.app-shell[data-theme] .timeline-tool-group { display: inline-flex; align-items: center; gap: 1px; padding-right: 5px; border-right: 1px solid var(--theme-line); }
+.app-shell[data-theme] .timeline-tool-group:last-child { padding-right: 0; border-right: 0; }
+.app-shell[data-theme] .timeline-tool { width: 25px; height: 25px; border: 0; outline: 0; }
+.app-shell[data-theme] .timeline-tool.active { color: var(--theme-accent); background: var(--theme-selection); box-shadow: none; outline: 0; }
+.app-shell[data-theme] .timeline-fit-row { position: absolute; z-index: 3; top: 4px; right: 168px; width: auto; height: 26px; padding: 0; border: 0; background: transparent; }
+.app-shell[data-theme] .timeline-scroll { height: calc(100% - 34px); }
+.app-shell[data-theme] .timeline-pro :is(.track-row, .track-label) { height: 32px; }
+.app-shell[data-theme] .timeline-pro .timeline-clip { top: 3px; height: 26px; border-radius: 4px; }
+.app-shell[data-theme] .timeline-pro .timeline-clip.selected { border-color: var(--theme-accent); outline: 0; box-shadow: inset 0 0 0 1px var(--theme-accent); }
+.app-shell[data-theme] .editor-statusbar { height: 20px; min-height: 20px; padding: 0 8px; justify-content: flex-start; font-size: 8px; background: var(--theme-panel-raised); }
+.app-shell[data-theme] .settings-modal-v2 { width: min(760px, calc(100vw - 40px)); max-height: min(700px, calc(100vh - 40px)); border: 1px solid var(--theme-line); border-radius: var(--radius-dialog); box-shadow: 0 18px 50px rgba(23,35,31,.18); }
+.app-shell[data-theme] .settings-layout { grid-template-columns: 150px minmax(0, 1fr); }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs { width: auto; padding: 8px; }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button { min-height: 44px; padding: 6px; border: 0; border-radius: var(--radius-control); }
+.app-shell[data-theme] .settings-modal-v2 .settings-tabs > button.active { border: 0; background: var(--theme-selection); box-shadow: inset 2px 0 var(--theme-accent); }
+.app-shell[data-theme] .settings-content { padding: 10px; }
+.app-shell[data-theme] .settings-section { padding: 10px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); background: var(--theme-panel); }
+.app-shell[data-theme] .shortcut-setting-row { min-height: 42px; padding: 6px 8px; }
+.app-shell[data-theme] .shortcut-setting-row kbd { min-width: 92px; padding: 5px 7px; border: 1px solid var(--theme-line-strong); border-radius: var(--radius-control); color: var(--theme-text); background: var(--theme-panel-raised); font: 10px 'DM Mono', monospace; text-align: center; }
+.app-shell[data-theme] .export-modal { width: min(820px, calc(100vw - 40px)); border: 1px solid var(--theme-line); border-radius: var(--radius-dialog); box-shadow: 0 18px 50px rgba(23,35,31,.18); }
+.app-shell[data-theme] .export-body { grid-template-columns: minmax(0, 1fr) 220px; gap: 10px; padding: 10px; }
+.app-shell[data-theme] .export-summary { min-height: 0; padding: 12px; border: 1px solid var(--theme-line); border-radius: var(--radius-surface); color: var(--theme-text); background: var(--theme-panel-raised); box-shadow: none; }
+.app-shell[data-theme] :where(.asset-panel, .inspector, .settings-content, .shortcut-settings, .stock-media-grid, .project-backup-list) { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--theme-muted) 30%, transparent) transparent; }
+.app-shell[data-theme] .preview-timecode-display > b { padding: 0; border-radius: 0; color: inherit; background: transparent; font-size: inherit; }
+.app-shell[data-theme] .command-card.command-muted { display: none; }
+.app-shell[data-theme] .dashboard-command-strip:has(.command-muted) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
