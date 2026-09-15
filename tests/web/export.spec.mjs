@@ -11,7 +11,7 @@ test('export polling watchdog catches completion when SSE emits no job event', a
     await page.locator('.project-name-input').fill(fixtureName);
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
-    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|Tüm değişiklikler kaydedildi/i, { timeout: 10_000 });
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
 
     const projects = await (await request.get('/api/projects')).json();
     projectId = projects.find((project) => project.name === fixtureName)?.id;
