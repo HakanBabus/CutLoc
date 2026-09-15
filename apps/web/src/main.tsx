@@ -243,7 +243,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
       {loading ? <div className="empty-state"><div className="spinner" /> {t('dashboard.loading')}</div> : projects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">✦</div><h3>{t('dashboard.emptyTitle')}</h3><p>{t('dashboard.emptyCopy')}</p><button className="secondary-button" onClick={onCreate}>{t('dashboard.command.new')}</button></div> : visibleProjects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">⌕</div><h3>{t('dashboard.noSearchTitle')}</h3><p>{t('dashboard.noSearchCopy')}</p></div> : <div className="project-grid">{visibleProjects.map((item) => <ProjectCard key={item.id} project={item} onOpen={() => onOpen(item.id)} onDelete={() => onDelete(item.id)} />)}</div>}
     </section>
     <TrashSection entries={trash} onRestore={onRestoreTrash} onPurge={onPurgeTrash} />
-    <footer className="dashboard-footer"><span><i className="status-dot" /> {t('dashboard.dataLocal')}</span><span>CutLoc <b>v0.1.0 beta</b></span></footer>
+    <footer className="dashboard-footer"><span>{t('dashboard.footer')}</span><span>CutLoc <b>v0.1.0 beta</b></span></footer>
     {bundleError && <MessageDialog title={t('dashboard.importFailed')} message={t('dashboard.bundleError')} onClose={() => setBundleError(false)} />}
   </main>;
 }
