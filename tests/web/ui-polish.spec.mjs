@@ -136,6 +136,26 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await timelineClip.focus();
     await page.keyboard.press('Enter');
     await expect(timelineClip).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: /Light theme|Beyaz tema/i }).click();
+    const workspaceGeometry = await page.locator('.editor-body').evaluate((workspace) => {
+      const timeline = workspace.querySelector('.timeline-pro');
+      const inspector = workspace.querySelector('.inspector-pro');
+      const framing = workspace.querySelector('.preview-breadcrumb select:last-of-type');
+      const selected = workspace.querySelector('.timeline-clip.selected');
+      const activeTab = workspace.querySelector('.inspector-tool-tabs button.active');
+      const timelineRect = timeline?.getBoundingClientRect();
+      const inspectorRect = inspector?.getBoundingClientRect();
+      return {
+        separated: Boolean(timelineRect && inspectorRect && timelineRect.right <= inspectorRect.left + 1),
+        framingFits: framing instanceof HTMLElement && framing.scrollWidth <= framing.clientWidth,
+        selectedOutline: selected ? getComputedStyle(selected).outlineStyle : '',
+        tabOutline: activeTab ? getComputedStyle(activeTab).outlineStyle : '',
+      };
+    });
+    expect(workspaceGeometry.separated).toBeTruthy();
+    expect(workspaceGeometry.framingFits).toBeTruthy();
+    expect(workspaceGeometry.selectedOutline).toBe('none');
+    expect(workspaceGeometry.tabOutline).toBe('none');
     await page.locator('.inspector-tool-tabs').getByRole('tab', { name: /Speed|Hız/ }).click();
     await expect(page.locator('.speed-metrics')).toContainText(/Source|Kaynak/);
     await page.locator('.speed-mode-grid button').filter({ hasText: /Speed up|Hızlan/ }).click();
@@ -234,6 +254,8 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await expect(settingsModal.locator('.settings-actions')).toBeVisible();
     await settingsModal.locator('.settings-tabs button').filter({ hasText: /Shortcuts|Kısayollar/ }).click();
     await expect(settingsModal.locator('.shortcut-setting-row')).toHaveCount(10);
+    await expect(settingsModal.locator('.shortcut-setting-row input')).toHaveCount(0);
+    await expect(settingsModal.locator('.shortcut-setting-row kbd')).toHaveCount(10);
     const settingsContent = settingsModal.locator('.settings-content');
     const pageScrollBefore = await page.evaluate(() => window.scrollY);
     await settingsContent.hover();
