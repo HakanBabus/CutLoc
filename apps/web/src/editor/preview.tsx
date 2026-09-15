@@ -45,8 +45,13 @@ function clipVisualValues(clip: Clip, projectTime: number) {
     if (transition.type === 'slide') {
       const vector = transitionVector(direction);
       const distance = (1 - eased) * 120 * intensity;
-      if (entering) { transitionX += vector.x * distance; transitionY += vector.y * distance; }
-      else { transitionX += vector.x * distance; transitionY += vector.y * distance; }
+      if (entering) {
+        transitionX += vector.x * distance;
+        transitionY += vector.y * distance;
+      } else {
+        transitionX += vector.x * distance;
+        transitionY += vector.y * distance;
+      }
     }
     if (transition.type === 'zoom') {
       const amount = 0.18 * intensity;
@@ -90,8 +95,8 @@ function previewChromaMatrix(color: string, similarity: number) {
 function motionProgress(value: number, easing: TransitionEasing = 'ease-in-out') {
   const t = clamp(value, 0, 1);
   if (easing === 'ease-in') return t * t;
-  if (easing === 'ease-out') return 1 - ((1 - t) ** 2);
-  if (easing === 'ease-in-out') return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+  if (easing === 'ease-out') return 1 - (1 - t) ** 2;
+  if (easing === 'ease-in-out') return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
   return t;
 }
 
@@ -125,9 +130,7 @@ function previewMaskImage(mask: NonNullable<Clip['mask']>) {
   const foreground = mask.invert ? '#000000' : '#ffffff';
   const feather = clamp(mask.feather ?? 0, 0, 1);
   const filter = feather > 0.001 ? `<defs><filter id="soft" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="${Math.max(0.2, feather * 6)}"/></filter></defs>` : '';
-  const shape = mask.type === 'ellipse'
-    ? `<ellipse cx="${x + width / 2}" cy="${y + height / 2}" rx="${width / 2}" ry="${height / 2}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>`
-    : `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>`;
+  const shape = mask.type === 'ellipse' ? `<ellipse cx="${x + width / 2}" cy="${y + height / 2}" rx="${width / 2}" ry="${height / 2}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>` : `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${filter ? filter.slice(6, -7) : ''}</defs><rect width="100" height="100" fill="${background}"/>${shape}</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
@@ -148,7 +151,16 @@ function previewMediaRenderBounds(asset: Asset, crop: Clip['crop'], canvasWidth:
   const cropY = clamp(crop.y, 0, 0.99);
   const cropWidth = clamp(Math.min(crop.width, 1 - cropX), 0.01, 1);
   const cropHeight = clamp(Math.min(crop.height, 1 - cropY), 0.01, 1);
-  return previewMediaBounds({ ...asset, width: Math.max(1, sourceWidth * cropWidth), height: Math.max(1, sourceHeight * cropHeight) }, canvasWidth, canvasHeight, fit);
+  return previewMediaBounds(
+    {
+      ...asset,
+      width: Math.max(1, sourceWidth * cropWidth),
+      height: Math.max(1, sourceHeight * cropHeight),
+    },
+    canvasWidth,
+    canvasHeight,
+    fit,
+  );
 }
 
 function previewTextBounds(style: NonNullable<Clip['textStyle']>, canvasWidth: number, canvasHeight: number, renderScale = 1) {
@@ -174,12 +186,12 @@ export function normalizeProjectDurations(project: Project): Project {
     if (track.type !== 'layer' || normalizedTrack.name !== track.name) changed = true;
     return {
       ...normalizedTrack,
-    clips: track.clips.map((clip) => {
-      if (clip.type === 'text' || clip.type === 'subtitle') return clip;
-      const duration = timelineClipDuration(clip);
-      if (Math.abs(duration - clip.duration) <= 1 / project.canvas.fps) return clip;
-      changed = true;
-      return { ...clip, duration };
+      clips: track.clips.map((clip) => {
+        if (clip.type === 'text' || clip.type === 'subtitle') return clip;
+        const duration = timelineClipDuration(clip);
+        if (Math.abs(duration - clip.duration) <= 1 / project.canvas.fps) return clip;
+        changed = true;
+        return { ...clip, duration };
       }),
     };
   });
@@ -212,14 +224,49 @@ function EditableTimecode({ value, duration, fps, onChange }: { value: number; d
     onChange(clamp(parsed, 0, duration));
   };
   if (!editing) {
-    return <button type="button" className="preview-timecode-display" aria-label={t('preview.timecode')} title={t('preview.timecodeHint')} onClick={() => setEditing(true)}><span>{clock}</span><i>:</i><b>{frames}</b></button>;
+    return (
+      <button type="button" className="preview-timecode-display" aria-label={t('preview.timecode')} title={t('preview.timecodeHint')} onClick={() => setEditing(true)}>
+        <span>{clock}</span>
+        <i>:</i>
+        <b>{frames}</b>
+      </button>
+    );
   }
-  return <input autoFocus className="preview-timecode-input" aria-label={t('preview.timecode')} aria-invalid={invalid} title={invalid ? t('preview.invalidTimecode') : t('preview.timecodeHint')} value={draft} onFocus={(event) => { setInvalid(false); event.currentTarget.select(); }} onChange={(event) => setDraft(event.target.value)} onBlur={() => { commit(); setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(formatTime(value, true, fps)); setInvalid(false); event.currentTarget.blur(); } }} />;
+  return (
+    <input
+      autoFocus
+      className="preview-timecode-input"
+      aria-label={t('preview.timecode')}
+      aria-invalid={invalid}
+      title={invalid ? t('preview.invalidTimecode') : t('preview.timecodeHint')}
+      value={draft}
+      onFocus={(event) => {
+        setInvalid(false);
+        event.currentTarget.select();
+      }}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        commit();
+        setEditing(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          setDraft(formatTime(value, true, fps));
+          setInvalid(false);
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
 }
 
 export function PreviewArea({ project, settings }: { project: Project; settings: Settings | null }) {
   const { t } = useI18n();
-  const currentTime = useEditor((state) => state.currentTime); const playing = useEditor((state) => state.playing); const setPlaying = useEditor((state) => state.setPlaying); const setCurrentTime = useEditor((state) => state.setCurrentTime);
+  const currentTime = useEditor((state) => state.currentTime);
+  const playing = useEditor((state) => state.playing);
+  const setPlaying = useEditor((state) => state.setPlaying);
+  const setCurrentTime = useEditor((state) => state.setCurrentTime);
   const selectedClipId = useEditor((state) => state.selectedClipId);
   const selectedClipIds = useEditor((state) => state.selectedClipIds);
   const setSelected = useEditor((state) => state.setSelected);
@@ -235,13 +282,25 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   const stageRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [showSafeArea, setShowSafeArea] = useState(false);
-  const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'fit' : project.canvas.fitMode ?? 'fit');
+  const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'fit' : (project.canvas.fitMode ?? 'fit'));
   const [previewZoom, setPreviewZoom] = useState(100);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenSize, setFullscreenSize] = useState({ width: 0, height: 0 });
-  const [previewDrag, setPreviewDrag] = useState<{ clipId: string; mode: 'move' | 'scale'; startX: number; startY: number; originX: number; originY: number; originScale: number; historyGroup: string } | null>(null);
-  const playbackStartRef = useRef<{ projectTime: number; wallTime: number } | null>(null);
+  const [previewDrag, setPreviewDrag] = useState<{
+    clipId: string;
+    mode: 'move' | 'scale';
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    originScale: number;
+    historyGroup: string;
+  } | null>(null);
+  const playbackStartRef = useRef<{
+    projectTime: number;
+    wallTime: number;
+  } | null>(null);
   const setSettings = useEditor((state) => state.setSettings);
   useEffect(() => {
     const element = viewportRef.current ?? stageRef.current;
@@ -265,7 +324,11 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const updateFullscreenState = () => {
       const active = document.fullscreenElement === fullscreenRef.current;
       setIsFullscreen(active);
-      if (active) setFullscreenSize({ width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) });
+      if (active)
+        setFullscreenSize({
+          width: Math.max(1, window.innerWidth),
+          height: Math.max(1, window.innerHeight),
+        });
     };
     document.addEventListener('fullscreenchange', updateFullscreenState);
     updateFullscreenState();
@@ -273,14 +336,17 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   }, []);
   useEffect(() => {
     if (!isFullscreen) return;
-    const updateSize = () => setFullscreenSize({ width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) });
+    const updateSize = () =>
+      setFullscreenSize({
+        width: Math.max(1, window.innerWidth),
+        height: Math.max(1, window.innerHeight),
+      });
     window.addEventListener('resize', updateSize);
     updateSize();
     return () => window.removeEventListener('resize', updateSize);
   }, [isFullscreen]);
   const visualPlan = visualLayerPlan(project);
-  const activeClips = visualPlan
-    .filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
+  const activeClips = visualPlan.filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
   const activeMedia = activeClips.filter(({ clip }) => !clip.adjustment && (clip.type === 'video' || clip.type === 'image'));
   const mountedMedia = visualPlan.filter(({ clip }) => !clip.adjustment && shouldMountPreviewMedia(clip, currentTime));
   const activeAudio = activeClips.filter(({ clip, track }) => {
@@ -288,7 +354,13 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
     return Boolean(asset?.hasAudio);
   });
-  const texts = activeClips.filter(({ clip }) => !clip.adjustment && clip.textStyle).map(({ clip, trackIndex }) => ({ clip, style: clip.textStyle!, trackIndex }));
+  const texts = activeClips
+    .filter(({ clip }) => !clip.adjustment && clip.textStyle)
+    .map(({ clip, trackIndex }) => ({
+      clip,
+      style: clip.textStyle!,
+      trackIndex,
+    }));
   const activeSelected = selectedClipId ? activeClips.find(({ clip }) => clip.id === selectedClipId && (clip.adjustment || clip.type === 'video' || clip.type === 'image' || clip.type === 'text')) : undefined;
   const activeSelectedVisual = activeSelected ? clipVisualValues(activeSelected.clip, currentTime) : null;
   const activeSelectedAsset = activeSelected?.clip.assetId ? project.assets.find((item) => item.id === activeSelected.clip.assetId) : undefined;
@@ -299,7 +371,16 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     event.preventDefault();
     event.stopPropagation();
     setSelected(clip.id, project.tracks.find((track) => track.clips.some((item) => item.id === clip.id))?.id ?? null);
-    setPreviewDrag({ clipId: clip.id, mode, startX: event.clientX, startY: event.clientY, originX: clip.transform.x, originY: clip.transform.y, originScale: clip.transform.scale, historyGroup: crypto.randomUUID() });
+    setPreviewDrag({
+      clipId: clip.id,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: clip.transform.x,
+      originY: clip.transform.y,
+      originScale: clip.transform.scale,
+      historyGroup: crypto.randomUUID(),
+    });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -310,16 +391,19 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const scaleY = project.canvas.height / Math.max(1, rect?.height ?? project.canvas.height);
     const deltaX = (event.clientX - previewDrag.startX) * scaleX;
     const deltaY = (event.clientY - previewDrag.startY) * scaleY;
-    mutateProject((draft) => {
-      const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === previewDrag.clipId);
-      if (!clip) return;
-      if (previewDrag.mode === 'move') {
-        clip.transform.x = Math.round(previewDrag.originX + deltaX);
-        clip.transform.y = Math.round(previewDrag.originY + deltaY);
-      } else {
-        clip.transform.scale = clamp(previewDrag.originScale + deltaX / Math.max(120, project.canvas.width * 0.12), 0.05, 8);
-      }
-    }, { historyGroup: previewDrag.historyGroup });
+    mutateProject(
+      (draft) => {
+        const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === previewDrag.clipId);
+        if (!clip) return;
+        if (previewDrag.mode === 'move') {
+          clip.transform.x = Math.round(previewDrag.originX + deltaX);
+          clip.transform.y = Math.round(previewDrag.originY + deltaY);
+        } else {
+          clip.transform.scale = clamp(previewDrag.originScale + deltaX / Math.max(120, project.canvas.width * 0.12), 0.05, 8);
+        }
+      },
+      { historyGroup: previewDrag.historyGroup },
+    );
   };
 
   const finishPreviewTransform = () => setPreviewDrag(null);
@@ -329,7 +413,8 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const target = Math.max(0, clipSourceTime(clip, currentTime - clip.start) + clip.sourceStart);
     video.playbackRate = clamp(values.speed, 0.25, 4);
     if (Math.abs(video.currentTime - target) > 0.18 || video.readyState < 2) video.currentTime = target;
-    if (playing) void video.play().catch(() => undefined); else video.pause();
+    if (playing) void video.play().catch(() => undefined);
+    else video.pause();
   };
 
   const primeVideo = (clip: Clip, video: HTMLVideoElement) => {
@@ -362,7 +447,8 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       audio.volume = clamp(requestedGain, 0, 1);
     }
     if (Math.abs(audio.currentTime - target) > 0.18 || audio.readyState < 2) audio.currentTime = target;
-    if (playing) void audio.play().catch(() => undefined); else audio.pause();
+    if (playing) void audio.play().catch(() => undefined);
+    else audio.pause();
   };
 
   useEffect(() => {
@@ -385,7 +471,10 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const current = settings?.proxyQuality ?? 'balanced';
     const next = current === 'draft' ? 'balanced' : current === 'balanced' ? 'high' : 'draft';
     if (settings) setSettings({ ...settings, proxyQuality: next });
-    void api('/api/settings', { method: 'PUT', body: JSON.stringify({ proxyQuality: next }) });
+    void api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxyQuality: next }),
+    });
   };
 
   const toggleFullscreen = () => {
@@ -456,14 +545,28 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     width: Math.max(stageSize.width, canvasDisplaySize.width + canvasPadding * 2),
     height: Math.max(stageSize.height, canvasDisplaySize.height + canvasPadding * 2),
   };
-  const selectedBounds = activeSelected?.clip.type === 'text' && !activeSelected.clip.adjustment
-    ? previewTextBounds(activeSelected.clip.textStyle ?? { ...DEFAULT_TEXT_STYLE, text: activeSelected.clip.name }, project.canvas.width, project.canvas.height, canvasScale)
-    : activeSelectedAsset
-      ? previewMediaRenderBounds(activeSelectedAsset, activeSelected?.clip.crop, project.canvas.width, project.canvas.height, (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : activeSelected?.clip.transform.fit ?? 'contain')
-      : { width: project.canvas.width * 0.72, height: project.canvas.height * 0.72 };
+  const selectedBounds =
+    activeSelected?.clip.type === 'text' && !activeSelected.clip.adjustment
+      ? previewTextBounds(
+          activeSelected.clip.textStyle ?? {
+            ...DEFAULT_TEXT_STYLE,
+            text: activeSelected.clip.name,
+          },
+          project.canvas.width,
+          project.canvas.height,
+          canvasScale,
+        )
+      : activeSelectedAsset
+        ? previewMediaRenderBounds(activeSelectedAsset, activeSelected?.clip.crop, project.canvas.width, project.canvas.height, previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : (activeSelected?.clip.transform.fit ?? 'contain'))
+        : {
+            width: project.canvas.width * 0.72,
+            height: project.canvas.height * 0.72,
+          };
   const changePreviewFraming = (next: 'clip' | 'fit' | 'fill' | 'smart') => {
     setPreviewFraming(next);
-    mutateProject((draft) => { draft.canvas.fitMode = next === 'clip' ? 'fit' : next; });
+    mutateProject((draft) => {
+      draft.canvas.fitMode = next === 'clip' ? 'fit' : next;
+    });
   };
 
   useEffect(() => {
@@ -471,7 +574,10 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       playbackStartRef.current = null;
       return;
     }
-    let start = { projectTime: useEditor.getState().currentTime, wallTime: performance.now() };
+    let start = {
+      projectTime: useEditor.getState().currentTime,
+      wallTime: performance.now(),
+    };
     let lastPlaybackTime = start.projectTime;
     playbackStartRef.current = start;
     let frame = 0;
@@ -496,100 +602,360 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   }, [playing, project.duration, setCurrentTime, setPlaying]);
 
   const useProxy = settings?.proxyQuality !== 'high';
-  const adjustmentFilter = (clip: Clip) => adjustmentLayersForVisual(visualPlan, visualPlan.find((item) => item.clip.id === clip.id)!, currentTime).reduce((filter, item) => ({
-    brightness: filter.brightness + item.clip.filters.brightness,
-    contrast: filter.contrast + item.clip.filters.contrast,
-    saturation: filter.saturation + item.clip.filters.saturation,
-    blur: filter.blur + item.clip.filters.blur,
-    grayscale: clamp(filter.grayscale + item.clip.filters.grayscale, 0, 1),
-    hue: filter.hue + (item.clip.filters.hue ?? 0),
-    temperature: filter.temperature + (item.clip.filters.temperature ?? 0),
-    vignette: clamp(filter.vignette + (item.clip.filters.vignette ?? 0), 0, 1),
-  }), { brightness: clip.filters.brightness, contrast: clip.filters.contrast, saturation: clip.filters.saturation, blur: clip.filters.blur, grayscale: clip.filters.grayscale, hue: clip.filters.hue ?? 0, temperature: clip.filters.temperature ?? 0, vignette: clip.filters.vignette ?? 0 });
-  return <main className="preview-area">
-    <div className="preview-toolbar"><div className="preview-breadcrumb"><span>{t('preview.canvas')}</span><select className="preview-aspect-select" aria-label={t('preview.aspect')} value={aspect} onChange={(event) => setAspect(event.target.value as CanvasAspect)}><option value="16:9">16:9 · YouTube</option><option value="9:16">9:16 · {t('preview.portrait')}</option><option value="1:1">1:1 · {t('preview.square')}</option><option value="4:5">4:5 · Instagram</option><option value="3:2">3:2 · {t('preview.classic')}</option><option value="21:9">21:9 · {t('preview.cinematic')}</option></select><select className="preview-fit-select" aria-label={t('preview.framing')} title={t('preview.framingHint')} value={previewFraming} onChange={(event) => changePreviewFraming(event.target.value as typeof previewFraming)}><option value="clip">{t('preview.clipFraming')}</option><option value="fit">{t('preview.fitMedia')}</option><option value="fill">{t('preview.fillMedia')}</option><option value="smart">{t('preview.smartFraming')}</option></select></div><div className="preview-tools" aria-label={t('preview.view')}><button className={showSafeArea ? 'active' : ''} aria-label={t('preview.safeArea')} aria-pressed={showSafeArea} title={t('preview.safeArea')} onClick={() => setShowSafeArea((value) => !value)}>◫</button><button aria-label={t('preview.fullscreen')} title={t('preview.fullscreen')} onClick={toggleFullscreen}>⛶</button></div></div>
-     <div className="preview-inline-zoom" aria-label={t('preview.zoom')}><button aria-label={t('preview.zoomOut')} onClick={() => setPreviewZoom((value) => clamp(value - 10, 50, 250))}>−</button><output>{previewZoom}%</output><button aria-label={t('preview.zoomIn')} onClick={() => setPreviewZoom((value) => clamp(value + 10, 50, 250))}>+</button><button onClick={() => setPreviewZoom(100)}>{t('preview.fitZoom')}</button></div>
-     <div ref={stageRef} className="preview-stage"><div ref={viewportRef} className="preview-canvas-viewport"><div className="preview-canvas-pad" style={{ width: canvasPadSize.width, height: canvasPadSize.height }}><div ref={fullscreenRef} className="preview-fullscreen-shell" style={{ ['--canvas-ratio' as string]: canvasRatio }}><div ref={canvasRef} className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`} style={{ width: canvasDisplaySize.width, height: canvasDisplaySize.height, aspectRatio: `${project.canvas.width}/${project.canvas.height}`, ['--canvas-ratio' as string]: canvasRatio, background: project.canvas.background }} onPointerMove={updatePreviewTransform} onPointerUp={finishPreviewTransform} onPointerCancel={finishPreviewTransform}>
-     <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}><defs>{activeMedia.flatMap(({ clip }) => clip.filters.chromaKey ? [<filter key={clip.id} id={`preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`} colorInterpolationFilters="sRGB"><feColorMatrix type="matrix" values={previewChromaMatrix(clip.filters.chromaKey.color, clip.filters.chromaKey.similarity)} /><feComponentTransfer><feFuncA type="gamma" amplitude="1" exponent={Math.max(0.2, 1 - clip.filters.chromaKey.blend)} offset="0" /></feComponentTransfer></filter>] : [])}</defs></svg>
-      {mountedMedia.map(({ clip, trackIndex }) => {
-       const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
-       if (!asset) return null;
-       const isActive = currentTime >= clip.start && currentTime < clip.start + clip.duration;
-      const visual = clipVisualValues(clip, currentTime);
-      const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
-      const filter = adjustmentFilter(clip);
-      const crop = clip.crop;
-      const mask = clip.mask;
-      const fit = (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
-      const fullBounds = previewMediaBounds(asset, project.canvas.width, project.canvas.height, fit);
-      const frameBounds = previewMediaRenderBounds(asset, crop, project.canvas.width, project.canvas.height, fit);
-      const cropX = crop ? clamp(crop.x, 0, 0.99) : 0;
-      const cropY = crop ? clamp(crop.y, 0, 0.99) : 0;
-      const cropWidth = crop ? clamp(Math.min(crop.width, 1 - cropX), 0.01, 1) : 1;
-      const cropHeight = crop ? clamp(Math.min(crop.height, 1 - cropY), 0.01, 1) : 1;
-      const innerWidth = crop ? frameBounds.width / cropWidth : fullBounds.width;
-      const innerHeight = crop ? frameBounds.height / cropHeight : fullBounds.height;
-      const temperatureFilter = Math.abs(filter.temperature) > 0.001
-        ? ` sepia(${Math.abs(filter.temperature) * 0.35}) saturate(${1 + Math.abs(filter.temperature) * 0.4}) hue-rotate(${filter.temperature > 0 ? -12 : 180}deg)`
-        : '';
-      const chromaFilter = clip.filters.chromaKey ? ` url(#preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')})` : '';
-      const mediaFilter = `${chromaFilter} brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${filter.hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${temperatureFilter}`;
-      const mediaFrameStyle: React.CSSProperties = {
-        position: 'absolute',
-        left: '50%',
-        top: '50%',
-        right: 'auto',
-        bottom: 'auto',
-        width: frameBounds.width * canvasScale,
-        height: frameBounds.height * canvasScale,
-        opacity: isActive ? visual.opacity : 0,
-        pointerEvents: 'none',
-        overflow: 'hidden',
-        zIndex: trackIndex + 1,
-        transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})`,
-        clipPath: visual.wipe ? transitionClipPath(visual.wipe) : undefined,
-      };
-      const maskStyle: React.CSSProperties = {
-        width: '100%',
-        height: '100%',
-        overflow: 'hidden',
-        maskImage: mask ? previewMaskImage(mask) : undefined,
-        WebkitMaskImage: mask ? previewMaskImage(mask) : undefined,
-        maskSize: '100% 100%',
-        WebkitMaskSize: '100% 100%',
-        maskRepeat: 'no-repeat',
-        WebkitMaskRepeat: 'no-repeat',
-      };
-      const mediaStyle: React.CSSProperties = crop
-        ? { position: 'absolute', left: -cropX * innerWidth * canvasScale, top: -cropY * innerHeight * canvasScale, width: innerWidth * canvasScale, height: innerHeight * canvasScale, display: 'block', objectFit: 'fill', filter: mediaFilter }
-        : { width: '100%', height: '100%', display: 'block', objectFit: 'fill', filter: mediaFilter };
-       const mediaElement = asset.type === 'video'
-         ? <video ref={(element) => { mediaRefs.current[clip.id] = element; if (element) isActive ? syncVideo(clip, element) : primeVideo(clip, element); }} src={mediaUrl} preload="auto" muted playsInline className={`preview-media ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} onLoadedMetadata={(event) => isActive ? syncVideo(clip, event.currentTarget) : primeVideo(clip, event.currentTarget)} onCanPlay={(event) => { if (isActive) syncVideo(clip, event.currentTarget); }} />
-         : <img src={mediaUrl} loading="eager" decoding="async" className={`preview-media ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} alt={clip.name} />;
-      return <div key={clip.id} className="preview-media-frame preview-layer" style={mediaFrameStyle}><div className="preview-media-mask" style={maskStyle}>{mediaElement}{filter.vignette > 0.001 && <span className="preview-vignette" style={{ opacity: clamp(filter.vignette, 0, 1) }} />}</div></div>;
-    })}
-     {!isFullscreen && activeMedia.map(({ clip, trackIndex }) => {
-      const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
-      if (!asset) return null;
-      const visual = clipVisualValues(clip, currentTime);
-      const fit = (previewFraming === 'fill' || previewFraming === 'smart') ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
-      const bounds = previewMediaRenderBounds(asset, clip.crop, project.canvas.width, project.canvas.height, fit);
-      const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
-      return <button type="button" key={`preview-hit-${clip.id}`} className={`preview-hit-target ${selectedClipIds.includes(clip.id) ? 'selected' : ''}`} style={{ width: bounds.width * canvasScale, height: bounds.height * canvasScale, zIndex: 40 + trackIndex, transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})` }} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} aria-label={t('preview.selectAria', { name: clip.name })}><span className="preview-hit-label">{t(clip.type === 'image' ? 'preview.type.image' : 'preview.type.video')}</span></button>;
-    })}
-     {activeAudio.map(({ clip, track }) => {
-      const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
-      if (!asset) return null;
-      const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
-       return <audio key={`audio-${clip.id}`} ref={(element) => { audioRefs.current[clip.id] = element; if (element) syncAudio(clip, element, track.volume ?? 1); }} src={mediaUrl} preload="auto" onLoadedMetadata={(event) => syncAudio(clip, event.currentTarget, track.volume ?? 1)} />;
-    })}
-    {texts.map(({ clip, style, trackIndex }) => { const visual = clipVisualValues(clip, currentTime); const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale); const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id)); return <div key={clip.id} className={`preview-text preview-layer ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} role="button" tabIndex={isFullscreen ? -1 : 0} aria-label={t('preview.selectAria', { name: style.text || clip.name })} onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(clip.id, track?.id ?? null); } }} style={{ left: '50%', top: '50%', bottom: 'auto', width: bounds.width * canvasScale, zIndex: trackIndex + 1, pointerEvents: isFullscreen ? 'none' : 'auto', transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`, opacity: visual.opacity, fontFamily: style.fontFamily, fontSize: Math.max(1, style.fontSize * canvasScale), color: style.color, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecoration: style.textDecoration, letterSpacing: `${style.letterSpacing * canvasScale}px`, lineHeight: style.lineHeight, padding: `${style.padding * canvasScale}px`, background: style.background, clipPath: transitionClipPath(visual.wipe), WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`, textShadow: style.shadow ? '0 2px 8px #000' : 'none', textAlign: style.align }}>{normalizeTextLineBreaks(style.text)}</div>; })}
-    {!isFullscreen && activeSelected && activeSelectedVisual && <div className="preview-transform-box" style={{ zIndex: 300, left: '50%', top: '50%', width: selectedBounds.width * canvasScale, height: selectedBounds.height * canvasScale, transform: `translate(-50%, -50%) translate(${activeSelectedVisual.x * canvasScale}px, ${activeSelectedVisual.y * canvasScale}px) rotate(${activeSelectedVisual.rotation}deg) scale(${activeSelectedVisual.scale})` }}><span className="preview-transform-label">{t(activeSelected.clip.adjustment ? 'preview.type.adjustment' : activeSelected.clip.type === 'text' ? 'preview.type.text' : activeSelected.clip.type === 'image' ? 'preview.type.image' : 'preview.type.video')}</span><button className="preview-scale-handle" aria-label={t('preview.resizeAria')} onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} /></div>}
-    {!isFullscreen && showSafeArea && <div className="safe-area" />}
-          </div>
+  const adjustmentFilter = (clip: Clip) =>
+    adjustmentLayersForVisual(
+      visualPlan,
+      visualPlan.find((item) => item.clip.id === clip.id)!,
+      currentTime,
+    ).reduce(
+      (filter, item) => ({
+        brightness: filter.brightness + item.clip.filters.brightness,
+        contrast: filter.contrast + item.clip.filters.contrast,
+        saturation: filter.saturation + item.clip.filters.saturation,
+        blur: filter.blur + item.clip.filters.blur,
+        grayscale: clamp(filter.grayscale + item.clip.filters.grayscale, 0, 1),
+        hue: filter.hue + (item.clip.filters.hue ?? 0),
+        temperature: filter.temperature + (item.clip.filters.temperature ?? 0),
+        vignette: clamp(filter.vignette + (item.clip.filters.vignette ?? 0), 0, 1),
+      }),
+      {
+        brightness: clip.filters.brightness,
+        contrast: clip.filters.contrast,
+        saturation: clip.filters.saturation,
+        blur: clip.filters.blur,
+        grayscale: clip.filters.grayscale,
+        hue: clip.filters.hue ?? 0,
+        temperature: clip.filters.temperature ?? 0,
+        vignette: clip.filters.vignette ?? 0,
+      },
+    );
+  return (
+    <main className="preview-area">
+      <div className="preview-toolbar">
+        <div className="preview-breadcrumb">
+          <span>{t('preview.canvas')}</span>
+          <select className="preview-aspect-select" aria-label={t('preview.aspect')} value={aspect} onChange={(event) => setAspect(event.target.value as CanvasAspect)}>
+            <option value="16:9">16:9 · YouTube</option>
+            <option value="9:16">9:16 · {t('preview.portrait')}</option>
+            <option value="1:1">1:1 · {t('preview.square')}</option>
+            <option value="4:5">4:5 · Instagram</option>
+            <option value="3:2">3:2 · {t('preview.classic')}</option>
+            <option value="21:9">21:9 · {t('preview.cinematic')}</option>
+          </select>
+          <select className="preview-fit-select" aria-label={t('preview.framing')} title={t('preview.framingHint')} value={previewFraming} onChange={(event) => changePreviewFraming(event.target.value as typeof previewFraming)}>
+            <option value="clip">{t('preview.clipFraming')}</option>
+            <option value="fit">{t('preview.fitMedia')}</option>
+            <option value="fill">{t('preview.fillMedia')}</option>
+            <option value="smart">{t('preview.smartFraming')}</option>
+          </select>
         </div>
+        <div className="preview-tools" aria-label={t('preview.view')}>
+          <button className={showSafeArea ? 'active' : ''} aria-label={t('preview.safeArea')} aria-pressed={showSafeArea} title={t('preview.safeArea')} onClick={() => setShowSafeArea((value) => !value)}>
+            ◫
+          </button>
+          <button aria-label={t('preview.fullscreen')} title={t('preview.fullscreen')} onClick={toggleFullscreen}>
+            ⛶
+          </button>
         </div>
       </div>
-    </div>
-    <div className="preview-controls"><span className="preview-time"><EditableTimecode value={currentTime} duration={project.duration} fps={project.canvas.fps} onChange={setCurrentTime} /><span className="preview-time-divider">/</span><b className="preview-time-duration">{formatTime(project.duration, true, project.canvas.fps)}</b><small className="preview-time-fps">{project.canvas.fps} FPS</small></span><div className="transport-center"><button className="control-button" aria-label={t('preview.previousFrame')} title={t('preview.previousFrame')} onClick={() => stepFrame(-1)}><UiIcon name="previous" /></button><button className="play-button" aria-label={t(playing ? 'preview.pause' : 'preview.play')} onClick={() => setPlaying(!playing)}><UiIcon name={playing ? 'pause' : 'play'} /></button><button className="control-button" aria-label={t('preview.nextFrame')} title={t('preview.nextFrame')} onClick={() => stepFrame(1)}><UiIcon name="next" /></button></div><div className="transport-right"><button className="control-button" aria-label={t('preview.rewind')} title={t('preview.rewind')} onClick={() => { setPlaying(false); setCurrentTime(0); }}><UiIcon name="rewind" /></button><button className="quality-button" onClick={cycleQuality} title={t('preview.quality')}><UiIcon name="quality" /><span>{t(`settings.previewQuality.${settings?.proxyQuality ?? 'balanced'}` as TranslationKey)}</span><b>⌄</b></button></div></div></main>;
+      <div className="preview-inline-zoom" aria-label={t('preview.zoom')}>
+        <button aria-label={t('preview.zoomOut')} onClick={() => setPreviewZoom((value) => clamp(value - 10, 50, 250))}>
+          −
+        </button>
+        <output>{previewZoom}%</output>
+        <button aria-label={t('preview.zoomIn')} onClick={() => setPreviewZoom((value) => clamp(value + 10, 50, 250))}>
+          +
+        </button>
+        <button onClick={() => setPreviewZoom(100)}>{t('preview.fitZoom')}</button>
+      </div>
+      <div ref={stageRef} className="preview-stage">
+        <div ref={viewportRef} className="preview-canvas-viewport">
+          <div className="preview-canvas-pad" style={{ width: canvasPadSize.width, height: canvasPadSize.height }}>
+            <div ref={fullscreenRef} className="preview-fullscreen-shell" style={{ ['--canvas-ratio' as string]: canvasRatio }}>
+              <div
+                ref={canvasRef}
+                className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`}
+                style={{
+                  width: canvasDisplaySize.width,
+                  height: canvasDisplaySize.height,
+                  aspectRatio: `${project.canvas.width}/${project.canvas.height}`,
+                  ['--canvas-ratio' as string]: canvasRatio,
+                  background: project.canvas.background,
+                }}
+                onPointerMove={updatePreviewTransform}
+                onPointerUp={finishPreviewTransform}
+                onPointerCancel={finishPreviewTransform}
+              >
+                <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
+                  <defs>
+                    {activeMedia.flatMap(({ clip }) =>
+                      clip.filters.chromaKey
+                        ? [
+                            <filter key={clip.id} id={`preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`} colorInterpolationFilters="sRGB">
+                              <feColorMatrix type="matrix" values={previewChromaMatrix(clip.filters.chromaKey.color, clip.filters.chromaKey.similarity)} />
+                              <feComponentTransfer>
+                                <feFuncA type="gamma" amplitude="1" exponent={Math.max(0.2, 1 - clip.filters.chromaKey.blend)} offset="0" />
+                              </feComponentTransfer>
+                            </filter>,
+                          ]
+                        : [],
+                    )}
+                  </defs>
+                </svg>
+                {mountedMedia.map(({ clip, trackIndex }) => {
+                  const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
+                  if (!asset) return null;
+                  const isActive = currentTime >= clip.start && currentTime < clip.start + clip.duration;
+                  const visual = clipVisualValues(clip, currentTime);
+                  const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
+                  const filter = adjustmentFilter(clip);
+                  const crop = clip.crop;
+                  const mask = clip.mask;
+                  const fit = previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
+                  const fullBounds = previewMediaBounds(asset, project.canvas.width, project.canvas.height, fit);
+                  const frameBounds = previewMediaRenderBounds(asset, crop, project.canvas.width, project.canvas.height, fit);
+                  const cropX = crop ? clamp(crop.x, 0, 0.99) : 0;
+                  const cropY = crop ? clamp(crop.y, 0, 0.99) : 0;
+                  const cropWidth = crop ? clamp(Math.min(crop.width, 1 - cropX), 0.01, 1) : 1;
+                  const cropHeight = crop ? clamp(Math.min(crop.height, 1 - cropY), 0.01, 1) : 1;
+                  const innerWidth = crop ? frameBounds.width / cropWidth : fullBounds.width;
+                  const innerHeight = crop ? frameBounds.height / cropHeight : fullBounds.height;
+                  const temperatureFilter = Math.abs(filter.temperature) > 0.001 ? ` sepia(${Math.abs(filter.temperature) * 0.35}) saturate(${1 + Math.abs(filter.temperature) * 0.4}) hue-rotate(${filter.temperature > 0 ? -12 : 180}deg)` : '';
+                  const chromaFilter = clip.filters.chromaKey ? ` url(#preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')})` : '';
+                  const mediaFilter = `${chromaFilter} brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${filter.hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${temperatureFilter}`;
+                  const mediaFrameStyle: React.CSSProperties = {
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    right: 'auto',
+                    bottom: 'auto',
+                    width: frameBounds.width * canvasScale,
+                    height: frameBounds.height * canvasScale,
+                    opacity: isActive ? visual.opacity : 0,
+                    pointerEvents: 'none',
+                    overflow: 'hidden',
+                    zIndex: trackIndex + 1,
+                    transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})`,
+                    clipPath: visual.wipe ? transitionClipPath(visual.wipe) : undefined,
+                  };
+                  const maskStyle: React.CSSProperties = {
+                    width: '100%',
+                    height: '100%',
+                    overflow: 'hidden',
+                    maskImage: mask ? previewMaskImage(mask) : undefined,
+                    WebkitMaskImage: mask ? previewMaskImage(mask) : undefined,
+                    maskSize: '100% 100%',
+                    WebkitMaskSize: '100% 100%',
+                    maskRepeat: 'no-repeat',
+                    WebkitMaskRepeat: 'no-repeat',
+                  };
+                  const mediaStyle: React.CSSProperties = crop
+                    ? {
+                        position: 'absolute',
+                        left: -cropX * innerWidth * canvasScale,
+                        top: -cropY * innerHeight * canvasScale,
+                        width: innerWidth * canvasScale,
+                        height: innerHeight * canvasScale,
+                        display: 'block',
+                        objectFit: 'fill',
+                        filter: mediaFilter,
+                      }
+                    : {
+                        width: '100%',
+                        height: '100%',
+                        display: 'block',
+                        objectFit: 'fill',
+                        filter: mediaFilter,
+                      };
+                  const mediaElement =
+                    asset.type === 'video' ? (
+                      <video
+                        ref={(element) => {
+                          mediaRefs.current[clip.id] = element;
+                          if (element) isActive ? syncVideo(clip, element) : primeVideo(clip, element);
+                        }}
+                        src={mediaUrl}
+                        preload="auto"
+                        muted
+                        playsInline
+                        className={`preview-media ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`}
+                        style={mediaStyle}
+                        onLoadedMetadata={(event) => (isActive ? syncVideo(clip, event.currentTarget) : primeVideo(clip, event.currentTarget))}
+                        onCanPlay={(event) => {
+                          if (isActive) syncVideo(clip, event.currentTarget);
+                        }}
+                      />
+                    ) : (
+                      <img src={mediaUrl} loading="eager" decoding="async" className={`preview-media ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`} style={mediaStyle} alt={clip.name} />
+                    );
+                  return (
+                    <div key={clip.id} className="preview-media-frame preview-layer" style={mediaFrameStyle}>
+                      <div className="preview-media-mask" style={maskStyle}>
+                        {mediaElement}
+                        {filter.vignette > 0.001 && <span className="preview-vignette" style={{ opacity: clamp(filter.vignette, 0, 1) }} />}
+                      </div>
+                    </div>
+                  );
+                })}
+                {!isFullscreen &&
+                  activeMedia.map(({ clip, trackIndex }) => {
+                    const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
+                    if (!asset) return null;
+                    const visual = clipVisualValues(clip, currentTime);
+                    const fit = previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
+                    const bounds = previewMediaRenderBounds(asset, clip.crop, project.canvas.width, project.canvas.height, fit);
+                    const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
+                    return (
+                      <button
+                        type="button"
+                        key={`preview-hit-${clip.id}`}
+                        className={`preview-hit-target ${selectedClipIds.includes(clip.id) ? 'selected' : ''}`}
+                        style={{
+                          width: bounds.width * canvasScale,
+                          height: bounds.height * canvasScale,
+                          zIndex: 40 + trackIndex,
+                          transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})`,
+                        }}
+                        onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelected(clip.id, track?.id ?? null);
+                          }
+                        }}
+                        aria-label={t('preview.selectAria', {
+                          name: clip.name,
+                        })}
+                      >
+                        <span className="preview-hit-label">{t(clip.type === 'image' ? 'preview.type.image' : 'preview.type.video')}</span>
+                      </button>
+                    );
+                  })}
+                {activeAudio.map(({ clip, track }) => {
+                  const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
+                  if (!asset) return null;
+                  const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
+                  return (
+                    <audio
+                      key={`audio-${clip.id}`}
+                      ref={(element) => {
+                        audioRefs.current[clip.id] = element;
+                        if (element) syncAudio(clip, element, track.volume ?? 1);
+                      }}
+                      src={mediaUrl}
+                      preload="auto"
+                      onLoadedMetadata={(event) => syncAudio(clip, event.currentTarget, track.volume ?? 1)}
+                    />
+                  );
+                })}
+                {texts.map(({ clip, style, trackIndex }) => {
+                  const visual = clipVisualValues(clip, currentTime);
+                  const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale);
+                  const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
+                  return (
+                    <div
+                      key={clip.id}
+                      className={`preview-text preview-layer ${!isFullscreen && selectedClipIds.includes(clip.id) ? 'preview-selected' : ''}`}
+                      role="button"
+                      tabIndex={isFullscreen ? -1 : 0}
+                      aria-label={t('preview.selectAria', {
+                        name: style.text || clip.name,
+                      })}
+                      onPointerDown={(event) => beginPreviewTransform(event, clip, 'move')}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelected(clip.id, track?.id ?? null);
+                        }
+                      }}
+                      style={{
+                        left: '50%',
+                        top: '50%',
+                        bottom: 'auto',
+                        width: bounds.width * canvasScale,
+                        zIndex: trackIndex + 1,
+                        pointerEvents: isFullscreen ? 'none' : 'auto',
+                        transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale})`,
+                        opacity: visual.opacity,
+                        fontFamily: style.fontFamily,
+                        fontSize: Math.max(1, style.fontSize * canvasScale),
+                        color: style.color,
+                        fontWeight: style.fontWeight,
+                        fontStyle: style.fontStyle,
+                        textDecoration: style.textDecoration,
+                        letterSpacing: `${style.letterSpacing * canvasScale}px`,
+                        lineHeight: style.lineHeight,
+                        padding: `${style.padding * canvasScale}px`,
+                        background: style.background,
+                        clipPath: transitionClipPath(visual.wipe),
+                        WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`,
+                        textShadow: style.shadow ? '0 2px 8px #000' : 'none',
+                        textAlign: style.align,
+                      }}
+                    >
+                      {normalizeTextLineBreaks(style.text)}
+                    </div>
+                  );
+                })}
+                {!isFullscreen && activeSelected && activeSelectedVisual && (
+                  <div
+                    className="preview-transform-box"
+                    style={{
+                      zIndex: 300,
+                      left: '50%',
+                      top: '50%',
+                      width: selectedBounds.width * canvasScale,
+                      height: selectedBounds.height * canvasScale,
+                      transform: `translate(-50%, -50%) translate(${activeSelectedVisual.x * canvasScale}px, ${activeSelectedVisual.y * canvasScale}px) rotate(${activeSelectedVisual.rotation}deg) scale(${activeSelectedVisual.scale})`,
+                    }}
+                  >
+                    <span className="preview-transform-label">{t(activeSelected.clip.adjustment ? 'preview.type.adjustment' : activeSelected.clip.type === 'text' ? 'preview.type.text' : activeSelected.clip.type === 'image' ? 'preview.type.image' : 'preview.type.video')}</span>
+                    <button className="preview-scale-handle" aria-label={t('preview.resizeAria')} onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} />
+                  </div>
+                )}
+                {!isFullscreen && showSafeArea && <div className="safe-area" />}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="preview-controls">
+        <span className="preview-time">
+          <EditableTimecode value={currentTime} duration={project.duration} fps={project.canvas.fps} onChange={setCurrentTime} />
+          <span className="preview-time-divider">/</span>
+          <b className="preview-time-duration">{formatTime(project.duration, true, project.canvas.fps)}</b>
+          <small className="preview-time-fps">{project.canvas.fps} FPS</small>
+        </span>
+        <div className="transport-center">
+          <button className="control-button" aria-label={t('preview.previousFrame')} title={t('preview.previousFrame')} onClick={() => stepFrame(-1)}>
+            <UiIcon name="previous" />
+          </button>
+          <button className="play-button" aria-label={t(playing ? 'preview.pause' : 'preview.play')} onClick={() => setPlaying(!playing)}>
+            <UiIcon name={playing ? 'pause' : 'play'} />
+          </button>
+          <button className="control-button" aria-label={t('preview.nextFrame')} title={t('preview.nextFrame')} onClick={() => stepFrame(1)}>
+            <UiIcon name="next" />
+          </button>
+        </div>
+        <div className="transport-right">
+          <button
+            className="control-button"
+            aria-label={t('preview.rewind')}
+            title={t('preview.rewind')}
+            onClick={() => {
+              setPlaying(false);
+              setCurrentTime(0);
+            }}
+          >
+            <UiIcon name="rewind" />
+          </button>
+          <button className="quality-button" onClick={cycleQuality} title={t('preview.quality')}>
+            <UiIcon name="quality" />
+            <span>{t(`settings.previewQuality.${settings?.proxyQuality ?? 'balanced'}` as TranslationKey)}</span>
+            <b>⌄</b>
+          </button>
+        </div>
+      </div>
+    </main>
+  );
 }
