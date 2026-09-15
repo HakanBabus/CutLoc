@@ -7951,3 +7951,12 @@ body {
   .app-shell[data-theme] .dashboard-project-heading .dashboard-project-tools { display: grid; grid-template-columns: 1fr auto; }
   .app-shell[data-theme] .dashboard-project-tools .project-search { grid-column: 1 / -1; }
 }
+
+/* Desktop workbench: the Inspector owns its full column instead of leaving an empty lower cell. */
+@media (min-width: 901px) {
+  .app-shell[data-theme] .editor-body.workspace-layout > .inspector {
+    grid-column: 4;
+    grid-row: 1 / 3;
+    min-height: 0;
+  }
+}
