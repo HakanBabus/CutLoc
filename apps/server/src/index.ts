@@ -143,6 +143,17 @@ async function ensureDir(dir: string) {
   await fsp.mkdir(dir, { recursive: true });
 }
 
+async function directorySize(dir: string): Promise<number> {
+  let total = 0;
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    const item = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += await directorySize(item);
+    else if (entry.isFile()) total += (await fsp.stat(item)).size;
+  }));
+  return total;
+}
+
 function projectPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) {
     throw Object.assign(new Error(message('invalidProjectId')), { statusCode: 400 });
@@ -1238,12 +1249,13 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
 async function listProjects() {
   await ensureDir(projectsDir);
   const names = await fsp.readdir(projectsDir, { withFileTypes: true });
-  const result: Array<Pick<Project, 'id' | 'name' | 'updatedAt' | 'createdAt' | 'duration' | 'canvas' | 'assets'>> = [];
+  const result: Array<Pick<Project, 'id' | 'name' | 'updatedAt' | 'createdAt' | 'duration' | 'canvas' | 'assets'> & { sizeBytes: number }> = [];
   for (const entry of names) {
     if (!entry.isDirectory()) continue;
     try {
       const project = await readProject(entry.name);
-      result.push({ id: project.id, name: project.name, updatedAt: project.updatedAt, createdAt: project.createdAt, duration: project.duration, canvas: project.canvas, assets: project.assets });
+      const sizeBytes = await directorySize(projectPath(project.id));
+      result.push({ id: project.id, name: project.name, updatedAt: project.updatedAt, createdAt: project.createdAt, duration: project.duration, canvas: project.canvas, assets: project.assets, sizeBytes });
     } catch { /* skip corrupt projects in list; opening exposes recovery state later */ }
   }
   return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
