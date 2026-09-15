@@ -220,7 +220,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
   };
   return <main key={language} className="dashboard">
     <header className="dashboard-header">
-      <div className="brand"><div className="brand-mark"><span /></div><div><strong>CUTLOC</strong><small>{t('brand.tagline')}</small></div></div>
+      <div className="brand"><img className="brand-logo" src="/favicon.svg" alt="" /><div><strong>CutLoc</strong><small>{t('brand.tagline')}</small></div></div>
       <div className="header-actions"><span className="offline-pill"><i /> {t('brand.localMode')}</span><button className="secondary-button dashboard-bundle-import" onClick={() => bundleInputRef.current?.click()}>{t('dashboard.openBundle')}</button><input ref={bundleInputRef} className="hidden-input" type="file" accept=".json,.cutloc,.cutloc.json,application/json,application/zip" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readBundle(file); event.target.value = ''; }} /><ThemeSwitcher /><button className="icon-button" title={t('common.settings')} onClick={onSettings}><Glyph>⚙</Glyph></button></div>
     </header>
     <section className="dashboard-hero">

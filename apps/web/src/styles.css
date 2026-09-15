@@ -38,6 +38,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .dashboard { min-height: 100vh; background: radial-gradient(circle at 76% 18%, rgba(116,90,230,.1), transparent 27rem), var(--bg); padding: 0 7vw; }
 .dashboard-header { height: 88px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .brand, .editor-brand { display: flex; align-items: center; gap: 12px; }
+.brand-logo { width: 36px; height: 36px; display: block; flex: 0 0 36px; filter: drop-shadow(0 7px 14px rgba(53,230,193,.13)); }
 .brand-mark { width: 31px; height: 31px; border: 1px solid rgba(183,243,106,.6); border-radius: 9px; position: relative; transform: rotate(-8deg); }
 .brand-mark::before, .brand-mark::after, .brand-mark span { content: ''; position: absolute; left: 6px; right: 6px; height: 3px; border-radius: 4px; background: var(--accent); transform: skewX(-28deg); }
 .brand-mark::before { top: 8px; }.brand-mark span { top: 14px; opacity: .65; }.brand-mark::after { top: 20px; opacity: .35; }
