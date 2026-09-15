@@ -1,6 +1,6 @@
 import type React from 'react';
 
-export type UiIconName = 'cursor' | 'scissors' | 'undo' | 'redo' | 'snap' | 'marker' | 'plus' | 'fit' | 'previous' | 'play' | 'pause' | 'next' | 'rewind' | 'quality' | 'layout' | 'audio' | 'speed' | 'animation' | 'appearance' | 'text' | 'search' | 'trash';
+export type UiIconName = 'cursor' | 'scissors' | 'undo' | 'redo' | 'snap' | 'snapOff' | 'marker' | 'plus' | 'fit' | 'previous' | 'play' | 'pause' | 'next' | 'rewind' | 'quality' | 'layout' | 'audio' | 'speed' | 'animation' | 'appearance' | 'text' | 'search' | 'trash';
 
 const paths: Record<UiIconName, React.ReactNode> = {
   cursor: <><path d="m5 3 10 8-5 .8-2.4 4.7z" /><path d="m10 12 4 5" /></>,
@@ -8,6 +8,7 @@ const paths: Record<UiIconName, React.ReactNode> = {
   undo: <><path d="M9 7H4v-5" /><path d="M4 7c2.1-2.2 4.7-3.2 7.5-2.8A8 8 0 1 1 5 17" /></>,
   redo: <><path d="M15 7h5v-5" /><path d="M20 7c-2.1-2.2-4.7-3.2-7.5-2.8A8 8 0 1 0 19 17" /></>,
   snap: <><path d="M7 4v7a5 5 0 0 0 10 0V4" /><path d="M7 7h4M13 7h4M5 18h14" /></>,
+  snapOff: <><path d="M7 4v7a5 5 0 0 0 8.7 3.4M17 10V4" /><path d="M7 7h4M13 7h4M5 18h14M4 4l16 16" /></>,
   marker: <><path d="M12 21s6-5.1 6-11a6 6 0 1 0-12 0c0 5.9 6 11 6 11Z" /><circle cx="12" cy="10" r="2" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
   fit: <><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4" /><path d="m4 8 5-5M20 8l-5-5M4 16l5 5M20 16l-5 5" /></>,
