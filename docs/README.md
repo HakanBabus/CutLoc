@@ -37,7 +37,7 @@ flowchart LR
 
 - Create, open, duplicate, import, bundle, delete, and restore projects.
 - Autosave editor changes with optimistic revision checks.
-- Preserve recoverable project backups and a local trash area.
+- Preserve recoverable project backups and a local trash area. Trash entries are removed automatically after the configured retention window.
 - Prevent silent overwrites when two browser tabs or a CLI client edit the same project.
 
 ### Media and timeline
@@ -132,6 +132,7 @@ Supported root `.env` values are documented in `.env.example`:
 | `HOST` | Local server host; keep this on loopback |
 | `PORT` | Local API port |
 | `DATA_DIR` | Runtime project and settings directory |
+| `TRASH_RETENTION_DAYS` | Days deleted projects remain recoverable; defaults to `30` |
 | `MAX_UPLOAD_BYTES` | Per-upload byte limit |
 | `FFMPEG_TIMEOUT_MS` | Maximum FFmpeg job runtime |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | Optional binary overrides |
@@ -176,7 +177,7 @@ Export jobs are asynchronous. The UI combines server-sent events with a polling 
 - A crashed CLI lease expires automatically.
 - Failed or cancelled FFmpeg jobs remove partial output.
 - Project deletion cancels its active jobs before moving data to trash.
-- Backups and trash operations are explicit recovery boundaries, not substitutes for independent copies of important media.
+- Backups and trash operations are explicit recovery boundaries, not substitutes for independent copies of important media. Opening the trash listing permanently removes entries beyond `TRASH_RETENTION_DAYS`.
 
 ## Verification
 
