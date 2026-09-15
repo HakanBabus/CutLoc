@@ -6629,6 +6629,20 @@ body {
   color: #93f0cf;
 }
 
+.app-shell[data-theme] .project-search > span {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--theme-muted);
+  font-size: inherit;
+}
+
+.app-shell[data-theme] .project-search > span .ui-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;

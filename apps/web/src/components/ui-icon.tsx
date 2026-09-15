@@ -1,6 +1,6 @@
 import type React from 'react';
 
-export type UiIconName = 'cursor' | 'scissors' | 'undo' | 'redo' | 'snap' | 'marker' | 'plus' | 'fit' | 'previous' | 'play' | 'pause' | 'next' | 'rewind' | 'quality' | 'layout' | 'audio' | 'speed' | 'animation' | 'appearance' | 'text';
+export type UiIconName = 'cursor' | 'scissors' | 'undo' | 'redo' | 'snap' | 'marker' | 'plus' | 'fit' | 'previous' | 'play' | 'pause' | 'next' | 'rewind' | 'quality' | 'layout' | 'audio' | 'speed' | 'animation' | 'appearance' | 'text' | 'search' | 'trash';
 
 const paths: Record<UiIconName, React.ReactNode> = {
   cursor: <><path d="m5 3 10 8-5 .8-2.4 4.7z" /><path d="m10 12 4 5" /></>,
@@ -23,6 +23,8 @@ const paths: Record<UiIconName, React.ReactNode> = {
   animation: <><path d="M5 12h4l2-5 3 10 2-5h3" /><path d="M4 4h16v16H4z" /></>,
   appearance: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16Z" /></>,
   text: <><path d="M5 6h14M12 6v12M8 18h8" /></>,
+  search: <><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></>,
+  trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /><path d="M10 11v5M14 11v5" /></>,
 };
 
 export function UiIcon({ name, className }: { name: UiIconName; className?: string }) {
