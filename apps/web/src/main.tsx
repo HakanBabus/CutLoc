@@ -22,11 +22,26 @@ import { useEditor, type TrashEntry } from './editor/store';
 
 function Glyph({ children }: { children: string }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 
+type DashboardProject = Project & { sizeBytes?: number };
+
+function formatBytes(bytes: number | undefined, language: 'tr' | 'en') {
+  if (bytes === undefined) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${new Intl.NumberFormat(language === 'tr' ? 'tr-TR' : 'en-US', { maximumFractionDigits: value >= 10 ? 0 : 1 }).format(value)} ${unit}`;
+}
+
 function App() {
   const { t } = useI18n();
   const [screen, setScreen] = useState<'dashboard' | 'editor'>('dashboard');
   const [screenTransition, setScreenTransition] = useState<'idle' | 'exit' | 'enter'>('idle');
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [trash, setTrash] = useState<TrashEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -50,7 +65,7 @@ function App() {
 
   useEffect(() => {
     void Promise.all([
-      api<Project[]>('/api/projects'),
+      api<DashboardProject[]>('/api/projects'),
       api<Settings>('/api/settings'),
       api<TrashEntry[]>('/api/trash'),
     ]).then(([list, settings, trashList]) => {
@@ -178,7 +193,7 @@ function App() {
 
   const returnToDashboard = () => {
     transitionTo('dashboard');
-    void Promise.all([api<Project[]>('/api/projects'), api<TrashEntry[]>('/api/trash')]).then(([list, trashList]) => { setProjects(list); setTrash(trashList); });
+    void Promise.all([api<DashboardProject[]>('/api/projects'), api<TrashEntry[]>('/api/trash')]).then(([list, trashList]) => { setProjects(list); setTrash(trashList); });
   };
 
   const viewClass = `screen-view ${screenTransition === 'exit' ? 'screen-exit' : screenTransition === 'enter' ? 'screen-enter' : ''}`;
@@ -195,7 +210,7 @@ function App() {
   </div>;
 }
 
-function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpen, onDelete, onRestoreTrash, onPurgeTrash, onSettings, onImportBundle }: { projects: Project[]; trash: TrashEntry[]; loading: boolean; onCreate: () => void; onStartWithMedia: (file: File) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onRestoreTrash: (trashId: string) => void; onPurgeTrash: (trashId: string) => void; onSettings: () => void; onImportBundle: (bundle: unknown) => void }) {
+function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpen, onDelete, onRestoreTrash, onPurgeTrash, onSettings, onImportBundle }: { projects: DashboardProject[]; trash: TrashEntry[]; loading: boolean; onCreate: () => void; onStartWithMedia: (file: File) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onRestoreTrash: (trashId: string) => void; onPurgeTrash: (trashId: string) => void; onSettings: () => void; onImportBundle: (bundle: unknown) => void }) {
   const { language, t } = useI18n();
   const bundleInputRef = useRef<HTMLInputElement>(null);
   const mediaFileRef = useRef<HTMLInputElement>(null);
@@ -257,15 +272,15 @@ function TrashSection({ entries, onRestore, onPurge }: { entries: TrashEntry[]; 
   </section>;
 }
 
-function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: () => void; onDelete: () => void }) {
-  const { t, formatDate } = useI18n();
+function ProjectCard({ project, onOpen, onDelete }: { project: DashboardProject; onOpen: () => void; onDelete: () => void }) {
+  const { language, t, formatDate } = useI18n();
   const accent = project.canvas.width > project.canvas.height ? 'landscape' : 'portrait';
   const hasTimeline = project.duration > 0;
   const coverAsset = project.assets.find((asset) => asset.type === 'image') ?? project.assets.find((asset) => asset.type === 'video' && asset.thumbnailPath);
   const coverUrl = coverAsset ? `/api/projects/${project.id}/media/${coverAsset.id}${coverAsset.thumbnailPath ? '?thumbnail=1' : ''}` : null;
   return <article className="project-card" onDoubleClick={onOpen}>
     <button className={`project-preview ${accent}`} onClick={onOpen}>{coverUrl && <img className="project-preview-media" src={coverUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }} />}<div className="preview-grid" /><span className="project-play">▶</span><span className="aspect-tag">{project.canvas.aspect}</span></button>
-    <div className="project-card-info"><div><div className="project-card-title"><h3>{project.name}</h3><span className={`project-status ${hasTimeline ? 'ready' : ''}`}>{t(hasTimeline ? 'dashboard.statusEdited' : 'dashboard.statusStarter')}</span></div><p>{formatDate(project.updatedAt, { day: '2-digit', month: 'short' })} · {formatTime(project.duration)} · {project.assets.length} {t('common.media')}</p></div><button className="project-delete-button" onClick={onDelete} aria-label={t('dashboard.moveToTrash')} title={t('dashboard.moveToTrash')}><UiIcon name="trash" /></button></div>
+    <div className="project-card-info"><div><div className="project-card-title"><h3>{project.name}</h3><span className={`project-status ${hasTimeline ? 'ready' : ''}`}>{t(hasTimeline ? 'dashboard.statusEdited' : 'dashboard.statusStarter')}</span></div><p className="project-meta"><span>{formatDate(project.updatedAt, { day: '2-digit', month: 'short' })}</span><span>{formatTime(project.duration)}</span><span>{project.assets.length} {t('common.media')}</span><span>{formatBytes(project.sizeBytes, language)}</span></p></div><button className="project-delete-button" onClick={onDelete} aria-label={t('dashboard.moveToTrash')} title={t('dashboard.moveToTrash')}><UiIcon name="trash" /></button></div>
   </article>;
 }
 
