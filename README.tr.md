@@ -80,13 +80,13 @@ Yukarıdaki her başarılı komut `stdout` üzerinde tek ve kompakt bir JSON de�
 
 | Yüzey | Mevcut yetenek |
 | --- | --- |
-| **Kontrol paneli ve projeler** | Yerel proje oluşturma, açma, çoğaltma, içe aktarma, kurtarma ve kaldırma; silinen projeler yerel çöp alanından geri yüklenebilir. |
+| **Kontrol paneli ve projeler** | Tutarlı 16:9 proje kartlarında süreyi, medya sayısını, en-boy oranını ve diskte kaplanan alanı görme; projeyi doğrudan açma veya çöp kutusuna taşıma. |
 | **Medya kitaplığı** | Video, ses ve görsel içe aktarma; arama, filtreleme, önizleme, liste/kart görünümü, medya sağlığını inceleme, türetilmiş dosyaları yeniden oluşturma ve varlıkları zaman çizelgesine sürükleme. |
 | **Zaman çizelgesi** | Kare duyarlı oynatma kafası, işaretçiler, hizalama, kırpma, bölme, taşıma, çoğaltma, boşluğu kapatarak silme, geri al/yinele ve kanal kilitleme/gizleme/sessize alma kontrolleriyle video, kaplama, ses, metin ve altyazı kanalları. |
 | **Tuval ve Denetçi** | Tuvalde görünen nesneleri seçme, en-boy ve sığdırma modları, önizleme yakınlaştırma/kaydırma; ardından yerleşim, kırpma, hız, ses, filtre, maske, fade, geçiş, anahtar kare ve metin biçimlendirme. |
 | **Hareket ve yapı taşları** | Metin hazır ayarları ile Öğeler panelinden yerleşik arka plan ve şekiller. Seçili klibin Animasyon sekmesi giriş/çıkış hazır ayarlarını, süreyi, yönü, easing'i, yoğunluğu ve anahtar kareleri yönetir. |
 | **Dışa aktarma** | Yerel ön kontrol; seçilebilir en-boy, çözünürlük, FPS, kalite, ses bit hızı ve zaman aralığıyla MP4 video veya MP3/WAV ses render'ı. Mevcut çıktı yaratıcı yeniden kodlamadır; kayıpsız/remux kesme değildir. |
-| **Kurtarma ve güvenlik** | Otomatik kayıt, revizyon kontrolleri, yedekler, kurtarılabilir çöp, proje erişim kilitleri, dışa aktarma ön kontrolü ve kısmi çıktı temizliği. |
+| **Kurtarma ve güvenlik** | Otomatik kayıt, revizyon kontrolleri, yedekler, 30 gün kurtarılabilir çöp, proje erişim kilitleri, dışa aktarma ön kontrolü ve kısmi çıktı temizliği. |
 
 ## Editör iş akışı
 
@@ -118,13 +118,13 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 | Alan | v0.1.0 durumu |
 | --- | --- |
-| Kontrol paneli, yerel projeler ve proje depolama | Yerel olarak kullanılabilir |
+| Kontrol paneli, proje bilgileri ve proje depolama | Kullanılabilir; kartlar güncel proje klasörü boyutunu gösterir |
 | Video, ses ve görsel içe aktarma | Kullanılabilir; codec desteği kurulu FFmpeg yapısına bağlıdır |
 | Medya arama, filtreleme, sıralama, liste/kart görünümü ve türetilmiş önizlemeler | Yerel olarak kullanılabilir |
 | Çok kanallı zaman çizelgesi kurgusu | Kullanılabilir; gelişmeye devam ediyor |
 | Tuval, Denetçi, hareket, metin, şekiller ve ayar katmanları | Kullanılabilir; uyum medya ve efekt birleşimine göre değişir |
 | MP4, MP3 ve WAV dışa aktarma | Yerel FFmpeg üzerinden kullanılabilir; çıktı yeniden kodlanır |
-| Otomatik kayıt, revizyon kontrolleri, yedekler ve çöp kurtarma | Yerel olarak kullanılabilir |
+| Otomatik kayıt, revizyon kontrolleri, yedekler ve çöp kurtarma | Kullanılabilir; çöp kutusu varsayılan olarak 30 gün sonra otomatik temizlenir |
 | İngilizce ve Türkçe arayüz | Sözlük tabanlı kapsam; bazı eski etiketler ve metinler eksik olabilir |
 | Yerel CLI ve yapay zekâ aracı otomasyonu | Özel proje erişim kilitleriyle loopback API üzerinden kullanılabilir |
 | Barındırılan veya ortak çalışma kurgusu | Desteklenmiyor |
