@@ -52,6 +52,14 @@ test('timeline seeking continues from the clicked position during playback and e
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
 
+    const snapToggle = page.locator('.snap-toggle');
+    const snapOnIcon = await snapToggle.locator('svg').innerHTML();
+    await snapToggle.click();
+    await expect(snapToggle).toHaveAttribute('aria-pressed', 'false');
+    expect(await snapToggle.locator('svg').innerHTML()).not.toBe(snapOnIcon);
+    await snapToggle.click();
+    await expect(snapToggle).toHaveAttribute('aria-pressed', 'true');
+
     const clip = page.locator('.timeline-clip').first();
     await expect(clip).toHaveAttribute('aria-pressed', 'true');
     const timecode = page.locator('.preview-timecode-display');
@@ -99,7 +107,7 @@ test('timeline seeking continues from the clicked position during playback and e
   }
 });
 
-test('custom editor shortcuts are used and persist after reopening the project', async ({ page, request }) => {
+test('editor shortcuts are fixed and ignore attempted settings overrides', async ({ page, request }) => {
   test.setTimeout(45_000);
   const fixtureName = `Shortcut persistence ${Date.now()}`;
   const beforeResponse = await request.get('/api/projects');
@@ -107,10 +115,10 @@ test('custom editor shortcuts are used and persist after reopening the project',
   const settingsResponse = await request.get('/api/settings');
   expect(settingsResponse.ok()).toBeTruthy();
   const initialSettings = await settingsResponse.json();
-  const baselineSettings = { ...initialSettings, shortcuts: { ...initialSettings.shortcuts, togglePlayback: 'Space' } };
+  const attemptedOverride = { ...initialSettings, shortcuts: { ...initialSettings.shortcuts, togglePlayback: 'P' } };
   let projectId;
 
-  await request.put('/api/settings', { data: baselineSettings });
+  await request.put('/api/settings', { data: attemptedOverride });
   try {
     await page.goto('/');
     await page.locator('.primary-button.large').click();
@@ -122,22 +130,21 @@ test('custom editor shortcuts are used and persist after reopening the project',
 
     await page.locator('.editor-settings').click();
     await page.locator('.settings-tabs button').filter({ hasText: /Shortcuts|Kısayollar/ }).click();
-    const playbackInput = page.locator('.shortcut-setting-row input').first();
-    await expect(playbackInput).toHaveValue('Space');
-    await playbackInput.fill('P');
-    await page.locator('.settings-modal .primary-button').click();
-    await expect(page.locator('.settings-modal')).toBeHidden();
+    const playbackShortcut = page.locator('.shortcut-setting-row kbd').first();
+    await expect(playbackShortcut).toHaveText('Space');
+    await expect(page.locator('.shortcut-setting-row input')).toHaveCount(0);
+    await page.locator('.settings-modal').getByRole('button', { name: /Close|Kapat/i }).click();
 
     const playButton = page.locator('.play-button');
     await page.locator('.editor-statusbar').click();
     await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
     await page.keyboard.press('p');
-    await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
+    await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
     await page.keyboard.press('Space');
     await expect(playButton).toHaveAttribute('aria-label', /Pause|Duraklat/);
 
     const persistedSettings = await (await request.get('/api/settings')).json();
-    expect(persistedSettings.shortcuts.togglePlayback).toBe('P');
+    expect(persistedSettings.shortcuts.togglePlayback).toBe('Space');
     const projects = await (await request.get('/api/projects')).json();
     projectId = projects.find((project) => !beforeIds.has(project.id))?.id;
     expect(projectId).toBeTruthy();
@@ -148,13 +155,13 @@ test('custom editor shortcuts are used and persist after reopening the project',
     await page.locator('.editor-statusbar').click();
     await expect(playButton).toHaveAttribute('aria-label', /Play|Oynat/);
     await page.keyboard.press('Space');
-    await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Play|Oynat/);
+    await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Pause|Duraklat/);
     await page.keyboard.press('p');
     await expect(page.locator('.play-button')).toHaveAttribute('aria-label', /Pause|Duraklat/);
 
     await page.locator('.editor-settings').click();
     await page.locator('.settings-tabs button').filter({ hasText: /Shortcuts|Kısayollar/ }).click();
-    await expect(page.locator('.shortcut-setting-row input').first()).toHaveValue('P');
+    await expect(page.locator('.shortcut-setting-row kbd').first()).toHaveText('Space');
   } finally {
     await request.put('/api/settings', { data: initialSettings });
     if (projectId) {
@@ -194,7 +201,7 @@ test('an active CLI session makes an open web project read-only and shows its ow
     token = undefined;
     await expect(lock).toBeHidden();
     await page.locator('.project-name-input').fill('Web access returned');
-    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|Tüm değişiklikler kaydedildi/i);
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i);
   } finally {
     if (token) await request.delete(`/api/projects/${created.id}/access`, { headers: { 'x-cutloc-access-token': token } });
     const deleted = await request.delete(`/api/projects/${created.id}`);
@@ -219,7 +226,7 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
     await pageA.locator('.project-name-input').fill(fixtureName);
     await pageA.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
-    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
 
     const projectsResponse = await request.get('/api/projects');
     projectId = (await projectsResponse.json()).find((project) => project.name === fixtureName)?.id;
@@ -239,10 +246,10 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
     const positionXB = pageB.getByRole('spinbutton', { name: /^X(?: px)?$/ });
     await scaleA.fill('1.25');
     await scaleA.press('Tab');
-    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     await positionXB.fill('42');
     await positionXB.press('Tab');
-    await expect(pageB.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageB.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
 
     let detail = await (await request.get(`/api/projects/${projectId}`)).json();
     let clip = detail.tracks.flatMap((track) => track.clips)[0];
@@ -251,11 +258,11 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
 
     await scaleA.fill('1.5');
     await scaleA.press('Tab');
-    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     const scaleB = pageB.getByRole('spinbutton', { name: /Scale|Ölçek/ });
     await scaleB.fill('1.75');
     await scaleB.press('Tab');
-    await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
+    await expect(pageB.locator('.save-indicator')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
 
     detail = await (await request.get(`/api/projects/${projectId}`)).json();
     clip = detail.tracks.flatMap((track) => track.clips)[0];
@@ -287,17 +294,17 @@ test('two tabs surface delete-versus-edit conflicts without deleting the saved c
     await pageA.locator('.project-name-input').fill(fixtureName);
     await pageA.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
-    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     projectId = (await (await request.get('/api/projects')).json()).find((project) => project.name === fixtureName)?.id;
     await pageB.goto('/'); await pageB.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
     await expect(pageB.locator('.timeline-clip')).toHaveCount(1);
     await pageA.locator('.timeline-clip').click();
     const scale = pageA.getByRole('spinbutton', { name: /Scale|Ölçek/ });
     await scale.fill('1.5'); await scale.press('Tab');
-    await expect(pageA.locator('.editor-statusbar')).toContainText(saved, { timeout: 10_000 });
+    await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     await pageB.locator('.timeline-clip').click({ button: 'right' });
     await pageB.getByRole('menuitem', { name: /Delete|Sil/i }).click();
-    await expect(pageB.locator('.editor-statusbar')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
+    await expect(pageB.locator('.save-indicator')).toContainText(/Save error|Kaydetme hatas[ıi]/i, { timeout: 10_000 });
     const detail = await (await request.get(`/api/projects/${projectId}`)).json();
     expect(detail.tracks.flatMap((track) => track.clips)).toHaveLength(1);
     expect(detail.tracks.flatMap((track) => track.clips)[0].transform.scale).toBe(1.5);
@@ -318,7 +325,7 @@ test('server refresh cannot resurrect a locally deleted asset', async ({ page, r
     await page.locator('.project-name-input').fill(fixtureName);
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
-    await expect(page.locator('.editor-statusbar')).toContainText(/All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i, { timeout: 10_000 });
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     const projects = await (await request.get('/api/projects')).json();
     projectId = projects.find((project) => project.name === fixtureName)?.id;
     expect(projectId).toBeTruthy();
