@@ -6761,6 +6761,23 @@ body {
 .app-shell[data-theme] .trash-card { border-color: var(--theme-line); background: var(--theme-panel-soft); }
 .app-shell[data-theme] .trash-card-main span { display: block; margin-top: 5px; color: #e6a0a0; font-size: 9px; }
 
+/* Keep the transport timecode neutral; frames are data, not a highlighted state. */
+.app-shell[data-theme] .preview-time {
+  border: 1px solid var(--theme-line);
+  background: var(--theme-panel-soft);
+  box-shadow: none;
+}
+
+.app-shell[data-theme] .preview-timecode-display > b {
+  min-width: 2ch;
+  padding: 0;
+  border-radius: 0;
+  color: var(--theme-muted);
+  background: transparent;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;
