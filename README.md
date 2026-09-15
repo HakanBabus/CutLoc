@@ -80,13 +80,13 @@ Every successful command above is a single compact JSON value on `stdout`; failu
 
 | Surface | Current capability |
 | --- | --- |
-| **Dashboard and projects** | Create, open, duplicate, import, recover, and remove local projects; deleted projects can be restored from the local trash area. |
+| **Dashboard and projects** | Browse consistent 16:9 project cards, inspect duration, media count, aspect ratio, and on-disk size, then open or move a project directly to trash. |
 | **Media library** | Import video, audio, and image files; search, filter, preview, switch between list/card views, inspect media health, rebuild derived files, and drag assets to the timeline. |
 | **Timeline** | Arrange video, overlay, audio, text, and subtitle tracks with frame-aware playhead positioning, markers, snapping, trim, split, move, duplicate, ripple-delete, undo/redo, and track lock/hide/mute controls. |
 | **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, zoom and pan the preview, then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
 | **Motion and building blocks** | Use text presets and add built-in backgrounds or shapes from the Elements panel. The selected clip's Animation tab owns entrance/exit presets, timing, direction, easing, intensity, and keyframes. |
 | **Export** | Run local export preflight and render MP4 video or MP3/WAV audio with selectable aspect, resolution, FPS, quality, audio bitrate, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
-| **Recovery and safety** | Autosave, revision checks, backups, recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
+| **Recovery and safety** | Autosave, revision checks, backups, 30-day recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
 
 ## Editor workflow
 
@@ -118,13 +118,13 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 | Area | Status in v0.1.0 |
 | --- | --- |
-| Dashboard, local projects, and project storage | Available locally |
+| Dashboard, project metadata, and project storage | Available locally; cards report the current project-folder size |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
 | Media search, filtering, sorting, list/card views, and derived previews | Available locally |
 | Multi-track timeline editing | Available; still evolving |
 | Canvas, Inspector, motion, text, shapes, and adjustment layers | Available; parity varies by media and effect combination |
 | MP4, MP3, and WAV export | Available through local FFmpeg; output is re-encoded |
-| Autosave, revision checks, backups, and trash recovery | Available locally |
+| Autosave, revision checks, backups, and trash recovery | Available locally; trash defaults to automatic removal after 30 days |
 | English and Turkish interface | Dictionary-based coverage; some legacy labels and copy may still be incomplete |
 | Local CLI and AI-tool automation | Available through the loopback API with exclusive project access leases |
 | Hosted or collaborative editing | Not supported |
