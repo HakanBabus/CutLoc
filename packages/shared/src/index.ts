@@ -578,6 +578,9 @@ export const ShortcutSettingsSchema = z.object({
 });
 export type ShortcutSettings = z.infer<typeof ShortcutSettingsSchema>;
 
+/** Canonical release shortcuts. The application exposes these as read-only. */
+export const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = ShortcutSettingsSchema.parse({});
+
 export const WorkspaceLayoutSchema = z.object({
   railWidth: z.number().min(48).max(96).default(56),
   libraryWidth: z.number().min(210).max(420).default(270),
@@ -739,7 +742,7 @@ export const defaultSettings = (): Settings => SettingsSchema.parse({
   aiProvider: 'openai',
   aiModel: '',
   shortcuts: {},
-  workspaceLayout: { railWidth: 56, libraryWidth: 270, inspectorWidth: 304, timelineHeight: 265 },
+  workspaceLayout: { railWidth: 52, libraryWidth: 232, inspectorWidth: 280, timelineHeight: 238 },
   hasOpenAiKey: false,
   hasGeminiKey: false,
 });
@@ -879,8 +882,21 @@ export function trimClip(project: Project, clipId: string, newStart: number, new
   const frame = 1 / Math.max(1, project.canvas.fps);
   const baseStart = base.start;
   const baseEnd = base.start + base.duration;
+  const canExtendStill = base.type === 'image';
   const start = clamp(Number.isFinite(newStart) ? newStart : baseStart, baseStart, baseEnd - frame);
-  const end = clamp(Number.isFinite(newEnd) ? newEnd : baseEnd, start + frame, baseEnd);
+  const requestedEnd = Number.isFinite(newEnd) ? newEnd : baseEnd;
+  const end = canExtendStill && requestedEnd > baseEnd
+    ? Math.max(start + frame, requestedEnd)
+    : clamp(requestedEnd, start + frame, baseEnd);
+  if (canExtendStill && end > baseEnd) {
+    const next = structuredClone(base);
+    retimeClipMotion(next, end - start);
+    next.sourceStart = base.sourceStart;
+    next.sourceDuration = Math.max(frame, end - start);
+    Object.assign(clip, next, { start, duration: end - start });
+    project.duration = projectDuration(project);
+    return true;
+  }
   const sliced = sliceClipForRange(base, start - baseStart, end - baseStart);
   Object.assign(clip, sliced, { start, duration: Math.max(frame, end - start) });
   project.duration = projectDuration(project);
