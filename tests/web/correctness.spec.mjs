@@ -48,6 +48,12 @@ test('timeline seeking continues from the clicked position during playback and e
   try {
     await page.locator('.primary-button.large').click();
     await expect(page.locator('.editor-shell')).toBeVisible();
+    const inspectorBox = await page.locator('.inspector').boundingBox();
+    const timelineBox = await page.locator('.timeline-pro').boundingBox();
+    expect(inspectorBox).toBeTruthy();
+    expect(timelineBox).toBeTruthy();
+    expect(Math.abs((inspectorBox.y + inspectorBox.height) - (timelineBox.y + timelineBox.height))).toBeLessThanOrEqual(2);
+    expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(inspectorBox.x + 2);
     await page.locator('.project-name-input').fill(fixtureName);
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     const whiteSurface = page.locator('.stock-media-card').filter({ hasText: /White surface|Beyaz yüzey/ });
