@@ -966,21 +966,39 @@ export function rippleDeleteAcrossTimeline(project: Project, clipId: string) {
   return true;
 }
 
-export function snapTime(
-  project: Project,
-  value: number,
-  options: { enabled?: boolean; threshold?: number; currentTime?: number; rangeStart?: number | null; rangeEnd?: number | null } = {},
-) {
-  const safeValue = clamp(value, 0, project.duration);
-  if (options.enabled === false) return safeValue;
+export type SnapTimeOptions = {
+  enabled?: boolean;
+  threshold?: number;
+  currentTime?: number;
+  rangeStart?: number | null;
+  rangeEnd?: number | null;
+  excludeClipIds?: Iterable<string>;
+  excludeMarkerIds?: Iterable<string>;
+  clampToDuration?: boolean;
+  includeProjectEnd?: boolean;
+};
+
+export function snapTimeCandidate(project: Project, value: number, options: SnapTimeOptions = {}) {
+  const safeValue = options.clampToDuration === false ? Math.max(0, value) : clamp(value, 0, project.duration);
+  if (options.enabled === false) return null;
   const threshold = options.threshold ?? 0.08;
-  const clipEdges = project.tracks.flatMap((track) => track.clips.flatMap((clip) => [clip.start, clip.start + clip.duration]));
+  const excludedClipIds = new Set(options.excludeClipIds ?? []);
+  const excludedMarkerIds = new Set(options.excludeMarkerIds ?? []);
+  const clipEdges = project.tracks.flatMap((track) => track.clips.filter((clip) => !excludedClipIds.has(clip.id)).flatMap((clip) => [clip.start, clip.start + clip.duration]));
   const rangeEdges = [options.rangeStart ?? null, options.rangeEnd ?? null].filter((edge): edge is number => edge !== null);
-  const candidates = [0, project.duration, options.currentTime, ...rangeEdges, ...clipEdges, ...project.markers.map((marker) => marker.time)].filter((item): item is number => typeof item === 'number');
+  const projectEdges = options.includeProjectEnd === false ? [0] : [0, project.duration];
+  const candidates = [...projectEdges, options.currentTime, ...rangeEdges, ...clipEdges, ...project.markers.filter((marker) => !excludedMarkerIds.has(marker.id)).map((marker) => marker.time)].filter((item): item is number => typeof item === 'number');
   const nearest = candidates.reduce<number | null>((best, candidate) => {
     if (Math.abs(candidate - safeValue) >= threshold) return best;
     return best === null || Math.abs(candidate - safeValue) < Math.abs(best - safeValue) ? candidate : best;
   }, null);
+  return nearest;
+}
+
+export function snapTime(project: Project, value: number, options: SnapTimeOptions = {}) {
+  const safeValue = options.clampToDuration === false ? Math.max(0, value) : clamp(value, 0, project.duration);
+  if (options.enabled === false) return safeValue;
+  const nearest = snapTimeCandidate(project, safeValue, options);
   return nearest ?? Math.round(safeValue * project.canvas.fps) / project.canvas.fps;
 }
 

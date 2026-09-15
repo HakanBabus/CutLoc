@@ -26,6 +26,7 @@ import {
   shouldMountPreviewMedia,
   speedCurveSegments,
   snapTime,
+  snapTimeCandidate,
   sliceClipForRange,
   splitClipAt,
   timelineDurationForSourceDuration,
@@ -448,6 +449,11 @@ test('snapTime uses clips, markers, range and frame grid', () => {
   assert.equal(snapTime(project, 6.97), 7);
   assert.equal(snapTime(project, 11.2, { enabled: false }), 11.2);
   assert.equal(snapTime(project, 5.013, { currentTime: 5 }), 5);
+  assert.notEqual(snapTime(project, 9.97, { excludeClipIds: ['clip-a'], includeProjectEnd: false }), 10);
+  assert.notEqual(snapTime(project, 11.97, { excludeClipIds: ['clip-b'], includeProjectEnd: false }), 12);
+  assert.equal(snapTime(project, 18.013, { clampToDuration: false, includeProjectEnd: false }), 18);
+  assert.equal(snapTimeCandidate(project, 10.054, { excludeClipIds: ['clip-b'], includeProjectEnd: false }), 10);
+  assert.equal(snapTimeCandidate(project, 10.2, { excludeClipIds: ['clip-b'], includeProjectEnd: false }), null);
 });
 
 test('quantizeFrameTime stays on exact frame boundaries', () => {
