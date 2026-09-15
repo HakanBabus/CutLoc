@@ -420,6 +420,19 @@ test('trimClip uses the same range primitive for a variable-speed pointer bounda
   assert.ok(Math.abs(clip.sourceDuration - (sourceTimeAt(snapshot.speedCurve, snapshot.speed, 8) - sourceTimeAt(snapshot.speedCurve, snapshot.speed, 2))) < 0.000001);
 });
 
+test('trimClip can extend a still image beyond its initial five-second duration', () => {
+  const project = projectWithClips();
+  const clip = project.tracks[0].clips[0];
+  clip.type = 'image';
+  clip.duration = 5;
+  clip.sourceDuration = 5;
+  const snapshot = structuredClone(clip);
+  assert.equal(trimClip(project, clip.id, clip.start, clip.start + 12, snapshot), true);
+  assert.equal(clip.duration, 12);
+  assert.equal(clip.sourceDuration, 12);
+  assert.equal(project.duration >= clip.start + 12, true);
+});
+
 test('rippleDeleteAcrossTimeline closes the gap on unlocked tracks', () => {
   const project = projectWithClips();
   const overlay = project.tracks[1];
