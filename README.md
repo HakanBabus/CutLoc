@@ -23,7 +23,7 @@ Use it directly in the browser, automate it from the terminal, or let an **AI co
 
 The project remains intentionally focused: it is a practical local editing environment, not a hosted production platform.
 
-![CutLoc dashboard](assets/screenshots/cutloc-dashboard.jpg)
+![CutLoc dashboard - full page](assets/screenshots/cutloc-dashboard-full.jpg)
 
 ## Contents
 

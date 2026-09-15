@@ -23,7 +23,7 @@ CutLoc'u doğrudan tarayıcıdan kullanabilir, terminalden otomatikleştirebilir
 
 Proje bilinçli olarak belirli bir alana odaklanır: barındırılan bir prodüksiyon platformu değil, pratik bir yerel kurgu ortamıdır.
 
-![CutLoc kontrol paneli](assets/screenshots/cutloc-dashboard.jpg)
+![CutLoc kontrol paneli - tam sayfa](assets/screenshots/cutloc-dashboard-full.jpg)
 
 ## İçindekiler
 
