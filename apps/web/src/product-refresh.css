@@ -6669,6 +6669,27 @@ body {
   background: color-mix(in srgb, #ff7373 9%, var(--theme-panel-soft));
 }
 
+.app-shell[data-theme] .project-grid {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  align-items: start;
+  gap: 18px;
+}
+
+.app-shell[data-theme] .project-preview,
+.app-shell[data-theme] .project-preview.portrait {
+  aspect-ratio: 16 / 9;
+}
+
+.app-shell[data-theme] .project-preview.portrait {
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--theme-accent-2) 15%, transparent), transparent 48%),
+    var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .project-preview.portrait .project-preview-media {
+  object-fit: contain;
+}
+
 .app-shell[data-theme] .inspector-heading {
   min-height: 34px;
   align-items: center;
