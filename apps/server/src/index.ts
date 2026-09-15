@@ -52,6 +52,8 @@ function boundedNumber(raw: string | undefined, fallback: number, min: number, m
 
 const maxUploadBytes = boundedNumber(process.env.MAX_UPLOAD_BYTES, 1024 * 1024 * 1024, 32 * 1024 * 1024, 20 * 1024 * 1024 * 1024);
 const maxFfmpegRuntimeMs = boundedNumber(process.env.FFMPEG_TIMEOUT_MS, 30 * 60 * 1000, 30 * 1000, 6 * 60 * 60 * 1000);
+const trashRetentionDays = boundedNumber(process.env.TRASH_RETENTION_DAYS, 30, 1, 365);
+const trashRetentionMs = trashRetentionDays * 24 * 60 * 60 * 1000;
 const maxJobHistory = 200;
 const maxSseClients = 32;
 const maxConcurrentJobs = 2;
@@ -1266,17 +1268,29 @@ function trashPath(trashId: string) {
   return safeJoin(path.join(dataDir, 'trash'), trashId);
 }
 
+function trashDeletionTime(trashId: string) {
+  const timestamp = Number(trashId.match(/-(\d+)$/)?.[1]);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 async function listTrash() {
   const trashDir = path.join(dataDir, 'trash');
   if (!fs.existsSync(trashDir)) return [];
   const entries = await fsp.readdir(trashDir, { withFileTypes: true });
-  const result: Array<{ trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; duration: number; assetCount: number }> = [];
+  const result: Array<{ trashId: string; projectId: string; name: string; createdAt: string; updatedAt: string; deletedAt: string; expiresAt: string; duration: number; assetCount: number; sizeBytes: number }> = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[A-Za-z0-9_-]+-\d+$/.test(entry.name)) continue;
     try {
-      const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(path.join(trashPath(entry.name), 'project.json'), 'utf8')));
-      const stat = await fsp.stat(trashPath(entry.name));
-      result.push({ trashId: entry.name, projectId: project.id, name: project.name, createdAt: project.createdAt, updatedAt: project.updatedAt, deletedAt: stat.mtime.toISOString(), duration: project.duration, assetCount: project.assets.length });
+      const deletedTime = trashDeletionTime(entry.name);
+      const expiresTime = deletedTime + trashRetentionMs;
+      const itemPath = trashPath(entry.name);
+      if (expiresTime <= Date.now()) {
+        await fsp.rm(itemPath, { recursive: true, force: true });
+        continue;
+      }
+      const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(path.join(itemPath, 'project.json'), 'utf8')));
+      const sizeBytes = await directorySize(itemPath);
+      result.push({ trashId: entry.name, projectId: project.id, name: project.name, createdAt: project.createdAt, updatedAt: project.updatedAt, deletedAt: new Date(deletedTime).toISOString(), expiresAt: new Date(expiresTime).toISOString(), duration: project.duration, assetCount: project.assets.length, sizeBytes });
     } catch { /* skip incomplete/corrupt trash entries */ }
   }
   return result.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
