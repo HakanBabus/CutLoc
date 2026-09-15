@@ -196,6 +196,8 @@ test('project CRUD and revision conflicts work in an isolated data directory', a
   assert.equal(trashListResponse.statusCode, 200);
   const trashEntry = trashListResponse.json().find((item) => item.projectId === created.id);
   assert.equal(typeof trashEntry?.trashId, 'string');
+  assert.equal(Number.isFinite(trashEntry?.sizeBytes), true);
+  assert.equal(new Date(trashEntry.expiresAt).getTime() > new Date(trashEntry.deletedAt).getTime(), true);
   const restoredFromTrashResponse = await app.inject({ method: 'POST', url: '/api/trash/' + trashEntry.trashId + '/restore' });
   assert.equal(restoredFromTrashResponse.statusCode, 200);
   assert.equal(restoredFromTrashResponse.json().id, created.id);
@@ -287,6 +289,20 @@ test('unknown project duplication returns a safe not-found response', async () =
 test('cross-origin API mutations are rejected', async () => {
   const response = await jsonRequest('POST', '/api/projects', { name: 'blocked' }, { origin: 'https://example.invalid', host: '127.0.0.1:4173' });
   assert.equal(response.statusCode, 403);
+});
+
+test('trash listing permanently removes entries older than the retention window', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Expired trash fixture' })).json();
+  const deleted = (await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` })).json();
+  const currentPath = path.join(dataDir, 'trash', deleted.trashId);
+  const expiredTrashId = `${created.id}-${Date.now() - 31 * 24 * 60 * 60 * 1000}`;
+  const expiredPath = path.join(dataDir, 'trash', expiredTrashId);
+  await fsp.rename(currentPath, expiredPath);
+
+  const response = await app.inject({ method: 'GET', url: '/api/trash' });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().some((item) => item.projectId === created.id), false);
+  await assert.rejects(() => fsp.stat(expiredPath), { code: 'ENOENT' });
 });
 
 test('project creation supports a validated Shorts canvas preset', async () => {
