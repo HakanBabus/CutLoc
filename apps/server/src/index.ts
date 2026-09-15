@@ -15,6 +15,7 @@ import { serverT, type ServerTranslationKey, type ServerTranslationValues } from
 import {
   defaultProject,
   defaultSettings,
+  DEFAULT_SHORTCUT_SETTINGS,
   clamp,
   normalizeTextLineBreaks,
   exportDimensions,
@@ -302,6 +303,7 @@ async function loadSettings() {
     // interface/encoder support existed, while preserving every other setting.
     stored.hardwareAcceleration = 'software';
     stored.experimentalAi = false;
+    stored.shortcuts = DEFAULT_SHORTCUT_SETTINGS;
     settings = SettingsSchema.parse(stored);
   } catch {
     settings = defaultSettings();
@@ -313,6 +315,7 @@ async function saveSettings(next: Partial<Settings> & { openAiKey?: string; gemi
   const safe = SettingsSchema.parse({
     ...settings,
     ...next,
+    shortcuts: DEFAULT_SHORTCUT_SETTINGS,
     experimentalAi: false,
     hasOpenAiKey: false,
     hasGeminiKey: false,
