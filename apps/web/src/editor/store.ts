@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { clamp, enforceLockedTrackInvariants, mergeProjectThreeWay, type Job, type Project, type Settings, type ShortcutSettings, type WorkspaceLayout } from '@cutloc/shared';
+import { clamp, DEFAULT_SHORTCUT_SETTINGS, enforceLockedTrackInvariants, mergeProjectThreeWay, type Job, type Project, type Settings, type ShortcutSettings, type WorkspaceLayout } from '@cutloc/shared';
 import type { TranslationKey } from '../i18n';
 
 export type Theme = 'dark' | 'gray' | 'light';
@@ -15,24 +15,13 @@ export type SaveState = 'saved' | 'saving' | 'error' | 'offline';
 type ExportUiStatus = Job['status'] | 'reconnecting' | 'preflight' | 'saving';
 export type ExportStatus = { jobId?: string; status?: ExportUiStatus; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string };
 
-export const DEFAULT_SHORTCUTS: ShortcutSettings = {
-  togglePlayback: 'Space',
-  undo: 'Ctrl/Cmd+Z',
-  redo: 'Ctrl/Cmd+Shift+Z',
-  split: 'B',
-  setIn: 'I',
-  setOut: 'O',
-  clearRange: 'X',
-  deleteClip: 'Delete',
-  duplicate: 'Ctrl/Cmd+D',
-  selectAll: 'Ctrl/Cmd+A',
-};
+export const DEFAULT_SHORTCUTS: ShortcutSettings = DEFAULT_SHORTCUT_SETTINGS;
 
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
-  railWidth: 56,
-  libraryWidth: 270,
-  inspectorWidth: 304,
-  timelineHeight: 265,
+  railWidth: 52,
+  libraryWidth: 232,
+  inspectorWidth: 280,
+  timelineHeight: 238,
 };
 
 export const SHORTCUT_LABELS: Record<ShortcutAction, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
@@ -115,11 +104,11 @@ function initialTheme(): Theme {
   } catch {
     // Local storage can be unavailable in private or embedded contexts.
   }
-  return 'dark';
+  return 'light';
 }
 
-export function shortcutValue(settings: Settings | null, action: ShortcutAction) {
-  return settings?.shortcuts?.[action] || DEFAULT_SHORTCUTS[action];
+export function shortcutValue(_settings: Settings | null, action: ShortcutAction) {
+  return DEFAULT_SHORTCUTS[action];
 }
 
 export function matchesShortcut(event: KeyboardEvent, binding: string) {
