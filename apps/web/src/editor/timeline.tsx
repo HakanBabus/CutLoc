@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, formatTime, projectDuration, quantizeFrameTime, rippleDeleteAcrossTimeline, snapTime as snapProjectTime, splitClipAt, trimClip, trimClipToPlayhead, type Clip, type Project, type Track } from '@cutloc/shared';
+import { clamp, formatTime, projectDuration, quantizeFrameTime, rippleDeleteAcrossTimeline, snapTime as snapProjectTime, snapTimeCandidate, splitClipAt, trimClip, trimClipToPlayhead, type Clip, type Project, type Track } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { ContextMenu, type ContextMenuItem } from '../components/context-menu';
 import { PromptDialog } from '../components/dialogs';
@@ -81,6 +81,8 @@ export function TimelinePro({ project }: { project: Project }) {
   const selectedClipId = useEditor((state) => state.selectedClipId);
   const selectedClipIds = useEditor((state) => state.selectedClipIds);
   const selectedTrackId = useEditor((state) => state.selectedTrackId);
+  const rangeStart = useEditor((state) => state.rangeStart);
+  const rangeEnd = useEditor((state) => state.rangeEnd);
   const setSelected = useEditor((state) => state.setSelected);
   const toggleSelected = useEditor((state) => state.toggleSelected);
   const mutateProject = useEditor((state) => state.mutateProject);
@@ -183,7 +185,7 @@ export function TimelinePro({ project }: { project: Project }) {
         }
       }
       if (target.closest('.timeline-clip') || target.closest('.playhead')) return;
-      const at = quantizeFrameTime(timeFromClientX(event.clientX), project.canvas.fps, project.duration);
+      const at = snapPlayheadTime(timeFromClientX(event.clientX));
       const button = target.closest<HTMLElement>('.timeline-marker');
       const nearestFromDom = button ? Number.parseFloat(button.style.left) / px : Number.POSITIVE_INFINITY;
       const nearest = button
@@ -215,7 +217,7 @@ export function TimelinePro({ project }: { project: Project }) {
     };
     root.addEventListener('pointerdown', handlePointerDown, true);
     return () => root.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [assetDragId, currentTime, mutateProject, project, px, setCurrentTime, setSelected, snapEnabled]);
+  }, [assetDragId, currentTime, mutateProject, project, px, rangeEnd, rangeStart, setCurrentTime, setSelected, snapEnabled]);
   const maxTime = project.duration > 0 ? Math.max(10, project.duration + Math.max(10, project.duration * 0.5)) : 10;
   const rulerTicks = Array.from({ length: Math.ceil(maxTime) + 1 }, (_, index) => index).filter((tick) => tick % (px < 60 ? 5 : px < 100 ? 2 : 1) === 0);
   const timeFromClientX = (clientX: number) => {
@@ -233,7 +235,33 @@ export function TimelinePro({ project }: { project: Project }) {
     );
   };
   const frameTime = (value: number) => quantizeFrameTime(value, project.canvas.fps, project.duration);
-  const snapTime = (value: number) => snapProjectTime(project, value, { enabled: snapEnabled, currentTime });
+  const snapThreshold = clamp(10 / px, 1 / Math.max(1, project.canvas.fps), 0.25);
+  const snapTime = (value: number, excludeClipIds: Iterable<string> = [], clampToDuration = true, includeProjectEnd = true) => snapProjectTime(project, value, {
+    enabled: snapEnabled,
+    currentTime,
+    rangeStart,
+    rangeEnd,
+    threshold: snapThreshold,
+    excludeClipIds,
+    clampToDuration,
+    includeProjectEnd,
+  });
+  const snapCandidate = (value: number, excludeClipIds: Iterable<string>) => snapTimeCandidate(project, value, {
+    enabled: snapEnabled,
+    currentTime,
+    rangeStart,
+    rangeEnd,
+    threshold: snapThreshold,
+    excludeClipIds,
+    clampToDuration: false,
+    includeProjectEnd: false,
+  });
+  const snapPlayheadTime = (value: number) => snapEnabled
+    ? snapProjectTime(project, value, { threshold: snapThreshold, rangeStart, rangeEnd })
+    : frameTime(value);
+  const snapMarkerTime = (value: number, markerId: string) => snapEnabled
+    ? snapProjectTime(project, value, { threshold: snapThreshold, rangeStart, rangeEnd, excludeMarkerIds: [markerId] })
+    : frameTime(value);
   const addMarker = () => {
     const at = frameTime(currentTime);
     if (project.markers.some((marker) => Math.abs(marker.time - at) < 1 / Math.max(1, project.canvas.fps) / 2)) {
@@ -249,7 +277,7 @@ export function TimelinePro({ project }: { project: Project }) {
     });
   };
   const seek = (event: React.MouseEvent<HTMLElement>) => {
-    setCurrentTime(frameTime(timeFromClientX(event.clientX)));
+    setCurrentTime(snapPlayheadTime(timeFromClientX(event.clientX)));
   };
   const onPointerMove = (event: React.PointerEvent) => {
     if (assetDragId) {
@@ -267,11 +295,11 @@ export function TimelinePro({ project }: { project: Project }) {
     }
     if (!drag) return;
     if (drag.kind === 'playhead') {
-      setCurrentTime(frameTime(timeFromClientX(event.clientX)));
+      setCurrentTime(snapPlayheadTime(timeFromClientX(event.clientX)));
       return;
     }
     if (drag.kind === 'marker') {
-      const at = frameTime(timeFromClientX(event.clientX));
+      const at = snapMarkerTime(timeFromClientX(event.clientX), drag.markerId);
       mutateProject(
         (draft) => {
           const marker = draft.markers.find((item) => item.id === drag.markerId);
@@ -287,8 +315,10 @@ export function TimelinePro({ project }: { project: Project }) {
       const frame = 1 / project.canvas.fps;
       mutateProject(
         (draft) => {
-          const nextStart = drag.kind === 'trimLeft' ? clamp(Math.round((drag.start + delta) / frame) * frame, 0, drag.start + drag.duration - frame) : drag.start;
-          const nextEnd = drag.kind === 'trimRight' ? clamp(Math.round((drag.start + drag.duration + delta) / frame) * frame, drag.start + frame, drag.clipSnapshot.type === 'image' ? maxTime : drag.start + drag.duration) : drag.start + drag.duration;
+          const rawStart = Math.round((drag.start + delta) / frame) * frame;
+          const rawEnd = Math.round((drag.start + drag.duration + delta) / frame) * frame;
+          const nextStart = drag.kind === 'trimLeft' ? clamp(snapTime(rawStart, [drag.clipId], false, false), 0, drag.start + drag.duration - frame) : drag.start;
+          const nextEnd = drag.kind === 'trimRight' ? clamp(snapTime(rawEnd, [drag.clipId], false, false), drag.start + frame, drag.clipSnapshot.type === 'image' ? maxTime : drag.start + drag.duration) : drag.start + drag.duration;
           trimClip(draft, drag.clipId, nextStart, nextEnd, drag.clipSnapshot);
         },
         { historyGroup: drag.historyGroup },
@@ -324,11 +354,32 @@ export function TimelinePro({ project }: { project: Project }) {
         return;
       }
     }
-    const delta = (event.clientX - drag.startX) / px;
+    const rawDelta = (event.clientX - drag.startX) / px;
+    const selected = new Set(drag.kind === 'clip' ? drag.selectedClipIds : []);
+    const movingClips = project.tracks.flatMap((track) => track.clips).filter((clip) => selected.has(clip.id));
+    const originalGroupStart = Math.min(...Object.values(drag.kind === 'clip' ? drag.selectedClipStarts : {}));
+    const originalGroupEnd = Math.max(...movingClips.map((clip) => (drag.kind === 'clip' ? (drag.selectedClipStarts[clip.id] ?? clip.start) : clip.start) + clip.duration));
+    let delta = rawDelta;
+    if (drag.kind === 'clip') {
+      const proposedStart = originalGroupStart + rawDelta;
+      const proposedEnd = originalGroupEnd + rawDelta;
+      const snappedStart = snapCandidate(proposedStart, selected);
+      const snappedEnd = snapCandidate(proposedEnd, selected);
+      const startCorrection = snappedStart === null ? null : snappedStart - proposedStart;
+      const endCorrection = snappedEnd === null ? null : snappedEnd - proposedEnd;
+      if (startCorrection !== null || endCorrection !== null) {
+        const correction = startCorrection === null
+          ? endCorrection!
+          : endCorrection === null || Math.abs(startCorrection) <= Math.abs(endCorrection)
+            ? startCorrection
+            : endCorrection;
+        delta += correction;
+      }
+      delta = Math.max(-originalGroupStart, delta);
+    }
     mutateProject(
       (draft) => {
         if (drag.kind !== 'clip') return;
-        const selected = new Set(drag.selectedClipIds);
         for (const track of draft.tracks) {
           if (track.locked) continue;
           for (const clip of track.clips) {
@@ -1037,6 +1088,7 @@ export function TimelinePro({ project }: { project: Project }) {
                 {item.clips.map((itemClip) => (
                   <div
                     key={itemClip.id}
+                    data-clip-id={itemClip.id}
                     role="button"
                     tabIndex={item.locked ? -1 : 0}
                     aria-pressed={selectedClipIds.includes(itemClip.id)}

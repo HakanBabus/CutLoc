@@ -50,17 +50,45 @@ test('timeline seeking continues from the clicked position during playback and e
     await expect(page.locator('.editor-shell')).toBeVisible();
     await page.locator('.project-name-input').fill(fixtureName);
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
-    await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
+    const whiteSurface = page.locator('.stock-media-card').filter({ hasText: /White surface|Beyaz yüzey/ });
+    await whiteSurface.click();
+    await whiteSurface.click();
+    await expect(page.locator('.timeline-clip')).toHaveCount(2);
 
     const snapToggle = page.locator('.snap-toggle');
+    await expect(snapToggle).toHaveAttribute('aria-pressed', 'true');
     const snapOnIcon = await snapToggle.locator('svg').innerHTML();
+    const clips = page.locator('.timeline-clip');
+    await expect(clips.first()).toHaveAttribute('aria-pressed', 'false');
+    await expect(clips.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    const firstClipWidth = await clips.first().evaluate((element) => Number.parseFloat(element.style.width));
+    const initialSecondClipLeft = await clips.nth(1).evaluate((element) => Number.parseFloat(element.style.left));
+    const dragClipBy = async (clip, deltaX) => {
+      const box = await clip.boundingBox();
+      expect(box).toBeTruthy();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + deltaX, box.y + box.height / 2, { steps: 5 });
+      await page.mouse.up();
+    };
+    await dragClipBy(clips.nth(1), 30);
+    let secondClipLeft = await clips.nth(1).evaluate((element) => Number.parseFloat(element.style.left));
+    expect(secondClipLeft).toBeGreaterThan(initialSecondClipLeft + 15);
+    await dragClipBy(clips.nth(1), firstClipWidth + 5 - secondClipLeft);
+    secondClipLeft = await clips.nth(1).evaluate((element) => Number.parseFloat(element.style.left));
+    expect(secondClipLeft).toBeCloseTo(firstClipWidth, 1);
+
     await snapToggle.click();
     await expect(snapToggle).toHaveAttribute('aria-pressed', 'false');
     expect(await snapToggle.locator('svg').innerHTML()).not.toBe(snapOnIcon);
+    await dragClipBy(clips.nth(1), 5);
+    secondClipLeft = await clips.nth(1).evaluate((element) => Number.parseFloat(element.style.left));
+    expect(secondClipLeft).toBeGreaterThan(firstClipWidth + 2);
     await snapToggle.click();
     await expect(snapToggle).toHaveAttribute('aria-pressed', 'true');
 
     const clip = page.locator('.timeline-clip').first();
+    await clip.click();
     await expect(clip).toHaveAttribute('aria-pressed', 'true');
     const timecode = page.locator('.preview-timecode-display');
     await expect(timecode).toBeVisible();
