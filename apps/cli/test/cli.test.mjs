@@ -168,6 +168,7 @@ test('agent guide is machine-readable and documents the safe full-project workfl
   const guide = JSON.parse(result.stdout);
   assert.equal(guide.protocolVersion, 1);
   assert.equal(guide.transport.boundary, 'loopback-only');
+  assert.equal(guide.transport.baseUrl, baseUrl);
   assert.ok(guide.recommendedWorkflow.some((step) => /projects get/i.test(step)));
   assert.ok(guide.recommendedWorkflow.some((step) => /revision conflict/i.test(step)));
   assert.ok(guide.projectEditing.clipCapabilities.includes('keyframes'));
@@ -272,6 +273,17 @@ test('projects edit reports the operation index and missing trackId before mutat
   assert.equal(requests.some((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/p1'), false);
 });
 
+test('projects edit rejects missing remove targets instead of silently succeeding', async () => {
+  for (const operation of [
+    { op: 'removeTrack', trackId: 'missing-track' },
+    { op: 'removeMarker', markerId: 'missing-marker' },
+  ]) {
+    const result = await runCli(['projects', 'edit', 'p1', '--data', JSON.stringify({ baseRevision: 0, operations: [operation] }), '--dry-run']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /not found for operations\[0\]/i);
+  }
+});
+
 test('media add has a compact default response and can wait for a stable derived revision', async () => {
   const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-media-'));
   try {
@@ -361,6 +373,24 @@ test('session rejects query-string attempts to reach another project', async () 
   assert.match(lines[1].error, /only access its locked project/i);
   assert.equal(requests.some((entry) => entry.url?.startsWith('/api/projects/p2')), false);
   assert.equal(requests.some((entry) => entry.url === '/api/projects/p1/access' && entry.method === 'DELETE'), true);
+});
+
+test('session rejects global API paths outside its locked project', async () => {
+  requests.length = 0;
+  const result = await runCli(['session', 'p1'], '{"method":"GET","path":"/api/settings"}\n');
+  assert.equal(result.code, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(lines[1].ok, false);
+  assert.match(lines[1].error, /only access its locked project/i);
+  assert.equal(requests.some((entry) => entry.url === '/api/settings'), false);
+});
+
+test('generic API paths cannot normalize outside the API boundary', async () => {
+  requests.length = 0;
+  const result = await runCli(['api', 'GET', '/api/../settings']);
+  assert.equal(result.code, 1);
+  assert.match(JSON.parse(result.stderr).error, /must stay on the configured server/i);
+  assert.equal(requests.some((entry) => entry.url === '/settings'), false);
 });
 
 test('generic access routes are not wrapped in a second lease and binary output requires --out', async () => {

@@ -200,7 +200,7 @@ For a selected range, add:
 Render a timeline frame through the same FFmpeg composition path before a full export:
 
 ```powershell
-cutloc preview frame <project-id> --time 12.5 --out frame.png
+npm.cmd run cli -- preview frame <project-id> --time 12.5 --out frame.png
 ```
 
 This is intended for agent visual QA and uses a temporary draft render that is cleaned after the PNG is returned.

@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
+import { createWriteStream, openAsBlob } from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { ProjectSchema, type Clip, type Project, type ProjectAccessLease, type Track } from '@cutloc/shared';
 
 type JsonObject = Record<string, unknown>;
@@ -185,8 +189,28 @@ async function writeJsonFile(fileName: string, value: unknown) {
 }
 
 function apiUrl(apiPath: string) {
-  if (!apiPath.startsWith('/api/')) throw new Error('API paths must start with /api/.');
-  return new URL(apiPath, parsedBaseUrl).toString();
+  const url = new URL(apiPath, parsedBaseUrl);
+  if (url.origin !== parsedBaseUrl.origin || !url.pathname.startsWith('/api/')) throw new Error('API paths must stay on the configured server and start with /api/.');
+  return url.toString();
+}
+
+function liveAgentGuide() {
+  return { ...agentGuide, transport: { ...agentGuide.transport, baseUrl: parsedBaseUrl.origin } };
+}
+
+async function writeResponseFile(response: Response, fileName: string) {
+  if (!response.body) throw new Error('The server returned an empty response body.');
+  const absolute = path.resolve(fileName);
+  const temporary = `${absolute}.cutloc-${process.pid}-${crypto.randomUUID()}.part`;
+  try {
+    await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), createWriteStream(temporary, { flags: 'wx' }));
+    await fsp.rm(absolute, { force: true });
+    await fsp.rename(temporary, absolute);
+    return absolute;
+  } catch (error) {
+    await fsp.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function request(apiPath: string, init: RequestInit = {}, token?: string) {
@@ -270,9 +294,8 @@ function isMutation(method: string) {
 
 async function upload(apiPath: string, filePath: string, token: string) {
   const absolute = path.resolve(filePath);
-  const bytes = await fsp.readFile(absolute);
   const form = new FormData();
-  form.append('file', new Blob([bytes]), path.basename(absolute));
+  form.append('file', await openAsBlob(absolute), path.basename(absolute));
   return (await request(apiPath, { method: 'POST', body: form }, token)).json();
 }
 
@@ -344,7 +367,12 @@ function applyEditPlan(current: Project, input: unknown) {
     if (operation.op === 'setName') project.name = requireArg(operation.name, 'project name');
     else if (operation.op === 'setCanvas') project.canvas = { ...project.canvas, ...operation.canvas };
     else if (operation.op === 'addTrack') project.tracks.push(operation.track);
-    else if (operation.op === 'removeTrack') project.tracks = project.tracks.filter((track) => track.id !== operation.trackId);
+    else if (operation.op === 'removeTrack') {
+      const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
+      const trackIndex = project.tracks.findIndex((track) => track.id === trackId);
+      if (trackIndex < 0) throw new Error(`Track not found for ${operationPath}: ${trackId}`);
+      project.tracks.splice(trackIndex, 1);
+    }
     else if (operation.op === 'addClip') {
       const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
       if (!operation.clip || typeof operation.clip !== 'object') throw new Error(`${operationPath}.clip is required.`);
@@ -369,7 +397,12 @@ function applyEditPlan(current: Project, input: unknown) {
       if (clipIndex < 0) throw new Error(`Clip not found for ${operationPath}: ${trackId}/${clipId}`);
       track.clips.splice(clipIndex, 1);
     } else if (operation.op === 'addMarker') project.markers.push(operation.marker);
-    else if (operation.op === 'removeMarker') project.markers = project.markers.filter((marker) => marker.id !== operation.markerId);
+    else if (operation.op === 'removeMarker') {
+      const markerId = requireArg(operation.markerId, `${operationPath}.markerId`);
+      const markerIndex = project.markers.findIndex((marker) => marker.id === markerId);
+      if (markerIndex < 0) throw new Error(`Marker not found for ${operationPath}: ${markerId}`);
+      project.markers.splice(markerIndex, 1);
+    }
     else throw new Error(`Unsupported edit operation: ${(operation as { op: string }).op}`);
   }
   project.duration = project.tracks.reduce((maximum, track) => track.clips.reduce((trackMaximum, clip) => Math.max(trackMaximum, clip.start + clip.duration), maximum), 0);
@@ -407,7 +440,7 @@ async function runSession(projectId: string) {
         const method = String(operation.method ?? 'GET').toUpperCase();
         const apiPath = requireArg(typeof operation.path === 'string' ? operation.path : undefined, 'session request path');
         const targetProject = projectIdFromPath(apiPath);
-        if (targetProject && targetProject !== projectId) throw new Error('A session may only access its locked project.');
+        if (targetProject !== projectId) throw new Error('A session may only access its locked project.');
         if (isAccessPath(apiPath)) throw new Error('The session manages its own access lease.');
         if (new URL(apiPath, parsedBaseUrl).pathname === '/api/events') throw new Error('SSE streams are not supported in session mode.');
         print({ ok: true, result: await jsonRequest(apiPath, method, operation.body, handle.token) });
@@ -447,8 +480,7 @@ async function main() {
     const execute = async (token?: string) => {
       const response = await request(apiPath, { method, body: body === undefined ? undefined : JSON.stringify(body) }, token);
       if (out) {
-        const absolute = path.resolve(out);
-        await fsp.writeFile(absolute, new Uint8Array(await response.arrayBuffer()));
+        const absolute = await writeResponseFile(response, out);
         return { ok: true, file: absolute };
       }
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('This endpoint returns binary data; use --out or a dedicated CLI command.');
@@ -462,7 +494,7 @@ async function main() {
   if (group === 'agent') {
     if (action === 'guide') {
       ensureNoArgs(args);
-      return print(agentGuide);
+      return print(liveAgentGuide());
     }
     if (action === 'inspect') {
       const full = takeBooleanFlag(args, '--full');
@@ -496,7 +528,7 @@ async function main() {
       const relevantJobs = projectId ? jobList.filter((job) => job.projectId === projectId) : jobList.slice(0, limit);
       return print({
         ok: true,
-        ...(!noGuide ? { guide: agentGuide } : {}),
+        ...(!noGuide ? { guide: liveAgentGuide() } : {}),
         live: {
           server,
           settings,
@@ -573,19 +605,17 @@ async function main() {
       if (!out) throw new Error('projects bundle requires --out.');
       ensureNoArgs(args);
       const response = await request(`/api/projects/${encodeURIComponent(projectId)}/bundle`);
-      const absolute = path.resolve(out);
-      await fsp.writeFile(absolute, new Uint8Array(await response.arrayBuffer()));
+      const absolute = await writeResponseFile(response, out);
       return print({ ok: true, file: absolute });
     }
     if (action === 'import') {
       const file = path.resolve(requireArg(args.shift(), 'project bundle file'));
       ensureNoArgs(args);
-      const bytes = await fsp.readFile(file);
       const isJson = file.toLocaleLowerCase().endsWith('.json');
       const response = await request('/api/projects/import', {
         method: 'POST',
         headers: { 'content-type': isJson ? 'application/json' : 'application/zip' },
-        body: isJson ? bytes.toString('utf8') : bytes,
+        body: isJson ? await fsp.readFile(file, 'utf8') : await openAsBlob(file),
       });
       return print(await response.json());
     }
@@ -662,7 +692,7 @@ async function main() {
       ensureNoArgs(args);
       const response = await request(`/api/jobs/${jobId}/download`);
       const absolute = path.resolve(out);
-      await fsp.writeFile(absolute, new Uint8Array(await response.arrayBuffer()));
+      await writeResponseFile(response, absolute);
       return print({ ok: true, file: absolute });
     }
   }
@@ -676,7 +706,7 @@ async function main() {
     ensureNoArgs(args);
     const response = await request(`/api/projects/${encodeURIComponent(projectId)}/preview-frame?time=${encodeURIComponent(String(time))}`);
     const absolute = path.resolve(out);
-    await fsp.writeFile(absolute, new Uint8Array(await response.arrayBuffer()));
+    await writeResponseFile(response, absolute);
     return print({ ok: true, projectId, time, file: absolute });
   }
 
