@@ -6,6 +6,7 @@ CutLoc is local-only software. It is designed to run on the user's own computer 
 
 | Version | Supported |
 | --- | --- |
+| `1.1.x` | Yes |
 | `1.0.x` | Yes |
 | Pre-1.0 beta snapshots | No guaranteed fixes |
 

@@ -8,14 +8,14 @@
   <p><strong>A local-first video editor for creative work.</strong></p>
 
   [![Stable](https://img.shields.io/badge/status-stable-35c48d)](#project-status)
-  [![Version](https://img.shields.io/badge/version-1.0.0-7c8cff)](#project-status)
+  [![Version](https://img.shields.io/badge/version-1.1.0-7c8cff)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
 > [!IMPORTANT]
-> **CutLoc v1.0.0 is the first stable source release.** Its local editing, recovery, CLI, and export workflows pass the complete release gate. CutLoc remains a local creative tool rather than a media sandbox, so keep independent backups of important projects and source media.
+> **CutLoc v1.1.0 keeps the source distribution while removing repeat setup from daily use.** After one user setup, `cutloc` works from any directory, starts the shared local server when needed, and stores runtime data outside the checkout.
 
 CutLoc is a single-user video editor that runs on your own computer. It combines a media library, multi-track timeline, live canvas, clip **Inspector**, project recovery, and local FFmpeg export in one browser-based workspace.
 
@@ -32,7 +32,7 @@ The project remains intentionally focused: it is a practical local editing envir
 - [Feature map](#feature-map)
 - [Editor workflow](#editor-workflow)
 - [Project status](#project-status)
-- [v1.0.0 release](#v100-release)
+- [v1.1.0](#v110)
 - [Technology](#technology)
 - [Quick start](#quick-start)
 - [CLI and automation](#cli-and-automation)
@@ -69,10 +69,10 @@ An AI agent can inspect a project, add or relink media, edit tracks and clips, c
 
 ```powershell
 # Machine-readable capability and safety guide
-npm.cmd run --silent cli:agent -- agent guide
+cutloc agent guide
 
 # Live server, project, media-health, backup, and job context
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
+cutloc agent inspect <project-id>
 ```
 
 Every successful command above is a single compact JSON value on `stdout`; failures are JSON on `stderr`. This makes the interface predictable for tool-using agents and shell automation.
@@ -93,7 +93,7 @@ Every successful command above is a single compact JSON value on `stdout`; failu
 
 ### 1. Create a local project
 
-From the dashboard, create a blank project or continue a draft. Runtime files live under the local `data/` directory by default.
+From the dashboard, create a blank project or continue a draft. On Windows, runtime files live under `%LOCALAPPDATA%\CutLoc\data` by default.
 
 ### 2. Add and organize media
 
@@ -115,9 +115,9 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 ## Project status
 
-**Current version: `1.0.0` — stable.** Treat this table as the supported behavior of the tagged source release, subject to the documented local-only boundary and known limitations.
+**Current development version: `1.1.0`.** It preserves the v1 project format while adding a user-level command, shared runtime discovery, and automatic local-server startup.
 
-| Area | Status in v1.0.0 |
+| Area | Status in v1.1.0 |
 | --- | --- |
 | Dashboard, project metadata, and project storage | Available locally; cards report the current project-folder size |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
@@ -133,17 +133,19 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 The exact import/export boundaries and development contracts are maintained as internal engineering notes; they are intentionally not reproduced in this public README.
 
-## v1.0.0 release
+## v1.1.0
 
-CutLoc v1.0.0 establishes the first supported local source release:
+CutLoc v1.1.0 builds on the first stable source release:
 
 - Preview and FFmpeg export use the same canvas-space positioning when output resolution changes.
 - The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
 - Fullscreen preview retains its timecode, duration, transport controls, and framing tools.
-- The JSON-first CLI supports revision-aware edit plans, project leases, media workflows, recovery, preview-frame capture, and export automation.
+- A one-time `setup:user` command registers `cutloc` on the user PATH; `cutloc open` starts or reuses the shared server and opens the browser editor.
+- `cutloc status --json` and `cutloc doctor --json` expose machine-readable runtime, version, storage, tool, and compatibility checks.
+- The JSON-first CLI retains revision-aware edit plans, project leases, media workflows, recovery, preview-frame capture, and export automation.
 - Project storage boundaries, request budgets, autosave merging, backups, recoverable trash, and partial-export cleanup are covered by automated tests.
 
-Upgrading from a beta checkout does not require a project migration: v1.0.0 continues to use `schemaVersion: 1`. Run `npm.cmd ci` after pulling the tag so the installed dependencies exactly match the release lockfile. Back up important local projects before changing application versions.
+The project format remains on `schemaVersion: 1`. During `setup:user`, an existing checkout-local `data/` directory is copied to the new user data directory only when that destination is empty; the legacy copy is retained.
 
 ## Technology
 
@@ -172,7 +174,16 @@ git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
 npm.cmd ci
 npm.cmd run doctor
+npm.cmd run setup:user
 ```
+
+Open a new terminal after the first setup, then start CutLoc from any directory:
+
+```powershell
+cutloc open
+```
+
+`setup:user` builds CutLoc, creates a user-level command shim, adds `%LOCALAPPDATA%\CutLoc\bin` to the user PATH, and prepares user storage. It does not install an EXE or desktop application.
 
 ### Run in development mode
 
@@ -201,27 +212,29 @@ The local server started by `npm run dev` and `npm start` loads the optional roo
 
 ## CLI and automation
 
-CutLoc includes a JSON-first CLI for managing existing projects, applying complete project edits, importing media, restoring backups, starting exports, and accessing supported JSON API routes. It talks to the same local Fastify API as the browser editor; it does not edit `data/projects/.../project.json` directly.
+CutLoc includes a JSON-first CLI for managing existing projects, applying complete project edits, importing media, restoring backups, starting exports, and accessing supported JSON API routes. It talks to the same local Fastify API as the browser editor; it never edits managed project files directly.
 
-Start the server first, then inspect the command surface:
+After `setup:user`, inspect the command surface from any directory. Live commands start the shared server automatically; `status` is read-only and never starts it:
 
 ```powershell
-npm.cmd run dev:server
-npm.cmd run cli -- --help
+cutloc --help
+cutloc status --json
+cutloc doctor --json
 ```
 
 For an AI agent or another JSON consumer, start with the machine-readable guide and live inspection commands. The `cli:agent` script suppresses npm lifecycle chatter and enables compact JSON automatically:
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent guide
-npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
+cutloc agent guide
+cutloc agent inspect --no-guide --limit 20
+cutloc agent inspect <project-id>
 ```
 
 For many calls, build once and invoke the executable directly to avoid rebuilding on every command:
 
 ```powershell
 npm.cmd run build:shared
+npm.cmd run build:runtime
 npm.cmd run build:cli
 node apps/cli/dist/index.js --compact agent inspect <project-id>
 ```
@@ -229,15 +242,15 @@ node apps/cli/dist/index.js --compact agent inspect <project-id>
 The overview form of `agent inspect` is compact and paginated by default. Use
 `--cursor`, `--limit`, `--no-guide`, or `--full` to control its payload.
 
-The default CLI URL is `http://127.0.0.1:4173`. Use `--url` or `CUTLOC_URL` for another loopback URL; the CLI rejects non-loopback hosts.
+The user CLI discovers the current loopback API from `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. If no live instance exists, live commands start one on an available port. Development tools can still use `--url`, `CUTLOC_URL`, `HOST`, and `PORT`; non-loopback hosts are rejected.
 
 ### AI-tool project editing
 
 An AI tool can fetch the current project JSON, edit it locally, and apply it while preserving the server's **revision** value:
 
 ```powershell
-npm.cmd run cli -- projects get <project-id> --out project.json
-npm.cmd run cli -- projects apply <project-id> --file project.json
+cutloc projects get <project-id> --out project.json
+cutloc projects apply <project-id> --file project.json
 ```
 
 The server validates the complete document with the shared **ProjectSchema**. If another client changed the project first, the apply returns a conflict instead of silently overwriting that work.
@@ -245,22 +258,22 @@ The server validates the complete document with the shared **ProjectSchema**. If
 For safer agent-authored timeline changes, prefer a revision-aware edit plan:
 
 ```powershell
-npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json --dry-run
-npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json
+cutloc projects edit <project-id> --file edit-plan.json --dry-run
+cutloc projects edit <project-id> --file edit-plan.json
 ```
 
 Short-form projects can start with the correct canvas immediately:
 
 ```powershell
-npm.cmd run --silent cli:agent -- projects create "Short demo" --preset shorts
-npm.cmd run --silent cli:agent -- media add-many <project-id> scene-01.png voice.mp3 --wait
-npm.cmd run --silent cli:agent -- jobs wait <job-id> --timeout 300
+cutloc projects create "Short demo" --preset shorts
+cutloc media add-many <project-id> scene-01.png voice.mp3 --wait
+cutloc jobs wait <job-id> --timeout 300
 ```
 
 For a sequence of JSON operations, use a persistent session:
 
 ```powershell
-npm.cmd run cli -- session <project-id>
+cutloc session <project-id>
 ```
 
 The session reads one JSON request per stdin line and writes one JSON result per line:
@@ -274,6 +287,7 @@ Project-changing commands acquire an exclusive, short-lived project lease. If th
 
 | Area | Commands |
 | --- | --- |
+| Runtime | `open`, `status --json`, and `doctor --json` |
 | Agent discovery | `agent guide` and compact/paginated `agent inspect [project-id]` |
 | Projects | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
 | Media | `media add/add-many/remove/relink/rebuild/health/stock` |
@@ -286,24 +300,29 @@ Use dedicated media and project-bundle commands for uploads and binary files. Th
 
 ## Local data and configuration
 
-By default, runtime files are written to the ignored `data/` directory:
+By default, Windows runtime files are written outside the checkout:
 
 ```text
-data/
-├── projects/
-│   └── <project-id>/
-│       ├── project.json
-│       ├── media/
-│       ├── proxies/
-│       ├── thumbnails/
-│       ├── waveforms/
-│       ├── backups/
-│       └── exports/
-├── trash/
-└── settings.json
+%LOCALAPPDATA%\CutLoc\
+├── bin\
+├── logs\
+├── runtime\
+├── temp\
+└── data\
+    ├── projects/
+    │   └── <project-id>/
+    │       ├── project.json
+    │       ├── media/
+    │       ├── proxies/
+    │       ├── thumbnails/
+    │       ├── waveforms/
+    │       ├── backups/
+    │       └── exports/
+    ├── trash/
+    └── settings.json
 ```
 
-Set `DATA_DIR` in a local `.env` file to move this runtime directory. The repository includes an [`.env.example`](.env.example) with the supported local configuration names. Never commit `.env`, API keys, project media, exports, or the `data/` directory.
+`CUTLOC_HOME` overrides the complete user-runtime root for isolated testing. `DATA_DIR` overrides only project/settings storage. The repository includes an [`.env.example`](.env.example) with development overrides. Never commit `.env`, API keys, project media, exports, or runtime data.
 
 ## Verification
 
@@ -311,7 +330,7 @@ Run the focused checks while developing, or use the full baseline before opening
 
 | Check | Command | Covers |
 | --- | --- | --- |
-| Build | `npm run build` | Shared package, web client, server, and CLI builds |
+| Build | `npm run build` | Shared/runtime packages, web client, server, and CLI builds |
 | Shared contract tests | `npm run test:shared` | Zod models, defaults, timeline helpers, and export dimensions |
 | Server integration tests | `npm run test:server` | Local API, project/media/recovery flows, leases, FFmpeg jobs, and export |
 | CLI integration tests | `npm run test:cli` | CLI executable, JSON output, argument validation, sessions, and API routing |
@@ -351,7 +370,7 @@ GitHub CI runs the equivalent sequence on Linux and Windows: locked install, pre
 
 ## Contributing
 
-CutLoc v1.0.0 is the current stable local release. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
+CutLoc v1.1.0 is the current source-distribution development line. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
 
 Keep changes reviewable by working on a feature branch and opening a pull request:
 

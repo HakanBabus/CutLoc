@@ -1,6 +1,6 @@
 # CutLoc product and development guide
 
-This document describes the public behavior of the **CutLoc 1.0.0 stable source release**: how the local application is structured, what the editor supports, where it stores data, how exports work, and how to verify a change.
+This document describes the public behavior of **CutLoc 1.1.0**: how the local application is structured, what the editor supports, where it stores data, how its shared runtime is discovered, and how to verify a change.
 
 For terminal automation and AI-agent workflows, see the [CLI and AI-agent guide](CLI.md).
 
@@ -12,13 +12,13 @@ CutLoc does not provide hosted storage, remote rendering, real-time collaboratio
 
 The server binds to a loopback address by default. Do not expose it through a public interface, tunnel, or reverse proxy.
 
-## v1.0.0 compatibility
+## v1.1.0 compatibility
 
 - Project files remain on `schemaVersion: 1`; existing validated beta projects require no migration.
 - The supported source runtime is Node.js 24.x with npm 11.x and the committed lockfile.
 - Windows 10/11 is the primary local target. CI also verifies the build and browser suite on Linux.
 - Preview/export geometry is resolution-aware: canvas-space position, scale, animation offsets, and text metrics are mapped to the selected export dimensions.
-- CutLoc remains loopback-only and single-user. v1.0.0 does not introduce a hosted service, public API deployment, or collaboration protocol.
+- CutLoc remains loopback-only and single-user. v1.1.0 does not introduce an installer, desktop shell, hosted service, public API deployment, or collaboration protocol.
 
 ## System overview
 
@@ -79,7 +79,7 @@ Important invariants include:
 - Timeline duration is derived from its clips.
 - A mutation uses the latest project `revision`; stale writes receive a conflict instead of replacing newer work.
 
-Do not edit `data/projects/<id>/project.json` directly. Use the web editor or CLI so validation, revision checks, backups, and cleanup remain active.
+Do not edit `%LOCALAPPDATA%\CutLoc\data\projects\<id>\project.json` directly. Use the web editor or CLI so validation, revision checks, backups, and cleanup remain active.
 
 ## Installation and local operation
 
@@ -98,7 +98,13 @@ git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
 npm.cmd ci
 npm.cmd run doctor
-npm.cmd run dev
+npm.cmd run setup:user
+```
+
+Open a new terminal, then start or reuse the shared runtime:
+
+```powershell
+cutloc open
 ```
 
 Development services:
@@ -106,31 +112,30 @@ Development services:
 - Web editor: `http://127.0.0.1:5173`
 - Local API: `http://127.0.0.1:4173`
 
-For a production-style local build:
+For development, the existing source commands remain available:
 
 ```powershell
+npm.cmd run dev
 npm.cmd start
 ```
 
-`npm start` builds every workspace and serves the built application from the local server. On Windows it opens the local URL unless `NO_OPEN=1` is set.
+`npm start` builds every workspace and serves the built application from the local server. `cutloc open` uses the already-built output registered by `setup:user`, starts it silently on an available loopback port, and opens the browser.
 
 ## Local data and configuration
 
-The default runtime structure is:
+The default Windows runtime structure is:
 
 ```text
-data/
-├── projects/
-│   └── <project-id>/
-│       ├── project.json
-│       ├── media/
-│       ├── proxies/
-│       ├── thumbnails/
-│       ├── waveforms/
-│       ├── backups/
-│       └── exports/
-├── trash/
-└── settings.json
+%LOCALAPPDATA%\CutLoc\
+├── bin\cutloc.cmd
+├── install.json
+├── runtime\instance.json
+├── logs\
+├── temp\
+└── data\
+    ├── projects\<project-id>\
+    ├── trash\
+    └── settings.json
 ```
 
 Supported root `.env` values are documented in `.env.example`:
@@ -141,13 +146,14 @@ Supported root `.env` values are documented in `.env.example`:
 | `PORT` | Local API port |
 | `WEB_PORT` | Vite development UI port; defaults to `5173` |
 | `DATA_DIR` | Runtime project and settings directory |
+| `CUTLOC_HOME` | Complete CutLoc user-runtime root; primarily used by isolated tests |
 | `TRASH_RETENTION_DAYS` | Days deleted projects remain recoverable; defaults to `30` |
 | `MAX_UPLOAD_BYTES` | Per-upload byte limit |
 | `FFMPEG_TIMEOUT_MS` | Maximum FFmpeg job runtime |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | Optional binary overrides |
 | `NO_OPEN` | Prevent automatic browser opening when set to `1` |
 
-Never commit `.env`, `data/`, imported media, backups, or exports.
+Never commit `.env`, user-runtime data, imported media, backups, or exports.
 
 ## Media behavior
 

@@ -8,14 +8,14 @@
   <p><strong>Yaratıcı çalışmalar için yerel öncelikli bir video editörü.</strong></p>
 
   [![Kararlı](https://img.shields.io/badge/durum-kararlı-35c48d)](#proje-durumu)
-  [![Sürüm](https://img.shields.io/badge/sürüm-1.0.0-7c8cff)](#proje-durumu)
+  [![Sürüm](https://img.shields.io/badge/sürüm-1.1.0-7c8cff)](#proje-durumu)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
 > [!IMPORTANT]
-> **CutLoc v1.0.0 ilk kararlı kaynak kod sürümüdür.** Yerel kurgu, kurtarma, CLI ve dışa aktarma akışları tam release kapısından geçmiştir. CutLoc bir medya sandbox'ı değil, yerel bir yaratıcı çalışma aracıdır; önemli projelerinizin ve kaynak medyanızın bağımsız yedeklerini tutun.
+> **CutLoc v1.1.0 kaynak dağıtımını korurken günlük kullanımdaki tekrar kurulumu kaldırır.** Tek seferlik kullanıcı kurulumundan sonra `cutloc` her klasörden çalışır, gerektiğinde ortak yerel sunucuyu başlatır ve çalışma verilerini checkout dışında tutar.
 
 CutLoc, kendi bilgisayarınızda çalışan tek kullanıcılı bir video editörüdür. Medya kitaplığı, çok kanallı zaman çizelgesi, canlı tuval, klip **Denetçisi**, proje kurtarma ve yerel FFmpeg dışa aktarma özelliklerini tarayıcı tabanlı tek çalışma alanında birleştirir.
 
@@ -32,7 +32,7 @@ Proje bilinçli olarak belirli bir alana odaklanır: barındırılan bir prodük
 - [Özellik haritası](#özellik-haritası)
 - [Editör iş akışı](#editör-iş-akışı)
 - [Proje durumu](#proje-durumu)
-- [v1.0.0 sürümü](#v100-sürümü)
+- [v1.1.0](#v110)
 - [Teknolojiler](#teknolojiler)
 - [Hızlı başlangıç](#hızlı-başlangıç)
 - [CLI ve otomasyon](#cli-ve-otomasyon)
@@ -69,10 +69,10 @@ Bir yapay zekâ ajanı projeyi inceleyebilir; medya ekleyebilir veya yeniden ba�
 
 ```powershell
 # Makinece okunabilir yetenek ve güvenlik rehberi
-npm.cmd run --silent cli:agent -- agent guide
+cutloc agent guide
 
 # Canlı sunucu, proje, medya sağlığı, yedek ve iş bağlamı
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
+cutloc agent inspect <project-id>
 ```
 
 Yukarıdaki her başarılı komut `stdout` üzerinde tek ve kompakt bir JSON değeri döndürür; hatalar `stderr` üzerinde JSON olarak yazılır. Bu davranış, aracı kullanan ajanlar ve kabuk otomasyonları için öngörülebilir bir arayüz sağlar.
@@ -93,7 +93,7 @@ Yukarıdaki her başarılı komut `stdout` üzerinde tek ve kompakt bir JSON de�
 
 ### 1. Yerel proje oluşturun
 
-Kontrol panelinden boş bir proje oluşturun veya taslağa devam edin. Çalışma zamanı dosyaları varsayılan olarak yerel `data/` klasöründe tutulur.
+Kontrol panelinden boş bir proje oluşturun veya taslağa devam edin. Windows'ta çalışma zamanı dosyaları varsayılan olarak `%LOCALAPPDATA%\CutLoc\data` altında tutulur.
 
 ### 2. Medya ekleyin ve düzenleyin
 
@@ -115,9 +115,9 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 ## Proje durumu
 
-**Güncel sürüm: `1.0.0` — kararlı.** Bu tabloyu belgelenmiş yerel çalışma sınırı ve bilinen kısıtlarla birlikte etiketli kaynak kod sürümünün desteklenen davranışı olarak değerlendirin.
+**Güncel geliştirme sürümü: `1.1.0`.** V1 proje biçimini korurken kullanıcı seviyesinde komut, ortak runtime keşfi ve otomatik yerel sunucu başlangıcı ekler.
 
-| Alan | v1.0.0 durumu |
+| Alan | v1.1.0 durumu |
 | --- | --- |
 | Kontrol paneli, proje bilgileri ve proje depolama | Kullanılabilir; kartlar güncel proje klasörü boyutunu gösterir |
 | Video, ses ve görsel içe aktarma | Kullanılabilir; codec desteği kurulu FFmpeg yapısına bağlıdır |
@@ -133,17 +133,19 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili mühendislik notlarında tutulur; bu genel README'de tekrarlanmaz.
 
-## v1.0.0 sürümü
+## v1.1.0
 
-CutLoc v1.0.0 ilk desteklenen yerel kaynak kod sürümünü oluşturur:
+CutLoc v1.1.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
 
 - Çıktı çözünürlüğü değiştiğinde önizleme ve FFmpeg dışa aktarma aynı tuval koordinatlarını kullanır.
 - Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
 - Tam ekran önizlemede timecode, toplam süre, oynatma kontrolleri ve kadraj araçları görünür kalır.
-- JSON öncelikli CLI; revizyon duyarlı düzenleme planlarını, proje kilitlerini, medya akışlarını, kurtarmayı, önizleme karesi almayı ve dışa aktarma otomasyonunu destekler.
+- Tek seferlik `setup:user`, `cutloc` komutunu kullanıcı PATH'ine kaydeder; `cutloc open` ortak sunucuyu başlatır veya yeniden kullanır ve tarayıcı editörünü açar.
+- `cutloc status --json` ve `cutloc doctor --json`, makinece okunabilir runtime, sürüm, depolama, araç ve uyumluluk kontrolleri sunar.
+- JSON öncelikli CLI; revizyon duyarlı düzenleme planlarını, proje kilitlerini, medya akışlarını, kurtarmayı, önizleme karesi almayı ve dışa aktarma otomasyonunu korur.
 - Proje depolama sınırları, istek bütçeleri, otomatik kayıt birleştirmesi, yedekler, kurtarılabilir çöp ve kısmi çıktı temizliği otomatik testlerle korunur.
 
-Beta checkout'undan yükseltme proje migrasyonu gerektirmez: v1.0.0, `schemaVersion: 1` kullanmaya devam eder. Tag'i çektikten sonra kurulu bağımlılıkları release kilit dosyasıyla eşitlemek için `npm.cmd ci` çalıştırın. Uygulama sürümünü değiştirmeden önce önemli yerel projeleri yedekleyin.
+Proje biçimi `schemaVersion: 1` olarak kalır. `setup:user`, checkout içindeki eski `data/` klasörünü yalnızca yeni kullanıcı veri hedefi boşsa kopyalar; eski kopyayı silmez.
 
 ## Teknolojiler
 
@@ -172,7 +174,16 @@ git clone https://github.com/HakanBabus/cutloc.git
 cd cutloc
 npm.cmd ci
 npm.cmd run doctor
+npm.cmd run setup:user
 ```
+
+İlk kurulumdan sonra yeni bir terminal açın ve CutLoc'u herhangi bir klasörden başlatın:
+
+```powershell
+cutloc open
+```
+
+`setup:user`; CutLoc'u derler, kullanıcı seviyesinde komut yönlendiricisi oluşturur, `%LOCALAPPDATA%\CutLoc\bin` klasörünü kullanıcı PATH'ine ekler ve kullanıcı depolamasını hazırlar. EXE veya masaüstü uygulaması kurmaz.
 
 ### Geliştirme modunda çalıştırma
 
@@ -201,42 +212,44 @@ Bu komut tüm çalışma alanlarını derler ve yerel sunucuyu `http://127.0.0.1
 
 ## CLI ve otomasyon
 
-CutLoc; mevcut projeleri yönetmek, eksiksiz proje düzenlemeleri uygulamak, medya içe aktarmak, yedekleri geri yüklemek, çıktıları başlatmak ve desteklenen JSON API rotalarına erişmek için JSON öncelikli bir CLI içerir. Tarayıcı editörüyle aynı yerel Fastify API'yi kullanır; `data/projects/.../project.json` dosyasını doğrudan değiştirmez.
+CutLoc; mevcut projeleri yönetmek, eksiksiz proje düzenlemeleri uygulamak, medya içe aktarmak, yedekleri geri yüklemek, çıktıları başlatmak ve desteklenen JSON API rotalarına erişmek için JSON öncelikli bir CLI içerir. Tarayıcı editörüyle aynı yerel Fastify API'yi kullanır; yönetilen proje dosyalarını doğrudan değiştirmez.
 
-Önce sunucuyu başlatın, ardından komut yüzeyini inceleyin:
+`setup:user` sonrasında komut yüzeyini herhangi bir klasörden inceleyin. Canlı komutlar ortak sunucuyu gerektiğinde otomatik başlatır; `status` salt okunurdur ve sunucuyu başlatmaz:
 
 ```powershell
-npm.cmd run dev:server
-npm.cmd run cli -- --help
+cutloc --help
+cutloc status --json
+cutloc doctor --json
 ```
 
 Bir yapay zekâ ajanı veya başka bir JSON tüketicisi için makinece okunabilir rehber ve canlı inceleme komutlarıyla başlayın. `cli:agent` betiği npm yaşam döngüsü çıktısını susturur ve kompakt JSON'u otomatik etkinleştirir:
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent guide
-npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
+cutloc agent guide
+cutloc agent inspect --no-guide --limit 20
+cutloc agent inspect <project-id>
 ```
 
 Çok sayıda çağrı için her komutta yeniden derleme yapmak yerine bir kez derleyip yürütülebilir dosyayı doğrudan çağırın:
 
 ```powershell
 npm.cmd run build:shared
+npm.cmd run build:runtime
 npm.cmd run build:cli
 node apps/cli/dist/index.js --compact agent inspect <project-id>
 ```
 
 `agent inspect` genel görünümü varsayılan olarak kompakt ve sayfalanmıştır. Dönen veriyi yönetmek için `--cursor`, `--limit`, `--no-guide` veya `--full` kullanın.
 
-Varsayılan CLI adresi `http://127.0.0.1:4173` değeridir. Başka bir loopback adresi için `--url` veya `CUTLOC_URL` kullanın; CLI loopback dışı sunucuları reddeder.
+Kullanıcı CLI'ı güncel loopback API'yi `%LOCALAPPDATA%\CutLoc\runtime\instance.json` üzerinden keşfeder. Canlı instance yoksa canlı komutlar boş bir portta yeni instance başlatır. Geliştirme araçları `--url`, `CUTLOC_URL`, `HOST` ve `PORT` kullanmaya devam edebilir; CLI loopback dışı sunucuları reddeder.
 
 ### Yapay zekâ aracıyla proje düzenleme
 
 Bir yapay zekâ aracı güncel proje JSON'unu alabilir, yerelde düzenleyebilir ve sunucunun **revision** değerini koruyarak uygulayabilir:
 
 ```powershell
-npm.cmd run cli -- projects get <project-id> --out project.json
-npm.cmd run cli -- projects apply <project-id> --file project.json
+cutloc projects get <project-id> --out project.json
+cutloc projects apply <project-id> --file project.json
 ```
 
 Sunucu belgenin tamamını ortak **ProjectSchema** ile doğrular. Bu sırada başka bir istemci projeyi değiştirdiyse uygulama sessizce üzerine yazmak yerine çakışma döndürür.
@@ -244,22 +257,22 @@ Sunucu belgenin tamamını ortak **ProjectSchema** ile doğrular. Bu sırada ba�
 Ajan tarafından hazırlanan zaman çizelgesi değişikliklerinde revizyon duyarlı düzenleme planını tercih edin:
 
 ```powershell
-npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json --dry-run
-npm.cmd run --silent cli:agent -- projects edit <project-id> --file edit-plan.json
+cutloc projects edit <project-id> --file edit-plan.json --dry-run
+cutloc projects edit <project-id> --file edit-plan.json
 ```
 
 Kısa video projelerini doğru tuvalle doğrudan başlatabilirsiniz:
 
 ```powershell
-npm.cmd run --silent cli:agent -- projects create "Kısa demo" --preset shorts
-npm.cmd run --silent cli:agent -- media add-many <project-id> scene-01.png voice.mp3 --wait
-npm.cmd run --silent cli:agent -- jobs wait <job-id> --timeout 300
+cutloc projects create "Kısa demo" --preset shorts
+cutloc media add-many <project-id> scene-01.png voice.mp3 --wait
+cutloc jobs wait <job-id> --timeout 300
 ```
 
 Bir JSON işlem dizisi için kalıcı oturum kullanın:
 
 ```powershell
-npm.cmd run cli -- session <project-id>
+cutloc session <project-id>
 ```
 
 Oturum stdin üzerinden satır başına bir JSON isteği okur ve satır başına bir JSON sonucu yazar:
@@ -273,6 +286,7 @@ Projeyi değiştiren komutlar kısa ömürlü ve özel bir proje kilidi alır. P
 
 | Alan | Komutlar |
 | --- | --- |
+| Runtime | `open`, `status --json` ve `doctor --json` |
 | Ajan keşfi | `agent guide` ve kompakt/sayfalanmış `agent inspect [project-id]` |
 | Projeler | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
 | Medya | `media add/add-many/remove/relink/rebuild/health/stock` |
@@ -285,24 +299,29 @@ Yüklemeler ve ikili dosyalar için özel medya ve proje paketi komutlarını ku
 
 ## Yerel veri ve yapılandırma
 
-Çalışma zamanı dosyaları varsayılan olarak Git tarafından yok sayılan `data/` klasörüne yazılır:
+Windows çalışma zamanı dosyaları varsayılan olarak checkout dışında tutulur:
 
 ```text
-data/
-├── projects/
-│   └── <project-id>/
-│       ├── project.json
-│       ├── media/
-│       ├── proxies/
-│       ├── thumbnails/
-│       ├── waveforms/
-│       ├── backups/
-│       └── exports/
-├── trash/
-└── settings.json
+%LOCALAPPDATA%\CutLoc\
+├── bin\
+├── logs\
+├── runtime\
+├── temp\
+└── data\
+    ├── projects/
+    │   └── <project-id>/
+    │       ├── project.json
+    │       ├── media/
+    │       ├── proxies/
+    │       ├── thumbnails/
+    │       ├── waveforms/
+    │       ├── backups/
+    │       └── exports/
+    ├── trash/
+    └── settings.json
 ```
 
-Çalışma zamanı klasörünü taşımak için yerel `.env` dosyasında `DATA_DIR` ayarlayın. Depodaki [`.env.example`](.env.example), desteklenen yerel yapılandırma adlarını içerir. `.env`, API anahtarları, proje medyası, çıktılar veya `data/` klasörünü asla commit'e eklemeyin.
+`CUTLOC_HOME` izole testlerde kullanıcı runtime kökünün tamamını, `DATA_DIR` ise yalnızca proje/ayar depolamasını değiştirir. Depodaki [`.env.example`](.env.example) geliştirme override'larını içerir. `.env`, API anahtarları, proje medyası, çıktılar veya runtime verisini asla commit'e eklemeyin.
 
 ## Doğrulama
 
@@ -310,7 +329,7 @@ Geliştirme sırasında odaklı kontrolleri, pull request açmadan önce ise tam
 
 | Kontrol | Komut | Kapsam |
 | --- | --- | --- |
-| Derleme | `npm run build` | Ortak paket, web istemcisi, sunucu ve CLI |
+| Derleme | `npm run build` | Ortak/runtime paketleri, web istemcisi, sunucu ve CLI |
 | Ortak sözleşme testleri | `npm run test:shared` | Zod modelleri, varsayılanlar, zaman çizelgesi yardımcıları ve çıktı boyutları |
 | Sunucu entegrasyon testleri | `npm run test:server` | Yerel API, proje/medya/kurtarma akışları, kilitler, FFmpeg işleri ve dışa aktarma |
 | CLI entegrasyon testleri | `npm run test:cli` | CLI yürütülebilir dosyası, JSON çıktısı, argüman doğrulama, oturumlar ve API yönlendirme |
@@ -349,7 +368,7 @@ GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma a
 
 ## Katkıda bulunma
 
-CutLoc v1.0.0 güncel kararlı yerel sürümdür. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
+CutLoc v1.1.0 güncel kaynak-dağıtım geliştirme hattıdır. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
 
 Değişiklikleri incelenebilir tutmak için bir özellik branch'i üzerinde çalışın ve pull request açın:
 

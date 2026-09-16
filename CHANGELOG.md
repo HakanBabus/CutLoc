@@ -4,7 +4,23 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- One-time `npm.cmd run setup:user` registration for the user-level `cutloc` command without an EXE or desktop package.
+- `cutloc open`, `cutloc status --json`, and `cutloc doctor --json` runtime workflows.
+- Automatic shared-server startup on an available loopback port for live CLI commands.
+- A single runtime contract for installation metadata, instance discovery, user storage, logs, and temporary files.
+
+### Changed
+
+- Windows projects, settings, proxies, backups, and exports now default to `%LOCALAPPDATA%\CutLoc\data` instead of the source checkout.
+- `agent guide` documents repo-independent discovery and automatic startup.
+- Existing checkout-local data is copied during user setup only when the new destination is empty; the source remains intact.
+
+### Known limitations
+
+- V1.1 remains a source distribution and still requires Node.js 24.x, npm 11.x, and an initial checkout/install/setup step.
+- There is no EXE, installer, desktop shell, or automatic updater.
 
 ## [1.0.0] - 2026-09-16
 

@@ -1,22 +1,34 @@
 # CutLoc CLI and AI-agent guide
 
-The CutLoc v1.0.0 CLI is a JSON-first client for people, scripts, and tool-using AI agents. It talks to the same loopback Fastify API as the web editor, so project validation, revisions, backups, media rules, and export behavior remain consistent across both interfaces.
+The CutLoc v1.1.0 CLI is a JSON-first client for people, scripts, and tool-using AI agents. It talks to the same loopback Fastify API as the web editor, so project validation, revisions, backups, media rules, and export behavior remain consistent across both interfaces.
 
 The CLI never edits project files directly and does not contact an AI provider.
 
-The v1.0.0 command and JSON contracts are the first stable source-release baseline. Project documents remain on `schemaVersion: 1`; callers must still preserve the latest `revision` and handle conflict responses instead of assuming concurrent writes are safe.
+The v1.1.0 runtime adds a user-level `cutloc` command, automatic server startup, and machine-readable status/doctor checks. Project documents remain on `schemaVersion: 1`; callers must still preserve the latest `revision` and handle conflict responses instead of assuming concurrent writes are safe.
 
-## Start the server
+## One-time user setup
 
-Run the local API before commands that need live data:
+After cloning and installing dependencies, register the command once:
 
 ```powershell
-npm.cmd run dev:server
+npm.cmd run setup:user
 ```
 
-The default URL is `http://127.0.0.1:4173`. Override it with `--url` or `CUTLOC_URL`. Only HTTP(S) loopback hosts are accepted.
+Open a new terminal, then run `cutloc` from any directory. The setup writes a command shim under `%LOCALAPPDATA%\CutLoc\bin`, adds that directory to the user PATH, stores installation metadata, and prepares `%LOCALAPPDATA%\CutLoc\data`. If a legacy checkout-local `data/` directory exists and the new destination is empty, setup copies it without deleting the source.
 
-The root `npm.cmd run cli` and `cli:agent` scripts load the optional root `.env` file. When `CUTLOC_URL` is not set, the CLI follows its local `HOST` and `PORT` values, matching the development server and web proxy. A command-line `--url` remains the highest-priority override.
+## Runtime commands
+
+```powershell
+cutloc open
+cutloc status --json
+cutloc doctor --json
+```
+
+- `open` starts or reuses the shared server and opens the browser editor.
+- `status` is read-only: it reports whether CutLoc is running without starting it.
+- `doctor` checks the source installation, Node.js, storage permissions, FFmpeg/ffprobe, PATH, server state, and CLI/API protocol compatibility.
+
+Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
 
 `agent guide` is static and can run without the server.
 
@@ -31,14 +43,14 @@ npm.cmd run cli -- projects list
 
 This form rebuilds the shared and CLI workspaces before each invocation.
 
-### AI-agent command
+### Installed user/agent command
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent guide
-npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20
+cutloc agent guide
+cutloc agent inspect --no-guide --limit 20
 ```
 
-`cli:agent` suppresses npm lifecycle output and enables compact one-line JSON.
+Use the global command for normal users and agents. `--compact` remains available for one-line JSON.
 
 ### Build once
 
@@ -46,6 +58,7 @@ For several commands, build once and call the executable directly:
 
 ```powershell
 npm.cmd run build:shared
+npm.cmd run build:runtime
 npm.cmd run build:cli
 node apps/cli/dist/index.js --compact agent inspect <project-id>
 ```
@@ -60,21 +73,22 @@ node apps/cli/dist/index.js --compact agent inspect <project-id>
 
 ## Recommended AI-agent workflow
 
-1. Discover the contract with `agent guide`.
-2. Inspect the server and project list with `agent inspect`.
-3. Inspect one project with `agent inspect <project-id>`.
-4. Fetch the latest complete document with `projects get <id> --out project.json`.
-5. Preserve `schemaVersion`, `id`, and `revision`; edit only intended project fields.
-6. Apply through `projects apply <id> --file project.json`.
-7. If the server returns `409`, fetch the new revision and reconcile instead of overwriting it.
-8. Run `export preflight` before starting a render.
-9. Poll `jobs get` until the job reaches a terminal state, then download it.
+1. Discover the static contract with `cutloc agent guide`; this does not require a running server.
+2. Optionally inspect runtime state with `cutloc status --json`.
+3. Inspect the server and project list with `cutloc agent inspect`; this starts the server when needed.
+4. Inspect one project with `cutloc agent inspect <project-id>`.
+5. Fetch the latest complete document with `cutloc projects get <id> --out project.json`.
+6. Preserve `schemaVersion`, `id`, and `revision`; edit only intended project fields.
+7. Apply through `cutloc projects apply <id> --file project.json`.
+8. If the server returns `409`, fetch the new revision and reconcile instead of overwriting it.
+9. Run `cutloc export preflight` before starting a render.
+10. Poll `cutloc jobs get` until the job reaches a terminal state, then download it.
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
-npm.cmd run --silent cli:agent -- projects get <project-id> --out project.json
-npm.cmd run --silent cli:agent -- projects apply <project-id> --file project.json
-npm.cmd run --silent cli:agent -- export preflight <project-id> --file export-options.json
+cutloc agent inspect <project-id>
+cutloc projects get <project-id> --out project.json
+cutloc projects apply <project-id> --file project.json
+cutloc export preflight <project-id> --file export-options.json
 ```
 
 ## Agent discovery
@@ -84,7 +98,7 @@ npm.cmd run --silent cli:agent -- export preflight <project-id> --file export-op
 Returns the protocol version, transport rules, recommended workflow, safety rules, editable project areas, invariants, command groups, and examples. It is the preferred capability-discovery endpoint for an AI tool.
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent guide
+cutloc agent guide
 ```
 
 ### `agent inspect [project-id]`
@@ -92,9 +106,9 @@ npm.cmd run --silent cli:agent -- agent guide
 Without an ID, returns server health, settings, a compact paginated project page, recent jobs, and the guide. With an ID, it also returns the full selected project, media health, backups, and suggested next commands. `--no-guide` removes the repeated static contract, `--limit` and `--cursor` page the list, and `--full` includes complete project-list entries.
 
 ```powershell
-npm.cmd run --silent cli:agent -- agent inspect
-npm.cmd run --silent cli:agent -- agent inspect --no-guide --limit 20 --cursor 0
-npm.cmd run --silent cli:agent -- agent inspect <project-id>
+cutloc agent inspect
+cutloc agent inspect --no-guide --limit 20 --cursor 0
+cutloc agent inspect <project-id>
 ```
 
 ## JSON input
@@ -108,9 +122,9 @@ Commands accepting JSON support exactly one of:
 Examples:
 
 ```powershell
-npm.cmd run cli -- settings set --file settings.json
-npm.cmd run cli -- export preflight <project-id> --data '{"format":"mp4","resolution":"1080p","fps":30,"quality":"standard"}'
-Get-Content project.json -Raw | npm.cmd run cli -- projects apply <project-id> --stdin
+cutloc settings set --file settings.json
+cutloc export preflight <project-id> --data '{"format":"mp4","resolution":"1080p","fps":30,"quality":"standard"}'
+Get-Content project.json -Raw | cutloc projects apply <project-id> --stdin
 ```
 
 ## Command reference
@@ -202,7 +216,7 @@ For a selected range, add:
 Render a timeline frame through the same FFmpeg composition path before a full export:
 
 ```powershell
-npm.cmd run cli -- preview frame <project-id> --time 12.5 --out frame.png
+cutloc preview frame <project-id> --time 12.5 --out frame.png
 ```
 
 This is intended for agent visual QA and uses a temporary draft render that is cleaned after the PNG is returned.
@@ -221,7 +235,7 @@ The server merges supported settings fields and validates the resulting document
 Use a session when several related API operations must share one exclusive project lease:
 
 ```powershell
-npm.cmd run cli -- session <project-id>
+cutloc session <project-id>
 ```
 
 The first line contains `ready: true`. Send one JSON request per input line:
@@ -249,9 +263,9 @@ api <method> </api/path> [--file <json> | --data <json> | --out <file>]
 Examples:
 
 ```powershell
-npm.cmd run cli -- api GET /api/health
-npm.cmd run cli -- api GET /api/jobs
-npm.cmd run cli -- api PATCH /api/projects/<id> --file patch.json
+cutloc api GET /api/health
+cutloc api GET /api/jobs
+cutloc api PATCH /api/projects/<id> --file patch.json
 ```
 
 Paths must begin with `/api/`. Mutating project paths automatically acquire the project lease. The generic command rejects SSE streaming and requires `--out` for binary responses.
@@ -279,7 +293,7 @@ Paths must begin with `/api/`. Mutating project paths automatically acquire the 
 
 ## Safety checklist for agents
 
-- Never write `data/projects/.../project.json` directly.
+- Never locate or write managed project JSON directly.
 - Fetch immediately before editing and preserve the returned revision.
 - Validate the project ID, asset ID, job ID, and output path before mutations.
 - Use media commands for files and project commands for bundles.
