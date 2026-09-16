@@ -22,6 +22,7 @@ after(async () => {
   serverTestHooks.beforeSave = undefined;
   serverTestHooks.beforeDerivedWrite = undefined;
   serverTestHooks.beforeRelinkMove = undefined;
+  serverTestHooks.beforePreviewRender = undefined;
   await app.close();
   await fsp.rm(dataDir, { recursive: true, force: true });
 });
@@ -123,6 +124,8 @@ test('health endpoint reports a local server without leaking the absolute data p
   const response = await app.inject({ method: 'GET', url: '/api/health' });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
+  assert.equal(response.json().ffmpeg, true);
+  assert.equal(response.json().textRendering, true);
   assert.equal(response.json().dataDir, path.basename(dataDir));
   assert.equal(response.json().dataDir.includes(dataDir), false);
   assert.equal(response.headers['x-content-type-options'], 'nosniff');
@@ -243,6 +246,97 @@ test('unknown projects return a safe not-found response', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/projects/project_does_not_exist' });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error, serverT('en', 'projectNotFound'));
+});
+
+test('project updates reject managed asset paths that could target project metadata', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Asset boundary' })).json();
+  const addedResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
+  assert.equal(addedResponse.statusCode, 201);
+  const project = addedResponse.json().project;
+  const maliciousAsset = { ...project.assets[0], path: 'project.json', thumbnailPath: '../project.json' };
+  const updateResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { ...project, assets: [maliciousAsset], revision: project.revision });
+  assert.equal(updateResponse.statusCode, 400);
+
+  const readResponse = await app.inject({ method: 'GET', url: '/api/projects/' + created.id });
+  assert.equal(readResponse.statusCode, 200);
+  assert.match(readResponse.json().assets[0].path.replaceAll('\\', '/'), /^media\//);
+  assert.equal((await fsp.stat(path.join(dataDir, 'projects', created.id, 'project.json'))).isFile(), true);
+});
+
+test('managed media symlinks cannot expose or delete project metadata', async (context) => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Symlink boundary' })).json();
+  const addedResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
+  assert.equal(addedResponse.statusCode, 201);
+  const added = addedResponse.json();
+  if (added.job?.id) await waitForJob(added.job.id);
+  const asset = added.project.assets[0];
+  const source = path.join(dataDir, 'projects', created.id, ...asset.path.replaceAll('\\', '/').split('/'));
+  await fsp.rm(source, { force: true });
+  try {
+    await fsp.symlink('../project.json', source, 'file');
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      context.skip('Creating symlinks requires elevated Windows privileges.');
+      return;
+    }
+    throw error;
+  }
+
+  const mediaResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/media/${asset.id}` });
+  assert.notEqual(mediaResponse.statusCode, 200);
+  assert.equal(mediaResponse.body.includes('Symlink boundary'), false);
+  const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/media/${asset.id}` });
+  assert.equal(deleteResponse.statusCode, 400);
+  const projectResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}` });
+  assert.equal(projectResponse.statusCode, 200);
+  assert.equal(projectResponse.json().assets.some((item) => item.id === asset.id), true);
+  assert.equal((await fsp.stat(path.join(dataDir, 'projects', created.id, 'project.json'))).isFile(), true);
+});
+
+test('preview rendering has a route-specific request budget', async () => {
+  const remoteAddress = '127.0.0.42';
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await app.inject({ method: 'GET', url: '/api/projects/missing/preview-frame?time=0', remoteAddress });
+    assert.equal(response.statusCode, 400);
+  }
+  const limitedResponse = await app.inject({ method: 'GET', url: '/api/projects/missing/preview-frame?time=0', remoteAddress });
+  assert.equal(limitedResponse.statusCode, 429);
+  assert.match(limitedResponse.json().message, /Too many requests/);
+});
+
+test('preview rendering caps concurrent FFmpeg work', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Preview concurrency' })).json();
+  const addedResponse = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  const project = addedResponse.json().project;
+  const asset = project.assets[0];
+  const clip = { id: 'preview-clip', assetId: asset.id, type: 'image', name: 'Preview', start: 0, duration: 1, sourceDuration: 1 };
+  const updatedResponse = await jsonRequest('PATCH', `/api/projects/${created.id}`, { ...project, tracks: project.tracks.map((track, index) => index === 0 ? { ...track, clips: [clip] } : track), revision: project.revision });
+  assert.equal(updatedResponse.statusCode, 200);
+
+  let entered = 0;
+  let releasePreview;
+  let previewsEntered;
+  const release = new Promise((resolve) => { releasePreview = resolve; });
+  const enteredPromise = new Promise((resolve) => { previewsEntered = resolve; });
+  serverTestHooks.beforePreviewRender = async () => {
+    entered += 1;
+    if (entered === 2) previewsEntered();
+    await release;
+    throw new Error('controlled preview stop');
+  };
+  try {
+    const first = app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0`, remoteAddress: '127.0.0.51' });
+    const second = app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0`, remoteAddress: '127.0.0.52' });
+    await Promise.race([enteredPromise, new Promise((_, reject) => setTimeout(() => reject(new Error('preview concurrency hook timeout')), 5000))]);
+    const blocked = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0`, remoteAddress: '127.0.0.53' });
+    assert.equal(blocked.statusCode, 429);
+    releasePreview();
+    const completed = await Promise.all([first, second]);
+    assert.deepEqual(completed.map((response) => response.statusCode), [400, 400]);
+  } finally {
+    releasePreview?.();
+    serverTestHooks.beforePreviewRender = undefined;
+  }
 });
 
 test('derived media jobs are cancelled by DELETE before they can recreate a project', async () => {

@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -45,6 +46,7 @@ const projectsDir = path.join(dataDir, 'projects');
 const settingsFile = path.join(dataDir, 'settings.json');
 const stockDir = path.join(rootDir, 'apps', 'server', 'stock');
 const port = Number(process.env.PORT ?? 4173);
+const webPort = Number(process.env.WEB_PORT ?? 5173);
 const webDist = path.join(rootDir, 'apps/web/dist');
 function boundedNumber(raw: string | undefined, fallback: number, min: number, max: number) {
   const value = Number(raw);
@@ -58,6 +60,9 @@ const trashRetentionMs = trashRetentionDays * 24 * 60 * 60 * 1000;
 const maxJobHistory = 200;
 const maxSseClients = 32;
 const maxConcurrentJobs = 2;
+const maxConcurrentPreviews = 2;
+const globalRequestsPerMinute = 3_000;
+const previewRequestsPerMinute = 30;
 const minAccessLeaseMs = 5_000;
 const maxAccessLeaseMs = 60_000;
 
@@ -70,6 +75,7 @@ const jobProcesses = new Map<string, ReturnType<typeof spawn>>();
 type InternalProjectAccessLease = ProjectAccessLease & { token: string };
 const projectAccessLeases = new Map<string, InternalProjectAccessLease>();
 let settings: Settings = defaultSettings();
+let activePreviewRenders = 0;
 
 function message(key: ServerTranslationKey, values?: ServerTranslationValues) {
   return serverT(settings.language, key, values);
@@ -121,8 +127,7 @@ function isAllowedWebOrigin(origin: string | undefined) {
   try {
     const parsed = new URL(origin);
     const originPort = parsed.port ? Number(parsed.port) : undefined;
-    const isViteDevPort = originPort !== undefined && originPort >= 5173 && originPort <= 5199;
-    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || originPort === port || isViteDevPort);
+    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || originPort === port || originPort === webPort);
   } catch {
     return false;
   }
@@ -143,13 +148,13 @@ function id(prefix: string) {
 }
 
 async function ensureDir(dir: string) {
-  await fsp.mkdir(dir, { recursive: true });
+  await fsp.mkdir(safeJoin(dataDir, dir), { recursive: true });
 }
 
 async function directorySize(dir: string): Promise<number> {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   const sizes = await Promise.all(entries.map(async (entry) => {
-    const item = path.join(dir, entry.name);
+    const item = safeJoin(dir, entry.name);
     if (entry.isDirectory()) return directorySize(item);
     if (entry.isFile()) return (await fsp.stat(item)).size;
     return 0;
@@ -161,7 +166,7 @@ function projectPath(projectId: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(projectId)) {
     throw Object.assign(new Error(message('invalidProjectId')), { statusCode: 400 });
   }
-  return path.join(projectsDir, projectId);
+  return safeJoin(projectsDir, projectId);
 }
 
 function projectFile(projectId: string) {
@@ -169,14 +174,18 @@ function projectFile(projectId: string) {
 }
 
 async function atomicWrite(file: string, content: string) {
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const safeFile = safeJoin(dataDir, file);
+  const temp = `${safeFile}.${process.pid}.${Date.now()}.tmp`;
   await fsp.writeFile(temp, content, 'utf8');
-  await fsp.rename(temp, file);
+  await fsp.rename(temp, safeFile);
 }
 
 async function readProject(projectId: string): Promise<Project> {
-  const raw = await fsp.readFile(projectFile(projectId), 'utf8');
-  return ProjectSchema.parse(JSON.parse(raw));
+  const validatedProjectId = path.basename(projectPath(projectId));
+  const raw = await fsp.readFile(projectFile(validatedProjectId), 'utf8');
+  const project = ProjectSchema.parse(JSON.parse(raw));
+  if (project.id !== validatedProjectId) throw Object.assign(new Error(message('invalidProjectId')), { statusCode: 400 });
+  return project;
 }
 
 type ProjectLifecycleState = 'active' | 'deleting' | 'deleted';
@@ -185,6 +194,7 @@ type ServerTestHooks = {
   beforeSave?: (project: Project) => void | Promise<void>;
   beforeDerivedWrite?: (projectId: string) => void | Promise<void>;
   beforeRelinkMove?: (sourcePath: string, targetPath: string) => void | Promise<void>;
+  beforePreviewRender?: (projectId: string) => void | Promise<void>;
 };
 
 // These hooks are intentionally narrow and are only used by deterministic
@@ -326,15 +336,43 @@ async function saveSettings(next: Partial<Settings> & { openAiKey?: string; gemi
   return safe;
 }
 
-function binaryPath(name: 'ffmpeg' | 'ffprobe') {
-  const envPath = process.env[name.toUpperCase() + '_PATH'];
-  if (envPath && fs.existsSync(envPath)) return envPath;
-  try {
-    const pkg = name === 'ffmpeg' ? require('ffmpeg-static') : require('ffprobe-static').path;
-    if (typeof pkg === 'string' && fs.existsSync(pkg)) return pkg;
-  } catch { /* package optional during development */ }
+const binaryPathCache = new Map<'ffmpeg' | 'ffprobe', string | null>();
+const ffmpegFilterCache = new Map<string, boolean>();
+
+function systemBinaryPath(name: 'ffmpeg' | 'ffprobe') {
   const result = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', [name], { encoding: 'utf8' });
-  return result.status === 0 ? result.stdout.trim().split(/\r?\n/)[0] : null;
+  return result.status === 0 ? result.stdout.trim().split(/\r?\n/)[0] || null : null;
+}
+
+function ffmpegHasFilter(binary: string | null, filter: string) {
+  if (!binary) return false;
+  const cacheKey = `${binary}\0${filter}`;
+  const cached = ffmpegFilterCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const result = spawnSync(binary, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const available = result.status === 0 && new RegExp(`^\\s*[.A-Z]+\\s+${filter}\\s`, 'm').test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+  ffmpegFilterCache.set(cacheKey, available);
+  return available;
+}
+
+function binaryPath(name: 'ffmpeg' | 'ffprobe') {
+  if (binaryPathCache.has(name)) return binaryPathCache.get(name) ?? null;
+  const envPath = process.env[name.toUpperCase() + '_PATH'];
+  if (envPath && fs.existsSync(envPath)) {
+    binaryPathCache.set(name, envPath);
+    return envPath;
+  }
+  let packaged: string | null = null;
+  try {
+    const value = name === 'ffmpeg' ? require('ffmpeg-static') : require('ffprobe-static').path;
+    if (typeof value === 'string' && fs.existsSync(value)) packaged = value;
+  } catch { /* package optional during development */ }
+  const system = systemBinaryPath(name);
+  const resolved = name === 'ffmpeg'
+    ? [packaged, system].find((candidate) => ffmpegHasFilter(candidate, 'drawtext')) ?? packaged ?? system
+    : packaged ?? system;
+  binaryPathCache.set(name, resolved ?? null);
+  return resolved ?? null;
 }
 
 async function probeMedia(file: string) {
@@ -572,8 +610,10 @@ async function queueDerivedMediaJob(projectId: string, asset: Asset) {
 }
 
 function safeJoin(base: string, candidate: string) {
-  const resolved = path.resolve(base, candidate);
-  if (resolved !== path.resolve(base) && !resolved.startsWith(`${path.resolve(base)}${path.sep}`)) throw new Error(message('invalidPath'));
+  const resolvedBase = path.resolve(base);
+  const resolved = path.resolve(resolvedBase, candidate);
+  const relative = path.relative(resolvedBase, resolved);
+  if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) throw new Error(message('invalidPath'));
   return resolved;
 }
 
@@ -582,12 +622,26 @@ function safeExistingPath(base: string, candidate: string) {
   if (!fs.existsSync(resolved)) return resolved;
   const realBase = fs.realpathSync.native(base);
   const realPath = fs.realpathSync.native(resolved);
-  if (realPath !== realBase && !realPath.startsWith(realBase + path.sep)) throw new Error(message('invalidPath'));
+  const relative = path.relative(realBase, realPath);
+  if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) throw new Error(message('invalidPath'));
   return realPath;
 }
 
+function safeManagedAssetPath(projectId: string, candidate: string) {
+  const normalized = candidate.replaceAll('\\', '/');
+  const match = /^(media|proxies|thumbnails|waveforms)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(normalized);
+  if (!match) throw new Error(message('invalidPath'));
+  const root = projectPath(projectId);
+  const folder = safeJoin(root, match[1]);
+  if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error(message('invalidPath'));
+  if (fs.existsSync(folder) && fs.lstatSync(folder).isSymbolicLink()) throw new Error(message('invalidPath'));
+  const target = safeJoin(folder, match[2]);
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error(message('invalidPath'));
+  return target;
+}
+
 function assetFile(projectId: string, asset: Asset) {
-  return safeExistingPath(projectPath(projectId), asset.path);
+  return safeManagedAssetPath(projectId, asset.path);
 }
 
 async function replaceMediaWithRollback(sourcePath: string, targetPath: string, commit: () => Promise<void>, previousTargetPath = targetPath) {
@@ -1222,6 +1276,10 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
   const warnings: Array<{ code: string; message: string; severity?: 'info' | 'warning'; clipIds?: string[]; properties?: string[] }> = [];
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) errors.push({ code: 'FFMPEG_MISSING', message: message('preflightFfmpegMissing') });
+  const needsDrawtext = project.tracks.some((track) => track.clips.some((clip) => clip.type === 'text' || clip.type === 'subtitle'));
+  if (ffmpeg && needsDrawtext && !ffmpegHasFilter(ffmpeg, 'drawtext')) {
+    errors.push({ code: 'FFMPEG_DRAWTEXT_MISSING', message: message('preflightFfmpegMissing') });
+  }
   try {
     const render = buildExportArgs(project, options, path.join(exportDir, '.preflight.tmp'));
     const estimatedBytes = estimateExportBytes(options, render.duration);
@@ -1300,13 +1358,13 @@ async function listTrash() {
 }
 
 async function listBackups(projectId: string) {
-  const backupDir = path.join(projectPath(projectId), 'backups');
+  const backupDir = safeJoin(projectPath(projectId), 'backups');
   if (!fs.existsSync(backupDir)) return [];
   const entries = await fsp.readdir(backupDir, { withFileTypes: true });
   const result = [];
   for (const entry of entries) {
     if (!entry.isFile() || !/^project-\d+\.json$/i.test(entry.name)) continue;
-    const file = path.join(backupDir, entry.name);
+    const file = safeJoin(backupDir, entry.name);
     const stat = await fsp.stat(file);
     result.push({ fileName: entry.name, createdAt: stat.mtime.toISOString(), size: stat.size });
   }
@@ -1464,7 +1522,10 @@ function maskFilter(mask: NonNullable<TimelineClip['mask']>) {
 }
 
 async function registerRoutes(app: FastifyInstance) {
-  app.get('/api/health', async () => ({ ok: true, port, ffmpeg: Boolean(binaryPath('ffmpeg')), ffprobe: Boolean(binaryPath('ffprobe')), dataDir: path.basename(dataDir) }));
+  app.get('/api/health', async () => {
+    const ffmpeg = binaryPath('ffmpeg');
+    return { ok: true, port, ffmpeg: Boolean(ffmpeg), ffprobe: Boolean(binaryPath('ffprobe')), textRendering: ffmpegHasFilter(ffmpeg, 'drawtext'), dataDir: path.basename(dataDir) };
+  });
 
   app.get('/api/settings', async () => settings);
   app.put<{ Body: Partial<Settings> & { openAiKey?: string; geminiKey?: string } }>('/api/settings', async (request, reply) => {
@@ -1491,7 +1552,7 @@ async function registerRoutes(app: FastifyInstance) {
   app.post<{ Params: { trashId: string } }>('/api/trash/:trashId/restore', async (request, reply) => {
     try {
       const source = trashPath(request.params.trashId);
-      const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(path.join(source, 'project.json'), 'utf8')));
+      const project = ProjectSchema.parse(JSON.parse(await fsp.readFile(safeJoin(source, 'project.json'), 'utf8')));
       const restored = await withProjectLock(project.id, async () => {
         const target = projectPath(project.id);
         if (fs.existsSync(target)) throw Object.assign(new Error(message('projectAlreadyExists')), { statusCode: 409 });
@@ -1720,8 +1781,9 @@ async function registerRoutes(app: FastifyInstance) {
           .filter((asset) => !retainedAssetIds.has(asset.id))
           .flatMap((asset) => [asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath])
           .filter((item): item is string => Boolean(item));
+        const removalPaths = removedAssetFiles.map((relative) => safeManagedAssetPath(current.id, relative));
         await saveProject(updated);
-        await Promise.all(removedAssetFiles.map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
+        await Promise.all(removalPaths.map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
         return updated;
       }, requestProjectLockOptions(request));
       return next;
@@ -1764,7 +1826,7 @@ async function registerRoutes(app: FastifyInstance) {
           projectLifecycles.set(request.params.projectId, { state: 'deleted', generation: deletingLifecycle.generation });
           throw Object.assign(new Error(message('projectNotFound')), { statusCode: 404 });
         }
-        const trash = path.join(dataDir, 'trash', request.params.projectId + '-' + Date.now());
+        const trash = safeJoin(path.join(dataDir, 'trash'), `${path.basename(target)}-${Date.now()}`);
         await ensureDir(path.dirname(trash));
         try {
           await fsp.rename(target, trash);
@@ -1856,9 +1918,9 @@ async function registerRoutes(app: FastifyInstance) {
       const project = await readProject(request.params.projectId);
       return project.assets.map((asset) => {
         const sourceExists = fs.existsSync(assetFile(project.id, asset));
-        const proxyExists = Boolean(asset.proxyPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.proxyPath)));
-        const thumbnailExists = Boolean(asset.thumbnailPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.thumbnailPath)));
-        const waveformExists = Boolean(asset.waveformPath && fs.existsSync(safeExistingPath(projectPath(project.id), asset.waveformPath)));
+        const proxyExists = Boolean(asset.proxyPath && fs.existsSync(safeManagedAssetPath(project.id, asset.proxyPath)));
+        const thumbnailExists = Boolean(asset.thumbnailPath && fs.existsSync(safeManagedAssetPath(project.id, asset.thumbnailPath)));
+        const waveformExists = Boolean(asset.waveformPath && fs.existsSync(safeManagedAssetPath(project.id, asset.waveformPath)));
         return { assetId: asset.id, sourceExists, proxyExists, thumbnailExists, waveformExists, status: !sourceExists ? 'missing' : sourceExists && (asset.type === 'audio' ? waveformExists : thumbnailExists) ? 'ready' : 'derived-missing' };
       });
     } catch { return reply.code(404).send({ error: message('projectNotFound') }); }
@@ -1939,8 +2001,11 @@ async function registerRoutes(app: FastifyInstance) {
         if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
         const rawNext = { ...current, assets: current.assets.filter((item) => item.id !== asset.id), tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.assetId !== asset.id) })), revision: current.revision + 1, updatedAt: new Date().toISOString() };
         const next = ProjectSchema.parse({ ...rawNext, duration: projectDuration(rawNext as Project) });
+        const removalPaths = [asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath]
+          .filter((item): item is string => Boolean(item))
+          .map((relative) => safeManagedAssetPath(current.id, relative));
         await saveProject(next);
-        await Promise.all([asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath].filter((item): item is string => Boolean(item)).map((relative) => fsp.rm(safeJoin(projectPath(current.id), relative), { force: true }).catch(() => undefined)));
+        await Promise.all(removalPaths.map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
         return next;
       }, requestProjectLockOptions(request));
       return reply.send(project);
@@ -1955,9 +2020,9 @@ async function registerRoutes(app: FastifyInstance) {
     const asset = project.assets.find((item) => item.id === request.params.assetId);
     if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
     let file = assetFile(project.id, asset);
-    if (request.query.proxy === '1' && asset.proxyPath) file = safeExistingPath(projectPath(project.id), asset.proxyPath);
-    if (request.query.waveform === '1' && asset.waveformPath) file = safeExistingPath(projectPath(project.id), asset.waveformPath);
-    if (request.query.thumbnail === '1' && asset.thumbnailPath) file = safeExistingPath(projectPath(project.id), asset.thumbnailPath);
+    if (request.query.proxy === '1' && asset.proxyPath) file = safeManagedAssetPath(project.id, asset.proxyPath);
+    if (request.query.waveform === '1' && asset.waveformPath) file = safeManagedAssetPath(project.id, asset.waveformPath);
+    if (request.query.thumbnail === '1' && asset.thumbnailPath) file = safeManagedAssetPath(project.id, asset.thumbnailPath);
     if (!fs.existsSync(file)) return reply.code(404).send({ error: message('mediaFileNotFound') });
     const stat = await fsp.stat(file);
     const range = request.headers.range;
@@ -2089,13 +2154,20 @@ async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get<{ Params: { projectId: string }; Querystring: { time?: string } }>('/api/projects/:projectId/preview-frame', async (request, reply) => {
+  app.get<{ Params: { projectId: string }; Querystring: { time?: string } }>('/api/projects/:projectId/preview-frame', {
+    config: { rateLimit: { max: previewRequestsPerMinute, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
     let previewVideo = '';
     let previewImage = '';
+    let previewSlotAcquired = false;
     try {
       const project = await readProject(request.params.projectId);
       const time = Number(request.query.time ?? 0);
       if (!Number.isFinite(time) || time < 0 || time >= Math.max(project.duration, 0.001)) return reply.code(400).send({ error: message('exportSettingsInvalid') });
+      if (activePreviewRenders >= maxConcurrentPreviews) return reply.code(429).send({ error: message('tooManyJobs') });
+      activePreviewRenders += 1;
+      previewSlotAcquired = true;
+      await serverTestHooks.beforePreviewRender?.(project.id);
       const previewDir = path.join(projectPath(project.id), 'exports', '.preview');
       await ensureDir(previewDir);
       const previewId = crypto.randomBytes(10).toString('hex');
@@ -2110,6 +2182,7 @@ async function registerRoutes(app: FastifyInstance) {
     } catch (error) {
       return reply.code(400).send({ error: localizedError(error, 'exportPrepareFailed') });
     } finally {
+      if (previewSlotAcquired) activePreviewRenders = Math.max(0, activePreviewRenders - 1);
       await Promise.all([previewVideo, previewImage].filter(Boolean).map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
     }
   });
@@ -2150,6 +2223,16 @@ export async function createServer() {
   await ensureDir(projectsDir);
   await loadSettings();
   const app = Fastify({ logger: false, bodyLimit: maxUploadBytes });
+  await app.register(rateLimit, {
+    global: true,
+    max: globalRequestsPerMinute,
+    timeWindow: '1 minute',
+    errorResponseBuilder: (_request, context) => ({
+      statusCode: 429,
+      error: 'Too Many Requests',
+      message: message('rateLimitExceeded', { seconds: Math.max(1, Math.ceil(context.ttl / 1000)) }),
+    }),
+  });
   app.addContentTypeParser(['application/zip', 'application/octet-stream'], { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api/') && !isAllowedLocalRequest(request)) {

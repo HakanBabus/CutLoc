@@ -120,6 +120,20 @@ test('project access leases expose only the public CLI ownership contract', () =
   assert.equal(ProjectAccessLeaseSchema.safeParse({ ...lease, client: 'web' }).success, false);
 });
 
+test('project IDs and managed asset paths cannot escape their project boundary', () => {
+  const createdAt = '2026-08-23T10:00:00.000Z';
+  const asset = { id: 'asset-a', name: 'A', type: 'image', path: 'media/a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt };
+  assert.equal(AssetSchema.safeParse(asset).success, true);
+  const windowsPath = AssetSchema.parse({ ...asset, path: 'media\\a.png', thumbnailPath: 'thumbnails\\a.jpg' });
+  assert.equal(windowsPath.path, 'media/a.png');
+  assert.equal(windowsPath.thumbnailPath, 'thumbnails/a.jpg');
+  assert.equal(AssetSchema.safeParse({ ...asset, path: 'project.json' }).success, false);
+  assert.equal(AssetSchema.safeParse({ ...asset, path: '../project.json' }).success, false);
+  assert.equal(AssetSchema.safeParse({ ...asset, path: 'media/nested/a.png' }).success, false);
+  assert.equal(AssetSchema.safeParse({ ...asset, thumbnailPath: 'exports/a.mp4' }).success, false);
+  assert.equal(ProjectSchema.safeParse({ ...defaultProject('safe-id'), id: '../outside' }).success, false);
+});
+
 test('rejects broken cross-project references and timeline invariants', () => {
   const missingAsset = defaultProject('integrity-missing');
   missingAsset.tracks[0].clips.push(ClipSchema.parse({ id: 'clip-missing', assetId: 'asset-nope', type: 'video', name: 'Missing', start: 0, duration: 1, sourceDuration: 1 }));
@@ -131,7 +145,7 @@ test('rejects broken cross-project references and timeline invariants', () => {
   assert.equal(ProjectSchema.safeParse(duplicate).success, false);
 
   const outOfBounds = defaultProject('integrity-bounds');
-  outOfBounds.assets.push(AssetSchema.parse({ id: 'asset-a', name: 'Audio', type: 'audio', path: 'a.wav', mimeType: 'audio/wav', size: 1, duration: 2, createdAt: outOfBounds.createdAt }));
+  outOfBounds.assets.push(AssetSchema.parse({ id: 'asset-a', name: 'Audio', type: 'audio', path: 'media/a.wav', mimeType: 'audio/wav', size: 1, duration: 2, createdAt: outOfBounds.createdAt }));
   outOfBounds.tracks[0].clips.push(ClipSchema.parse({ id: 'clip-a', assetId: 'asset-a', type: 'audio', name: 'Audio', start: 0, duration: 2, sourceStart: 1, sourceDuration: 2, keyframes: [{ id: 'kf-a', property: 'volume', time: 3, value: 1 }] }));
   outOfBounds.duration = 2;
   assert.equal(ProjectSchema.safeParse(outOfBounds).success, false);
@@ -153,7 +167,7 @@ test('visual layer plan preserves general-purpose track and clip ordering', () =
 
 test('three-way project merge preserves independent timeline edits and local asset deletion', () => {
   const base = projectWithClips();
-  base.assets = [AssetSchema.parse({ id: 'asset-a', name: 'Original', type: 'image', path: 'a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt })];
+  base.assets = [AssetSchema.parse({ id: 'asset-a', name: 'Original', type: 'image', path: 'media/a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt })];
   const local = structuredClone(base);
   const remote = structuredClone(base);
   local.tracks[0].clips[0].transform.scale = 1.25;
@@ -203,7 +217,7 @@ test('three-way merge accepts deletion only when the other side is unchanged and
   const local = structuredClone(base);
   local.tracks[0].clips = local.tracks[0].clips.filter((clip) => clip.id !== 'clip-a');
   assert.equal(mergeProjectThreeWay(base, local, structuredClone(base)).conflicts.length, 0);
-  const asset = AssetSchema.parse({ id: 'asset-a', name: 'A', type: 'image', path: 'a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt });
+  const asset = AssetSchema.parse({ id: 'asset-a', name: 'A', type: 'image', path: 'media/a.png', mimeType: 'image/png', size: 1, duration: 1, createdAt: base.createdAt });
   base.assets = [asset];
   const deleted = structuredClone(base); deleted.assets = [];
   const refreshed = structuredClone(base); refreshed.assets[0].thumbnailPath = 'thumb/a.jpg';

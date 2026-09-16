@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+const EntityIdSchema = z.string()
+  .regex(/^[A-Za-z0-9_.-]+$/, 'ID contains unsupported characters')
+  .refine((value) => value !== '.' && value !== '..', 'ID contains unsupported characters');
+const ProjectIdSchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'Project ID contains unsupported characters');
+
+function managedFilePath(...folders: string[]) {
+  return z.string().transform((value) => value.replaceAll('\\', '/')).refine((normalized) => {
+    const [folder, fileName, ...rest] = normalized.split('/');
+    return rest.length === 0
+      && folders.includes(folder)
+      && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(fileName ?? '');
+  }, 'Managed media path must stay inside its CutLoc project folder');
+}
+
 /** Normalize physical and encoded line breaks across preview and export. */
 export function normalizeTextLineBreaks(value: string) {
   return String(value ?? '')
@@ -34,7 +48,7 @@ export const KeyframeProperty = z.enum(['x', 'y', 'scale', 'rotation', 'opacity'
 export type KeyframeProperty = z.infer<typeof KeyframeProperty>;
 
 export const KeyframeSchema = z.object({
-  id: z.string(),
+  id: EntityIdSchema,
   property: KeyframeProperty,
   time: z.number().nonnegative(),
   value: z.number(),
@@ -287,14 +301,14 @@ export const TransitionSchema = z.object({
 export type Transition = z.infer<typeof TransitionSchema>;
 
 export const AssetSchema = z.object({
-  id: z.string(),
+  id: EntityIdSchema,
   name: z.string(),
   type: AssetType,
   mimeType: z.string(),
-  path: z.string(),
-  proxyPath: z.string().optional(),
-  thumbnailPath: z.string().optional(),
-  waveformPath: z.string().optional(),
+  path: managedFilePath('media'),
+  proxyPath: managedFilePath('proxies').optional(),
+  thumbnailPath: managedFilePath('media', 'thumbnails').optional(),
+  waveformPath: managedFilePath('waveforms').optional(),
   size: z.number().nonnegative(),
   duration: z.number().nonnegative().default(0),
   width: z.number().int().positive().optional(),
@@ -306,8 +320,8 @@ export const AssetSchema = z.object({
 export type Asset = z.infer<typeof AssetSchema>;
 
 export const ClipSchema = z.object({
-  id: z.string(),
-  assetId: z.string().optional(),
+  id: EntityIdSchema,
+  assetId: EntityIdSchema.optional(),
   type: ClipType,
   name: z.string(),
   start: z.number().nonnegative(),
@@ -373,7 +387,7 @@ export function retimeClipMotion(clip: Clip, nextDuration: number) {
 }
 
 export const TrackSchema = z.object({
-  id: z.string(),
+  id: EntityIdSchema,
   type: TrackType,
   name: z.string(),
   order: z.number().int(),
@@ -387,7 +401,7 @@ export type Track = z.infer<typeof TrackSchema>;
 
 const ProjectBaseSchema = z.object({
   schemaVersion: z.literal(1),
-  id: z.string(),
+  id: ProjectIdSchema,
   name: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -403,7 +417,7 @@ const ProjectBaseSchema = z.object({
   duration: z.number().nonnegative().default(0),
   assets: z.array(AssetSchema).default([]),
   tracks: z.array(TrackSchema).default([]),
-  markers: z.array(z.object({ id: z.string(), time: z.number().nonnegative(), label: z.string() })).default([]),
+  markers: z.array(z.object({ id: EntityIdSchema, time: z.number().nonnegative(), label: z.string() })).default([]),
 });
 
 /**
