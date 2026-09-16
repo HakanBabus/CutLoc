@@ -36,7 +36,7 @@
     "release:check": "npm run doctor && npm run verify:all && npm audit --omit=dev --audit-level=high"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "concurrently": "^10.0.4"
+    "@playwright/test": "^1.63.0",
+    "concurrently": "^10.0.5"
   }
 }
