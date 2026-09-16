@@ -36,6 +36,7 @@ No changes yet.
 - Linux CI text export no longer depends on an FFmpeg build without `drawtext`.
 - Preview and export now scale canvas-space clip positions, animation offsets, and text metrics consistently across output resolutions.
 - Non-dark themes no longer inherit conflicting dark editor surfaces, and narrow rail/timeline controls remain centered without overlap.
+- Timeline seeking no longer applies a second synthetic click after pointer capture, preventing the playhead from jumping backward on Windows.
 
 ### Known limitations
 

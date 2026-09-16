@@ -42,7 +42,7 @@ test('immediate Back keeps the latest project edit', async ({ page, request }) =
 });
 
 test('server metadata refresh keeps a dirty local timeline edit until autosave', async ({ page, request }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const fixtureName = 'Server refresh dirty ' + Date.now();
   let projectId;
   let clockInstalled = false;
@@ -55,13 +55,21 @@ test('server metadata refresh keeps a dirty local timeline edit until autosave',
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     await page.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
-    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
+    // A cold Windows runner can spend more than ten seconds starting the
+    // derived-media toolchain. Wait for the real persisted precondition first,
+    // then require the UI to leave its saving state before freezing the clock.
     await expect.poll(async () => {
       const response = await request.get('/api/projects');
       if (!response.ok()) return null;
       const projects = await response.json();
-      return projects.find((project) => project.name === fixtureName)?.id ?? null;
-    }, { timeout: 10_000 }).not.toBeNull();
+      const fixture = projects.find((project) => project.name === fixtureName);
+      if (!fixture) return null;
+      const detailResponse = await request.get(`/api/projects/${fixture.id}`);
+      if (!detailResponse.ok()) return null;
+      const detail = await detailResponse.json();
+      return detail.tracks.flatMap((track) => track.clips).some((clip) => clip.type === 'image') ? fixture.id : null;
+    }, { timeout: 30_000 }).not.toBeNull();
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 30_000 });
     const projectsResponse = await request.get('/api/projects');
     projectId = (await projectsResponse.json()).find((project) => project.name === fixtureName).id;
     await page.locator('.tool-rail button').filter({ hasText: /Media|Medya/ }).click();

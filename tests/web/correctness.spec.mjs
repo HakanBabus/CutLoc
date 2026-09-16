@@ -58,6 +58,7 @@ test('timeline seeking continues from the clicked position during playback and e
     await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
     const whiteSurface = page.locator('.stock-media-card').filter({ hasText: /White surface|Beyaz yüzey/ });
     await whiteSurface.click();
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
     await whiteSurface.click();
     await expect(page.locator('.timeline-clip')).toHaveCount(2);
 

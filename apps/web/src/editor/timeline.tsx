@@ -276,9 +276,6 @@ export function TimelinePro({ project }: { project: Project }) {
       });
     });
   };
-  const seek = (event: React.MouseEvent<HTMLElement>) => {
-    setCurrentTime(snapPlayheadTime(timeFromClientX(event.clientX)));
-  };
   const onPointerMove = (event: React.PointerEvent) => {
     if (assetDragId) {
       const row = (event.target as HTMLElement).closest<HTMLElement>('[data-track-id]');
@@ -934,7 +931,7 @@ export function TimelinePro({ project }: { project: Project }) {
       >
         <div className="timeline-head">
           <div className="track-label-spacer" />
-          <div className="ruler" onClick={seek}>
+          <div className="ruler">
             {rulerTicks.map((tick) => (
               <div key={tick} className="ruler-tick" style={{ left: tick * px }}>
                 <span>{formatTime(tick).slice(3)}</span>
@@ -1046,7 +1043,7 @@ export function TimelinePro({ project }: { project: Project }) {
               </div>
             ))}
           </div>
-          <div className="tracks-canvas" onClick={seek}>
+          <div className="tracks-canvas">
             {!hasClips && (
               <div className="timeline-empty-guide">
                 <span aria-hidden="true">＋</span>
