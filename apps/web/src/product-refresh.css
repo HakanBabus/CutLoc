@@ -7960,3 +7960,377 @@ body {
     min-height: 0;
   }
 }
+
+/* Compact editor controls: keep narrow panels legible in every theme. */
+.app-shell[data-theme] .editor-body.workspace-layout {
+  grid-template-columns:
+    clamp(60px, var(--workspace-rail-width), 72px)
+    minmax(210px, min(var(--workspace-library-width), 23vw))
+    minmax(420px, 1fr)
+    minmax(240px, min(var(--workspace-inspector-width), 25vw));
+}
+
+.app-shell[data-theme] .tool-rail {
+  position: relative;
+  z-index: 41;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.app-shell[data-theme] .tool-rail .rail-scroll {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.app-shell[data-theme] .tool-rail button {
+  box-sizing: border-box;
+  width: 52px;
+  min-width: 0;
+  padding: 0 3px;
+  overflow: hidden;
+}
+
+.app-shell[data-theme] .tool-rail button small {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  font-size: 9px;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .speed-editor {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.app-shell[data-theme] .speed-metrics {
+  gap: 5px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .speed-metrics small { font-size: 7px; }
+.app-shell[data-theme] .speed-metrics strong { margin-top: 2px; font-size: 9px; }
+
+.app-shell[data-theme] .speed-view-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--theme-line);
+  border-radius: 7px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .speed-view-tabs button {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--theme-muted);
+  background: transparent;
+  font-size: 10px;
+}
+
+.app-shell[data-theme] .speed-view-tabs button.active {
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+  box-shadow: inset 0 0 0 1px var(--theme-line);
+}
+
+.app-shell[data-theme] :is(.speed-standard-panel, .speed-curve-panel) {
+  display: grid;
+  gap: 8px;
+}
+
+.app-shell[data-theme] .speed-value-card {
+  gap: 5px 8px;
+  padding: 8px 9px;
+  border-color: var(--theme-line);
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .speed-value-card > span {
+  font-size: 9px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.app-shell[data-theme] .speed-value-card output {
+  color: var(--theme-text);
+  font: 700 13px var(--font-mono);
+}
+
+.app-shell[data-theme] .speed-value-card .speed-slider {
+  height: 16px;
+  margin: 0;
+}
+
+.app-shell[data-theme] .speed-control-label strong { font-size: 10px; }
+.app-shell[data-theme] .speed-control-label small {
+  color: var(--theme-muted);
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .speed-preset-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.app-shell[data-theme] .speed-preset-grid button {
+  min-height: 28px;
+  padding: 3px 1px;
+  border-radius: 5px;
+  font-size: 8px;
+}
+
+.app-shell[data-theme] .speed-mode-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.app-shell[data-theme] .speed-mode-grid button {
+  min-height: 38px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 5px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .speed-mode-grid button svg { width: 34px; height: 15px; }
+
+.app-shell[data-theme] .speed-curve-card {
+  gap: 5px;
+  padding: 7px 7px 23px;
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .speed-curve-graph { height: 86px; }
+.app-shell[data-theme] .speed-graph-scale { top: 38px; bottom: 29px; }
+
+.app-shell[data-theme] .animation-studio-compact {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup {
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-setup-heading { display: none; }
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button {
+  display: block;
+  min-height: 30px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  text-align: center;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs button.active {
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+  box-shadow: inset 0 0 0 1px var(--theme-line);
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-icon,
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs small { display: none; }
+
+.app-shell[data-theme] .animation-studio-v3 .animation-mode-tabs strong {
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid,
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-grid.single {
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-duration-card {
+  padding: 6px 7px;
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .animation-duration-head {
+  grid-template-columns: minmax(0, 1fr) 60px;
+  gap: 6px;
+}
+
+.app-shell[data-theme] .animation-duration-head > span,
+.app-shell[data-theme] .animation-duration-head small { display: none; }
+
+.app-shell[data-theme] .animation-duration-head strong { font-size: 9px; }
+
+.app-shell[data-theme] .animation-duration-head label {
+  padding: 0 5px;
+  border-radius: 5px;
+}
+
+.app-shell[data-theme] .animation-duration-head input[type='number'] {
+  width: 38px;
+  height: 28px;
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-duration-range { margin: 5px 0 1px; }
+.app-shell[data-theme] .animation-duration-presets { display: none; }
+
+.app-shell[data-theme] .animation-studio-v3 .animation-preset-section { gap: 6px; }
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label small,
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label > span { display: none; }
+.app-shell[data-theme] .animation-studio-v3 .animation-section-label strong { font-size: 10px; }
+
+.app-shell[data-theme] .animation-studio-compact .animation-category-tabs button {
+  min-height: 26px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 46px auto;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 70px;
+  padding: 5px;
+  border: 1px solid var(--theme-line);
+  border-radius: 7px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card:hover,
+.app-shell[data-theme] .animation-studio-compact .animation-card.active {
+  border-color: var(--theme-accent-line);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card-visual {
+  width: 100%;
+  height: 46px;
+  border-radius: 6px;
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card-copy {
+  display: block;
+  min-width: 0;
+  text-align: center;
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card-copy strong {
+  display: block;
+  overflow: hidden;
+  color: var(--theme-text);
+  font-size: 9px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] .animation-studio-compact .animation-card-copy :is(small, em) { display: none; }
+
+.app-shell[data-theme] .animation-studio-compact .animation-card > b {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  font-size: 9px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 7px;
+}
+
+.app-shell[data-theme] .animation-studio-v3 .animation-advanced-toggle small { display: none; }
+
+/* The preview itself owns fullscreen so transport and duration stay visible. */
+.app-shell[data-theme] .preview-area:fullscreen {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  color: var(--theme-text);
+  background: var(--theme-bg);
+}
+
+.app-shell[data-theme] .preview-area:fullscreen .preview-stage { flex: 1 1 auto; min-height: 0; }
+.app-shell[data-theme] .preview-area:fullscreen .preview-time { flex: 0 0 auto; min-width: 168px; }
+.app-shell[data-theme] .preview-area:fullscreen :is(.preview-time-duration, .preview-time-divider) { display: inline !important; }
+
+.app-shell[data-theme] .fullscreen-button {
+  padding: 0;
+  color: var(--theme-muted);
+  background: var(--theme-panel-soft);
+}
+
+.app-shell[data-theme] .fullscreen-button.active,
+.app-shell[data-theme] .fullscreen-button:hover {
+  color: var(--theme-accent);
+  border-color: var(--theme-accent-line);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .fullscreen-glyph {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Every toolbar glyph and its hover surface share the same geometric center. */
+.app-shell[data-theme] .timeline-tool {
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0;
+  place-items: center;
+  line-height: 0;
+}
+
+.app-shell[data-theme] .timeline-tool .ui-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}

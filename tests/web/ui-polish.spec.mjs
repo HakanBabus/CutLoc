@@ -173,8 +173,50 @@ test('theme palettes and animation controls stay coherent across the workspace',
     expect(workspaceGeometry.framingFits).toBeTruthy();
     expect(workspaceGeometry.selectedOutline).toBe('none');
     expect(workspaceGeometry.tabOutline).toBe('none');
+    const railGeometry = await page.locator('.tool-rail').evaluate((rail) => {
+      const active = rail.querySelector('button.active');
+      const label = active?.querySelector('small');
+      const panel = rail.nextElementSibling;
+      const railRect = rail.getBoundingClientRect();
+      const activeRect = active?.getBoundingClientRect();
+      const panelRect = panel?.getBoundingClientRect();
+      return {
+        activeInsideRail: Boolean(activeRect && activeRect.left >= railRect.left && activeRect.right <= railRect.right),
+        labelFits: label instanceof HTMLElement && label.scrollWidth <= label.clientWidth,
+        separated: Boolean(panelRect && railRect.right <= panelRect.left + 1),
+      };
+    });
+    expect(railGeometry).toEqual({ activeInsideRail: true, labelFits: true, separated: true });
+    const timelineToolCenters = await page.locator('.timeline-tool').evaluateAll((buttons) => buttons.map((button) => {
+      const icon = button.querySelector('.ui-icon');
+      const buttonRect = button.getBoundingClientRect();
+      const iconRect = icon?.getBoundingClientRect();
+      return iconRect ? {
+        x: Math.abs((buttonRect.left + buttonRect.width / 2) - (iconRect.left + iconRect.width / 2)),
+        y: Math.abs((buttonRect.top + buttonRect.height / 2) - (iconRect.top + iconRect.height / 2)),
+      } : { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY };
+    }));
+    expect(timelineToolCenters.every(({ x, y }) => x <= 0.5 && y <= 0.5)).toBeTruthy();
+    await expect(page.getByRole('button', { name: /Safe area|Güvenli alan/i })).toHaveCount(0);
+    const fullscreenButton = page.getByRole('button', { name: /Fullscreen|Tam ekran/i });
+    await expect(fullscreenButton).toBeVisible();
+    await expect(fullscreenButton.locator('xpath=ancestor::*[contains(@class,"preview-controls")]')).toHaveCount(1);
+    await fullscreenButton.click();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBeTruthy();
+    await expect(page.locator('.preview-time-duration')).toBeVisible();
+    await fullscreenButton.click();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBeFalsy();
     await page.locator('.inspector-tool-tabs').getByRole('tab', { name: /Speed|Hız/ }).click();
     await expect(page.locator('.speed-metrics')).toContainText(/Source|Kaynak/);
+    const speedUi = await page.locator('.speed-standard-panel').evaluate((panel) => ({
+      panelHeight: panel.getBoundingClientRect().height,
+      sliderHeight: panel.querySelector('input[type="range"]')?.getBoundingClientRect().height ?? Number.POSITIVE_INFINITY,
+      valueSize: parseFloat(getComputedStyle(panel.querySelector('output')).fontSize),
+    }));
+    expect(speedUi.panelHeight).toBeLessThan(150);
+    expect(speedUi.sliderHeight).toBeLessThanOrEqual(18);
+    expect(speedUi.valueSize).toBeLessThanOrEqual(14);
+    await page.getByRole('tab', { name: /Speed curve|Hız eğrisi/i }).click();
     await page.locator('.speed-mode-grid button').filter({ hasText: /Speed up|Hızlan/ }).click();
     await expect.poll(async () => {
       const response = await request.get(`/api/projects/${projectId}`);
@@ -191,8 +233,8 @@ test('theme palettes and animation controls stay coherent across the workspace',
       columns: getComputedStyle(list).gridTemplateColumns.split(' ').filter(Boolean).length,
       cardColumns: getComputedStyle(list.querySelector('.animation-card')).gridTemplateColumns,
     }));
-    expect(animationLayout.columns).toBe(2);
-    expect(animationLayout.cardColumns.split(' ').length).toBe(2);
+    expect(animationLayout.columns).toBe(3);
+    expect(animationLayout.cardColumns.split(' ').length).toBe(1);
 
     await page.getByRole('tab', { name: /^(Motion|Hareket)$/i }).click();
     await expect(page.locator('.animation-card')).toHaveCount(5);
@@ -216,16 +258,14 @@ test('theme palettes and animation controls stay coherent across the workspace',
         label: card.querySelector('strong')?.textContent?.trim(),
         ariaLabel: card.querySelector('input[type="number"]')?.getAttribute('aria-label'),
         inputHeight: card.querySelector('input[type="number"]') instanceof HTMLElement ? card.querySelector('input[type="number"]').getBoundingClientRect().height : 0,
-        firstPreset: card.querySelector('.animation-duration-presets button')?.textContent?.trim(),
-        presetHeight: card.querySelector('.animation-duration-presets button') instanceof HTMLElement ? card.querySelector('.animation-duration-presets button').getBoundingClientRect().height : 0,
+        presetsHidden: card.querySelector('.animation-duration-presets') instanceof HTMLElement ? getComputedStyle(card.querySelector('.animation-duration-presets')).display === 'none' : false,
       })),
     }));
     expect(durationUi.cards.map((card) => card.kind)).toEqual(['in', 'out']);
     expect(durationUi.cards[0].label).toMatch(/Entrance|Giriş/i);
     expect(durationUi.cards[1].label).toMatch(/Exit|Çıkış/i);
     expect(durationUi.cards[0].ariaLabel).not.toBe(durationUi.cards[1].ariaLabel);
-    expect(durationUi.cards.every((card) => card.inputHeight >= 36 && card.presetHeight >= 36)).toBeTruthy();
-    expect(durationUi.cards[0].firstPreset).toBe(durationUi.language === 'tr' ? '0,20s' : '0.20s');
+    expect(durationUi.cards.every((card) => card.inputHeight >= 28 && card.inputHeight <= 32 && card.presetsHidden)).toBeTruthy();
     const advancedButton = page.getByRole('button', { name: /Advanced motion|Gelişmiş hareket/ });
     await expect(advancedButton).toHaveAttribute('aria-controls', 'animation-advanced-controls');
     await advancedButton.click();
@@ -249,7 +289,7 @@ test('theme palettes and animation controls stay coherent across the workspace',
         };
       });
       expect(controls.cardBackgroundColor).not.toBe('rgba(0, 0, 0, 0)');
-      expect(controls.cardRadius).toBe('9px');
+      expect(controls.cardRadius).toBe('7px');
       expect(controls.sliderAppearance).toBe('none');
       expect(controls.sliderHeight).toBe('18px');
     }

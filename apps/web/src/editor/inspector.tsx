@@ -17,11 +17,13 @@ export function Inspector({ project }: { project: Project }) {
   const activeInspectorTab = useEditor((state) => state.inspectorTab);
   const setActiveInspectorTab = useEditor((state) => state.setInspectorTab);
   const [keyframeProperty, setKeyframeProperty] = useState<Clip['keyframes'][number]['property']>('opacity');
+  const [speedView, setSpeedView] = useState<'standard' | 'curve'>('standard');
   const selected = project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
   const selectedAsset = selected?.assetId ? project.assets.find((asset) => asset.id === selected.assetId) : undefined;
   useEffect(() => {
     setActiveInspectorTab('primary');
     setKeyframeProperty('opacity');
+    setSpeedView('standard');
   }, [selected?.id, setActiveInspectorTab]);
   if (!selected)
     return (
@@ -809,58 +811,38 @@ export function Inspector({ project }: { project: Project }) {
                 <strong>{(selected.sourceDuration / Math.max(0.05, selected.duration)).toFixed(2)}×</strong>
               </span>
             </div>
-            <div className="speed-value-card">
-              <span>{t('inspector.speedValue')}</span>
-              <output>{selected.speed.toFixed(2)}×</output>
-              <input className="speed-slider" aria-label={t('inspector.clipSpeed')} type="range" min="0.25" max="4" step="0.05" value={selected.speed} onChange={(event) => setSpeed(Number(event.target.value))} />
-            </div>
-            <div className="speed-control-label">
-              <strong>{t('inspector.speedPresets')}</strong>
-              <small>0.25× — 4×</small>
-            </div>
-            <div className="speed-preset-grid">
-              {speedPresets.map((value) => (
-                <button key={value} className={Math.abs(selected.speed - value) < 0.001 ? 'active' : ''} aria-pressed={Math.abs(selected.speed - value) < 0.001} onClick={() => setSpeed(value)}>
-                  {value}×
-                </button>
-              ))}
-            </div>
-            <div className="speed-curve-card">
-              <div className="speed-control-label">
-                <strong>{t('inspector.speedGraph')}</strong>
-                <small>{supportsSpeedCurve ? t('inspector.speedGraphHint') : t('inspector.textSpeedHint')}</small>
-              </div>
-              <svg className="speed-curve-graph" viewBox="0 0 240 100" role="img" aria-label={t('inspector.speedGraphAria')}>
-                <defs>
-                  <linearGradient id={`speed-fill-${selected.id}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stopColor="currentColor" stopOpacity=".28" />
-                    <stop offset="1" stopColor="currentColor" stopOpacity=".02" />
-                  </linearGradient>
-                </defs>
-                <path className="speed-graph-grid" d="M12 22H228M12 38H228M12 54H228M12 70H228M12 86H228M12 14V86M66 14V86M120 14V86M174 14V86M228 14V86" />
-                <polygon className="speed-graph-fill" points={`12,86 ${speedGraphPoints} 228,86`} fill={`url(#speed-fill-${selected.id})`} />
-                <polyline points={speedGraphPoints} />
-                <line className="speed-graph-playhead" x1={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} x2={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} y1="14" y2="88" />
-                {curvePoints.map((point, index) => {
-                  const x = 12 + clamp(point.time / Math.max(selected.duration, 0.05), 0, 1) * 216;
-                  const y = 86 - ((Math.log2(clamp(point.speed, 0.25, 4)) + 2) / 4) * 64;
-                  return <circle key={`${point.time}-${index}`} cx={x} cy={y} r="3.5" />;
-                })}
-              </svg>
-              <div className="speed-graph-scale" aria-hidden="true">
-                <span>4×</span>
-                <span>2×</span>
-                <span>1×</span>
-                <span>0.5×</span>
-                <span>0.25×</span>
-              </div>
-              <div className="speed-graph-time" aria-hidden="true">
-                <span>0:00</span>
-                <span>{formatTime(selected.duration, true, project.canvas.fps)}</span>
-              </div>
-            </div>
             {supportsSpeedCurve && (
-              <>
+              <div className="speed-view-tabs" role="tablist" aria-label={t('inspector.tab.speed')}>
+                <button type="button" role="tab" aria-selected={speedView === 'standard'} className={speedView === 'standard' ? 'active' : ''} onClick={() => setSpeedView('standard')}>
+                  {t('inspector.speedConstant')}
+                </button>
+                <button type="button" role="tab" aria-selected={speedView === 'curve'} className={speedView === 'curve' ? 'active' : ''} onClick={() => setSpeedView('curve')}>
+                  {t('inspector.speedCurve')}
+                </button>
+              </div>
+            )}
+            {(speedView === 'standard' || !supportsSpeedCurve) && (
+              <div className="speed-standard-panel">
+                <div className="speed-value-card">
+                  <span>{t('inspector.speedValue')}</span>
+                  <output>{selected.speed.toFixed(2)}×</output>
+                  <input className="speed-slider" aria-label={t('inspector.clipSpeed')} type="range" min="0.25" max="4" step="0.05" value={selected.speed} onChange={(event) => setSpeed(Number(event.target.value))} />
+                </div>
+                <div className="speed-control-label">
+                  <strong>{t('inspector.speedPresets')}</strong>
+                  <small>0.25× — 4×</small>
+                </div>
+                <div className="speed-preset-grid">
+                  {speedPresets.map((value) => (
+                    <button key={value} className={Math.abs(selected.speed - value) < 0.001 ? 'active' : ''} aria-pressed={Math.abs(selected.speed - value) < 0.001} onClick={() => setSpeed(value)}>
+                      {value}×
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {supportsSpeedCurve && speedView === 'curve' && (
+              <div className="speed-curve-panel">
                 <div className="speed-control-label">
                   <strong>{t('inspector.speedModes')}</strong>
                   <small>{t('inspector.speedCurve')}</small>
@@ -875,6 +857,40 @@ export function Inspector({ project }: { project: Project }) {
                       {speedCurveMode === value && <b>✓</b>}
                     </button>
                   ))}
+                </div>
+                <div className="speed-curve-card">
+                  <div className="speed-control-label">
+                    <strong>{t('inspector.speedGraph')}</strong>
+                    <small>{t('inspector.speedGraphHint')}</small>
+                  </div>
+                  <svg className="speed-curve-graph" viewBox="0 0 240 100" role="img" aria-label={t('inspector.speedGraphAria')}>
+                    <defs>
+                      <linearGradient id={`speed-fill-${selected.id}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stopColor="currentColor" stopOpacity=".28" />
+                        <stop offset="1" stopColor="currentColor" stopOpacity=".02" />
+                      </linearGradient>
+                    </defs>
+                    <path className="speed-graph-grid" d="M12 22H228M12 38H228M12 54H228M12 70H228M12 86H228M12 14V86M66 14V86M120 14V86M174 14V86M228 14V86" />
+                    <polygon className="speed-graph-fill" points={`12,86 ${speedGraphPoints} 228,86`} fill={`url(#speed-fill-${selected.id})`} />
+                    <polyline points={speedGraphPoints} />
+                    <line className="speed-graph-playhead" x1={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} x2={12 + clamp((currentTime - selected.start) / Math.max(selected.duration, 0.05), 0, 1) * 216} y1="14" y2="88" />
+                    {curvePoints.map((point, index) => {
+                      const x = 12 + clamp(point.time / Math.max(selected.duration, 0.05), 0, 1) * 216;
+                      const y = 86 - ((Math.log2(clamp(point.speed, 0.25, 4)) + 2) / 4) * 64;
+                      return <circle key={`${point.time}-${index}`} cx={x} cy={y} r="3.5" />;
+                    })}
+                  </svg>
+                  <div className="speed-graph-scale" aria-hidden="true">
+                    <span>4×</span>
+                    <span>2×</span>
+                    <span>1×</span>
+                    <span>0.5×</span>
+                    <span>0.25×</span>
+                  </div>
+                  <div className="speed-graph-time" aria-hidden="true">
+                    <span>0:00</span>
+                    <span>{formatTime(selected.duration, true, project.canvas.fps)}</span>
+                  </div>
                 </div>
                 {curvePoints.length > 0 && (
                   <div className="speed-point-list">
@@ -937,7 +953,7 @@ export function Inspector({ project }: { project: Project }) {
                 <button className="speed-add-point" onClick={addSpeedPoint}>
                   ＋ {t('inspector.addSpeedPoint')}
                 </button>
-              </>
+              </div>
             )}
           </div>
         </InspectorSection>

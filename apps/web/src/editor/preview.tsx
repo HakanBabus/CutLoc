@@ -281,12 +281,10 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [showSafeArea, setShowSafeArea] = useState(false);
   const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'fit' : (project.canvas.fitMode ?? 'fit'));
   const [previewZoom, setPreviewZoom] = useState(100);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenSize, setFullscreenSize] = useState({ width: 0, height: 0 });
   const [previewDrag, setPreviewDrag] = useState<{
     clipId: string;
     mode: 'move' | 'scale';
@@ -324,27 +322,11 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     const updateFullscreenState = () => {
       const active = document.fullscreenElement === fullscreenRef.current;
       setIsFullscreen(active);
-      if (active)
-        setFullscreenSize({
-          width: Math.max(1, window.innerWidth),
-          height: Math.max(1, window.innerHeight),
-        });
     };
     document.addEventListener('fullscreenchange', updateFullscreenState);
     updateFullscreenState();
     return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
   }, []);
-  useEffect(() => {
-    if (!isFullscreen) return;
-    const updateSize = () =>
-      setFullscreenSize({
-        width: Math.max(1, window.innerWidth),
-        height: Math.max(1, window.innerHeight),
-      });
-    window.addEventListener('resize', updateSize);
-    updateSize();
-    return () => window.removeEventListener('resize', updateSize);
-  }, [isFullscreen]);
   const visualPlan = visualLayerPlan(project);
   const activeClips = visualPlan.filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
   const activeMedia = activeClips.filter(({ clip }) => !clip.adjustment && (clip.type === 'video' || clip.type === 'image'));
@@ -525,14 +507,11 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   };
   const canvasRatio = project.canvas.width / Math.max(1, project.canvas.height);
   const fitScale = Math.min(stageSize.width / Math.max(1, project.canvas.width), stageSize.height / Math.max(1, project.canvas.height));
-  const baseScale = Math.min(1, fitScale);
+  const baseScale = isFullscreen ? fitScale : Math.min(1, fitScale);
   const displayScale = baseScale * clamp(previewZoom / 100, 0.5, 2.5);
-  const fullWidth = fullscreenSize.width || (typeof window === 'undefined' ? stageSize.width : window.innerWidth);
-  const fullHeight = fullscreenSize.height || (typeof window === 'undefined' ? stageSize.height : window.innerHeight);
-  const fullscreenScale = Math.min(Math.max(1, fullWidth - 48) / Math.max(1, project.canvas.width), Math.max(1, fullHeight - 48) / Math.max(1, project.canvas.height));
   // Every overlay, hit target and selection box must use the same scale as the
   // canvas itself; otherwise zoom changes the frame but leaves controls behind.
-  const canvasScale = isFullscreen ? fullscreenScale : displayScale;
+  const canvasScale = displayScale;
   const canvasDisplaySize = {
     width: Math.max(1, Math.round(project.canvas.width * canvasScale)),
     height: Math.max(1, Math.round(project.canvas.height * canvasScale)),
@@ -630,7 +609,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       },
     );
   return (
-    <main className="preview-area">
+    <main ref={fullscreenRef} className="preview-area">
       <div className="preview-toolbar">
         <div className="preview-breadcrumb">
           <span>{t('preview.canvas')}</span>
@@ -649,14 +628,6 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
             <option value="smart">{t('preview.smartFraming')}</option>
           </select>
         </div>
-        <div className="preview-tools" aria-label={t('preview.view')}>
-          <button className={showSafeArea ? 'active' : ''} aria-label={t('preview.safeArea')} aria-pressed={showSafeArea} title={t('preview.safeArea')} onClick={() => setShowSafeArea((value) => !value)}>
-            ◫
-          </button>
-          <button aria-label={t('preview.fullscreen')} title={t('preview.fullscreen')} onClick={toggleFullscreen}>
-            ⛶
-          </button>
-        </div>
       </div>
       <div className="preview-inline-zoom" aria-label={t('preview.zoom')}>
         <button aria-label={t('preview.zoomOut')} onClick={() => setPreviewZoom((value) => clamp(value - 10, 50, 250))}>
@@ -671,7 +642,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       <div ref={stageRef} className="preview-stage">
         <div ref={viewportRef} className="preview-canvas-viewport">
           <div className="preview-canvas-pad" style={{ width: canvasPadSize.width, height: canvasPadSize.height }}>
-            <div ref={fullscreenRef} className="preview-fullscreen-shell" style={{ ['--canvas-ratio' as string]: canvasRatio }}>
+            <div className="preview-fullscreen-shell" style={{ ['--canvas-ratio' as string]: canvasRatio }}>
               <div
                 ref={canvasRef}
                 className={`canvas-frame canvas-aspect-${aspect.replace(':', '-')}`}
@@ -913,7 +884,6 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     <button className="preview-scale-handle" aria-label={t('preview.resizeAria')} onPointerDown={(event) => beginPreviewTransform(event, activeSelected.clip, 'scale')} />
                   </div>
                 )}
-                {!isFullscreen && showSafeArea && <div className="safe-area" />}
               </div>
             </div>
           </div>
@@ -938,6 +908,9 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
           </button>
         </div>
         <div className="transport-right">
+          <button className={`control-button fullscreen-button ${isFullscreen ? 'active' : ''}`} aria-label={t('preview.fullscreen')} aria-pressed={isFullscreen} title={t('preview.fullscreen')} onClick={toggleFullscreen}>
+            <span className="fullscreen-glyph" aria-hidden="true">⛶</span>
+          </button>
           <button
             className="control-button"
             aria-label={t('preview.rewind')}

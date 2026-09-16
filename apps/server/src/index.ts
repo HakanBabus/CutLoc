@@ -994,6 +994,11 @@ function exportClipDuration(clip: TimelineClip, projectDuration: number) {
 function buildExportArgs(project: Project, request: ExportRequest, output: string) {
   const body = normalizeExportOptions(project, request);
   const { width: outWidth, height: outHeight } = outputDimensions(project, body.aspect, body.resolution);
+  // Clip transforms are stored in project-canvas pixels. Export presets may
+  // render that canvas at a different resolution, so positional and text
+  // metrics must be mapped into output pixels before FFmpeg evaluates them.
+  const outputScaleX = outWidth / Math.max(1, numberOr(project.canvas.width, outWidth));
+  const outputScaleY = outHeight / Math.max(1, numberOr(project.canvas.height, outHeight));
   const fps = body.fps;
   const audioOnly = body.format === 'mp3' || body.format === 'wav' || request.audioOnly === true;
   const visualPlan = visualLayerPlan(project);
@@ -1090,14 +1095,14 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       const style = clip.textStyle ?? { text: clip.subtitle?.text ?? clip.name, fontFamily: 'Arial', fontSize: 42, fontWeight: 700, fontStyle: 'normal', textDecoration: 'none', letterSpacing: 0, lineHeight: 1.2, padding: 4, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' as const };
       const transform = clip.transform;
       const text = ffmpegText(style.text);
-      const fontSize = Math.max(8, Math.round(numberOr(style.fontSize, 42) * Math.max(0.05, numberOr(transform.scale, 1))));
+      const fontSize = Math.max(8, Math.round(numberOr(style.fontSize, 42) * outputScaleY * Math.max(0.05, numberOr(transform.scale, 1))));
       const fontColor = ffmpegColor(style.color);
       const strokeColor = ffmpegColor(style.stroke);
       const textStart = ffmpegNumber(clip.start);
       const textEnd = ffmpegNumber(clip.start + clip.duration);
       const localTime = `(t-${textStart})`;
-      const x = keyframeExpression(clip, 'x', numberOr(transform.x, 0), localTime);
-      const y = keyframeExpression(clip, 'y', numberOr(transform.y, 0), localTime);
+      const x = `(${keyframeExpression(clip, 'x', numberOr(transform.x, 0), localTime)})*${ffmpegNumber(outputScaleX)}`;
+      const y = `(${keyframeExpression(clip, 'y', numberOr(transform.y, 0), localTime)})*${ffmpegNumber(outputScaleY)}`;
       const textEnter = clamp(numberOr(clip.transitionIn?.duration, 0), 0, clip.duration);
       const textLeave = clamp(numberOr(clip.transitionOut?.duration, 0), 0, clip.duration);
       const usesTextFadeIn = clip.transitionIn?.type !== 'none' && clip.transitionIn?.type !== 'slide' && clip.transitionIn?.type !== 'zoom' && textEnter > 0;
@@ -1111,9 +1116,9 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       else if (fadeOut > 0) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(fadeOut)}),(${textEnd}-t)/${ffmpegNumber(fadeOut)},1)`);
       const textAlpha = alphaExpressions.reduce((value, expression) => `(${value})*(${expression})`, '1').replaceAll(',', '\\,');
       const draw = [`drawtext=font='${ffmpegFont(style.fontFamily)}'`, `text='${text}'`, `fontsize=${fontSize}`, `fontcolor=${fontColor}`, `x=(w-text_w)/2+${ffmpegExpression(x)}`, `y=(h-text_h)/2+${ffmpegExpression(y)}`, `enable='between(t,${textStart},${textEnd})'`, `alpha='${textAlpha}'`];
-      if (style.background !== 'transparent') draw.push('box=1', `boxcolor=${ffmpegColor(style.background)}`, `boxborderw=${Math.max(0, Math.round(style.padding))}`);
-      if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(style.strokeWidth)}`, `bordercolor=${strokeColor}`);
-      if (style.shadow) draw.push('shadowx=2', 'shadowy=2', 'shadowcolor=0x00000099');
+      if (style.background !== 'transparent') draw.push('box=1', `boxcolor=${ffmpegColor(style.background)}`, `boxborderw=${Math.max(0, Math.round(numberOr(style.padding, 0) * outputScaleY))}`);
+      if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(numberOr(style.strokeWidth, 0) * outputScaleY)}`, `bordercolor=${strokeColor}`);
+      if (style.shadow) draw.push(`shadowx=${ffmpegNumber(2 * outputScaleX)}`, `shadowy=${ffmpegNumber(2 * outputScaleY)}`, 'shadowcolor=0x00000099');
       const next = `[text${index}]`;
       filterLines.push(`${current}${draw.join(':')}${next}`);
       current = next;
@@ -1193,7 +1198,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       const transitionX = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'x', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
       const transitionY = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'y', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
       const next = `[comp${index}]`;
-      filterLines.push(`${current}${label}overlay=x=(main_w-overlay_w)/2+${ffmpegExpression(x)}+${ffmpegExpression(transitionX)}:y=(main_h-overlay_h)/2+${ffmpegExpression(y)}+${ffmpegExpression(transitionY)}:eof_action=pass:shortest=0:format=auto${next}`);
+      filterLines.push(`${current}${label}overlay=x=(main_w-overlay_w)/2+(${ffmpegExpression(x)}+${ffmpegExpression(transitionX)})*${ffmpegNumber(outputScaleX)}:y=(main_h-overlay_h)/2+(${ffmpegExpression(y)}+${ffmpegExpression(transitionY)})*${ffmpegNumber(outputScaleY)}:eof_action=pass:shortest=0:format=auto${next}`);
       current = next;
     });
     while (nextTextIndex < textClips.length) {

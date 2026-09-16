@@ -117,7 +117,7 @@ function brightPixelBounds(filePath, time, width, height) {
     }
   }
   assert.notEqual(maxX, -1, 'expected bright text pixels');
-  return { width: maxX - minX + 1, height: maxY - minY + 1 };
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
 test('health endpoint reports a local server without leaking the absolute data path', async () => {
@@ -983,6 +983,40 @@ test('advanced motion, crop, mask, speed curve and adjustment controls render th
   const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   const purgedResponse = await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
   assert.equal(purgedResponse.statusCode, 200);
+});
+
+test('export scales canvas-space clip positions with the requested output resolution', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Transform parity fixture' })).json();
+  const stock = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(stock.statusCode, 201);
+  const asset = stock.json().asset;
+  const project = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  project.canvas.background = '#000000';
+  project.tracks[0].clips.push({
+    id: 'scaled-position-clip', assetId: asset.id, type: 'image', name: asset.name, start: 0, duration: 0.2,
+    sourceStart: 0, sourceDuration: 0.2, speed: 1,
+    transform: { x: -600, y: 150, scale: 0.25, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, keyframes: [],
+  });
+  project.duration = 0.2;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+
+  const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', aspect: '16:9', resolution: '720p', quality: 'draft', range: { start: 0, end: 0.2 }, fileName: 'transform-parity.mp4' });
+  assert.equal(response.statusCode, 202);
+  const job = await waitForJob(response.json().job.id, 30000);
+  assert.equal(job.status, 'completed', job.error ?? 'transform parity export failed');
+  const output = exportFilePath(created.id, job.fileName);
+  const dimensions = probeVideoDimensions(output);
+  assert.deepEqual({ width: dimensions.width, height: dimensions.height }, { width: 1280, height: 720 });
+  const bounds = brightPixelBounds(output, 0.1, dimensions.width, dimensions.height);
+  assert.equal(Math.abs(bounds.x - 80) <= 3, true, `unexpected horizontal position: ${JSON.stringify(bounds)}`);
+  assert.equal(Math.abs(bounds.y - 370) <= 3, true, `unexpected vertical position: ${JSON.stringify(bounds)}`);
+  assert.equal(Math.abs(bounds.width - 320) <= 3, true, `unexpected width: ${JSON.stringify(bounds)}`);
+  assert.equal(Math.abs(bounds.height - 180) <= 3, true, `unexpected height: ${JSON.stringify(bounds)}`);
+
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
 });
 
 test('multiline text shorthands render as separate lines in FFmpeg exports', async () => {
