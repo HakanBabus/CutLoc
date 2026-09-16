@@ -1,6 +1,15 @@
-# CutLoc release checklist
+# CutLoc v1.0.0 release checklist
 
-This checklist prepares a release candidate; it does not publish, tag, or change the product version by itself.
+This checklist defines the v1.0.0 source-release gate and the repeatable process for later releases. Publishing remains a separate, explicit action after the candidate commit passes both local and GitHub checks.
+
+## v1.0.0 release contract
+
+- Release tag: `v1.0.0`
+- Package versions: `1.0.0` in the root and every workspace
+- Project compatibility: `schemaVersion: 1`; no project migration is required
+- Runtime baseline: Node.js 24.x and npm 11.x
+- Distribution: GitHub source archives; no installer or prebuilt desktop binary is included
+- Support boundary: single-user and loopback-only, with local FFmpeg processing
 
 ## Candidate gate
 
@@ -16,6 +25,7 @@ This checklist prepares a release candidate; it does not publish, tag, or change
 4. Run `npm.cmd run smoke:release` to start a production-style server with a disposable `DATA_DIR`, create a project through the CLI, import a generated video, export MP4, download it, and cleanly remove the fixture.
 5. Confirm the smoke uses the bundled FFmpeg binaries on Windows; Linux may select a full system build when the bundled binary lacks required filters.
 6. Confirm GitHub CI passes from the exact candidate commit.
+7. Run `git diff --check` and confirm no generated media, runtime data, credentials, or `AGENTS.md` file is staged.
 
 ## Version and documentation
 
@@ -33,4 +43,12 @@ This checklist prepares a release candidate; it does not publish, tag, or change
 
 ## Publish boundary
 
-Tagging, pushing, creating a GitHub release, and uploading artifacts are separate explicit actions. Run this checklist first and publish only after the candidate commit and release notes are approved.
+After the user authorizes publication:
+
+1. Commit the reviewed product fixes separately from version/documentation changes.
+2. Push the candidate commit to `main` and wait for CutLoc CI and CodeQL on that exact SHA.
+3. Create and push an annotated `v1.0.0` tag at the verified candidate commit.
+4. Create the GitHub Release from that tag, using the matching changelog entry as the release notes.
+5. Read back the remote tag and release URL to confirm publication.
+
+Do not move or recreate an existing release tag. A correction after publication requires a new version.

@@ -2662,7 +2662,7 @@ body {
   .animation-card-visual::before { animation: none !important; }
 }
 
-/* v0.1.0 — zoomable canvas viewport, object hit targets and help center */
+/* v1.0.0 — zoomable canvas viewport, object hit targets and help center */
 .preview-stage {
   align-items: stretch;
   justify-content: stretch;

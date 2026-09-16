@@ -5,17 +5,17 @@
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logosu" />
   <h1>CutLoc</h1>
-  <p><strong>Yaratıcı çalışmalar için beta aşamasında, yerel öncelikli bir video editörü.</strong></p>
+  <p><strong>Yaratıcı çalışmalar için yerel öncelikli bir video editörü.</strong></p>
 
-  [![Beta](https://img.shields.io/badge/durum-beta-4ea1ff)](#proje-durumu)
-  [![Sürüm](https://img.shields.io/badge/sürüm-0.1.0-7c8cff)](#proje-durumu)
+  [![Kararlı](https://img.shields.io/badge/durum-kararlı-35c48d)](#proje-durumu)
+  [![Sürüm](https://img.shields.io/badge/sürüm-1.0.0-7c8cff)](#proje-durumu)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
-> [!WARNING]
-> **CutLoc v0.1.0 beta yazılımdır.** Temel yerel kurgu, kurtarma, CLI ve dışa aktarma akışları kullanılabilir ve test edilmiştir; ancak önizleme ile dışa aktarma uyumu medya ve efekt birleşimine göre değişebilir. Önemli projelerinizin ve kaynak medyanızın bağımsız yedeklerini tutun.
+> [!IMPORTANT]
+> **CutLoc v1.0.0 ilk kararlı kaynak kod sürümüdür.** Yerel kurgu, kurtarma, CLI ve dışa aktarma akışları tam release kapısından geçmiştir. CutLoc bir medya sandbox'ı değil, yerel bir yaratıcı çalışma aracıdır; önemli projelerinizin ve kaynak medyanızın bağımsız yedeklerini tutun.
 
 CutLoc, kendi bilgisayarınızda çalışan tek kullanıcılı bir video editörüdür. Medya kitaplığı, çok kanallı zaman çizelgesi, canlı tuval, klip **Denetçisi**, proje kurtarma ve yerel FFmpeg dışa aktarma özelliklerini tarayıcı tabanlı tek çalışma alanında birleştirir.
 
@@ -32,6 +32,7 @@ Proje bilinçli olarak belirli bir alana odaklanır: barındırılan bir prodük
 - [Özellik haritası](#özellik-haritası)
 - [Editör iş akışı](#editör-iş-akışı)
 - [Proje durumu](#proje-durumu)
+- [v1.0.0 sürümü](#v100-sürümü)
 - [Teknolojiler](#teknolojiler)
 - [Hızlı başlangıç](#hızlı-başlangıç)
 - [CLI ve otomasyon](#cli-ve-otomasyon)
@@ -52,7 +53,7 @@ CutLoc, net bir yerel öncelikli sınır üzerine kuruludur:
 - Medya analizi, türetilmiş dosyalar, önizlemeler ve çıktılar proje bağımlılıklarıyla sağlanan FFmpeg/ffprobe ikililerini kullanır.
 - Yerel CLI, web editörüyle aynı API ve doğrulama sınırını kullanır; bu da onu sağlayıcıdan bağımsız yapay zekâ aracı otomasyonuna uygun hâle getirir.
 
-CutLoc; barındırılan video platformu, iş birliği servisi, herkese açık yükleme uç noktası, uzaktan render servisi veya yerleşik transkripsiyon ürünü değildir. Beta sürümü, her codec ve efekt birleşiminde tarayıcı ile FFmpeg çıktısının aynı olacağını garanti etmez.
+CutLoc; barındırılan video platformu, iş birliği servisi, herkese açık yükleme uç noktası, uzaktan render servisi veya yerleşik transkripsiyon ürünü değildir. CutLoc, her codec ve efekt birleşiminde tarayıcı ile FFmpeg çıktısının aynı olacağını garanti etmez.
 
 ## Kendiniz veya yapay zekâ ajanıyla kurgu
 
@@ -114,9 +115,9 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 ## Proje durumu
 
-**Güncel sürüm: `0.1.0` — beta.** Bu tabloyu uyumluluk garantisi değil, mevcut checkout'un anlık görüntüsü olarak değerlendirin.
+**Güncel sürüm: `1.0.0` — kararlı.** Bu tabloyu belgelenmiş yerel çalışma sınırı ve bilinen kısıtlarla birlikte etiketli kaynak kod sürümünün desteklenen davranışı olarak değerlendirin.
 
-| Alan | v0.1.0 durumu |
+| Alan | v1.0.0 durumu |
 | --- | --- |
 | Kontrol paneli, proje bilgileri ve proje depolama | Kullanılabilir; kartlar güncel proje klasörü boyutunu gösterir |
 | Video, ses ve görsel içe aktarma | Kullanılabilir; codec desteği kurulu FFmpeg yapısına bağlıdır |
@@ -131,6 +132,18 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 | Yerleşik transkripsiyon veya barındırılan yapay zekâ kurgusu | Mevcut editör kapsamının parçası değil |
 
 Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili mühendislik notlarında tutulur; bu genel README'de tekrarlanmaz.
+
+## v1.0.0 sürümü
+
+CutLoc v1.0.0 ilk desteklenen yerel kaynak kod sürümünü oluşturur:
+
+- Çıktı çözünürlüğü değiştiğinde önizleme ve FFmpeg dışa aktarma aynı tuval koordinatlarını kullanır.
+- Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
+- Tam ekran önizlemede timecode, toplam süre, oynatma kontrolleri ve kadraj araçları görünür kalır.
+- JSON öncelikli CLI; revizyon duyarlı düzenleme planlarını, proje kilitlerini, medya akışlarını, kurtarmayı, önizleme karesi almayı ve dışa aktarma otomasyonunu destekler.
+- Proje depolama sınırları, istek bütçeleri, otomatik kayıt birleştirmesi, yedekler, kurtarılabilir çöp ve kısmi çıktı temizliği otomatik testlerle korunur.
+
+Beta checkout'undan yükseltme proje migrasyonu gerektirmez: v1.0.0, `schemaVersion: 1` kullanmaya devam eder. Tag'i çektikten sonra kurulu bağımlılıkları release kilit dosyasıyla eşitlemek için `npm.cmd ci` çalıştırın. Uygulama sürümünü değiştirmeden önce önemli yerel projeleri yedekleyin.
 
 ## Teknolojiler
 
@@ -336,7 +349,7 @@ GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma a
 
 ## Katkıda bulunma
 
-CutLoc beta aşamasındadır. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
+CutLoc v1.0.0 güncel kararlı yerel sürümdür. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
 
 Değişiklikleri incelenebilir tutmak için bir özellik branch'i üzerinde çalışın ve pull request açın:
 

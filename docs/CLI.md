@@ -1,8 +1,10 @@
 # CutLoc CLI and AI-agent guide
 
-The CutLoc CLI is a JSON-first client for people, scripts, and tool-using AI agents. It talks to the same loopback Fastify API as the web editor, so project validation, revisions, backups, media rules, and export behavior remain consistent across both interfaces.
+The CutLoc v1.0.0 CLI is a JSON-first client for people, scripts, and tool-using AI agents. It talks to the same loopback Fastify API as the web editor, so project validation, revisions, backups, media rules, and export behavior remain consistent across both interfaces.
 
 The CLI never edits project files directly and does not contact an AI provider.
+
+The v1.0.0 command and JSON contracts are the first stable source-release baseline. Project documents remain on `schemaVersion: 1`; callers must still preserve the latest `revision` and handle conflict responses instead of assuming concurrent writes are safe.
 
 ## Start the server
 

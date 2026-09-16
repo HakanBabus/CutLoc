@@ -1,6 +1,6 @@
 # CutLoc product and development guide
 
-This document describes the public behavior of **CutLoc 0.1.0 beta**: how the local application is structured, what the editor supports, where it stores data, how exports work, and how to verify a change.
+This document describes the public behavior of the **CutLoc 1.0.0 stable source release**: how the local application is structured, what the editor supports, where it stores data, how exports work, and how to verify a change.
 
 For terminal automation and AI-agent workflows, see the [CLI and AI-agent guide](CLI.md).
 
@@ -11,6 +11,14 @@ CutLoc is a single-user, local-first video editor. The browser interface, comman
 CutLoc does not provide hosted storage, remote rendering, real-time collaboration, public uploads, or an embedded AI provider. The CLI is provider-neutral: an external AI agent may use it, but CutLoc does not send a project to that agent by itself.
 
 The server binds to a loopback address by default. Do not expose it through a public interface, tunnel, or reverse proxy.
+
+## v1.0.0 compatibility
+
+- Project files remain on `schemaVersion: 1`; existing validated beta projects require no migration.
+- The supported source runtime is Node.js 24.x with npm 11.x and the committed lockfile.
+- Windows 10/11 is the primary local target. CI also verifies the build and browser suite on Linux.
+- Preview/export geometry is resolution-aware: canvas-space position, scale, animation offsets, and text metrics are mapped to the selected export dimensions.
+- CutLoc remains loopback-only and single-user. v1.0.0 does not introduce a hosted service, public API deployment, or collaboration protocol.
 
 ## System overview
 
@@ -198,9 +206,9 @@ Use focused checks during development and the full baseline before publishing:
 
 Also run `git diff --check` before committing. Browser tests use a temporary `DATA_DIR`; they must never operate on real user projects.
 
-## Beta limitations
+## Known limitations
 
-- Preview and FFmpeg output may differ for some codecs, text details, filters, or effect combinations.
+- Preview and FFmpeg output share canvas geometry, but may still differ for codec-specific decoding, detailed typography, filters, or effect combinations.
 - Text rotation and some typography features may be approximated during export; preflight reports known limitations.
 - Hardware encoding, automatic transcription, hosted AI editing, collaboration, and lossless cutting are not included.
 - Codec support is bounded by the installed FFmpeg build.
@@ -229,4 +237,5 @@ Use `npm.cmd`, as shown throughout this guide.
 - [CLI and AI-agent guide](CLI.md)
 - [Release checklist](RELEASE.md)
 - [Project README](../README.md)
+- [Changelog](../CHANGELOG.md)
 - [Security policy](../SECURITY.md)

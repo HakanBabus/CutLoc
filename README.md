@@ -5,17 +5,17 @@
 <div align="center">
   <img src="apps/web/public/favicon.svg" width="88" height="88" alt="CutLoc logo" />
   <h1>CutLoc</h1>
-  <p><strong>A beta, local-first video editor for creative work.</strong></p>
+  <p><strong>A local-first video editor for creative work.</strong></p>
 
-  [![Beta](https://img.shields.io/badge/status-beta-4ea1ff)](#project-status)
-  [![Version](https://img.shields.io/badge/version-0.1.0-7c8cff)](#project-status)
+  [![Stable](https://img.shields.io/badge/status-stable-35c48d)](#project-status)
+  [![Version](https://img.shields.io/badge/version-1.0.0-7c8cff)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
-> [!WARNING]
-> **CutLoc v0.1.0 is beta software.** The core local editing, recovery, CLI, and export workflows are usable and tested, but preview/export parity still depends on the media and effect combination. Keep independent backups of important projects and source media.
+> [!IMPORTANT]
+> **CutLoc v1.0.0 is the first stable source release.** Its local editing, recovery, CLI, and export workflows pass the complete release gate. CutLoc remains a local creative tool rather than a media sandbox, so keep independent backups of important projects and source media.
 
 CutLoc is a single-user video editor that runs on your own computer. It combines a media library, multi-track timeline, live canvas, clip **Inspector**, project recovery, and local FFmpeg export in one browser-based workspace.
 
@@ -32,6 +32,7 @@ The project remains intentionally focused: it is a practical local editing envir
 - [Feature map](#feature-map)
 - [Editor workflow](#editor-workflow)
 - [Project status](#project-status)
+- [v1.0.0 release](#v100-release)
 - [Technology](#technology)
 - [Quick start](#quick-start)
 - [CLI and automation](#cli-and-automation)
@@ -52,7 +53,7 @@ CutLoc is built around a clear local-first boundary:
 - Media probing, derived files, previews, and exports use the FFmpeg/ffprobe binaries supplied through the project dependencies.
 - The local CLI uses the same API and validation boundary as the web editor, which makes it suitable for provider-neutral AI-tool automation.
 
-CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. The beta does not promise identical browser/FFmpeg output for every codec and effect combination.
+CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. CutLoc does not promise identical browser/FFmpeg output for every codec and effect combination.
 
 ## Edit yourself or with an AI agent
 
@@ -114,9 +115,9 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 ## Project status
 
-**Current version: `0.1.0` — beta.** Treat this table as a snapshot of the current checkout, not as a compatibility promise.
+**Current version: `1.0.0` — stable.** Treat this table as the supported behavior of the tagged source release, subject to the documented local-only boundary and known limitations.
 
-| Area | Status in v0.1.0 |
+| Area | Status in v1.0.0 |
 | --- | --- |
 | Dashboard, project metadata, and project storage | Available locally; cards report the current project-folder size |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
@@ -131,6 +132,18 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 | Built-in transcription or hosted AI editing | Not part of the current editor scope |
 
 The exact import/export boundaries and development contracts are maintained as internal engineering notes; they are intentionally not reproduced in this public README.
+
+## v1.0.0 release
+
+CutLoc v1.0.0 establishes the first supported local source release:
+
+- Preview and FFmpeg export use the same canvas-space positioning when output resolution changes.
+- The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
+- Fullscreen preview retains its timecode, duration, transport controls, and framing tools.
+- The JSON-first CLI supports revision-aware edit plans, project leases, media workflows, recovery, preview-frame capture, and export automation.
+- Project storage boundaries, request budgets, autosave merging, backups, recoverable trash, and partial-export cleanup are covered by automated tests.
+
+Upgrading from a beta checkout does not require a project migration: v1.0.0 continues to use `schemaVersion: 1`. Run `npm.cmd ci` after pulling the tag so the installed dependencies exactly match the release lockfile. Back up important local projects before changing application versions.
 
 ## Technology
 
@@ -338,7 +351,7 @@ GitHub CI runs the equivalent sequence on Linux and Windows: locked install, pre
 
 ## Contributing
 
-CutLoc is in beta. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
+CutLoc v1.0.0 is the current stable local release. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
 
 Keep changes reviewable by working on a feature branch and opening a pull request:
 

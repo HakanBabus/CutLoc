@@ -1,7 +1,7 @@
 {
   "name": "cutloc-editor",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "CutLoc local-first video editor",
   "engines": {
     "node": ">=24 <25",
