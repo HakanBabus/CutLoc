@@ -13,8 +13,8 @@ This checklist prepares a release candidate; it does not publish, tag, or change
    npm.cmd run release:check
    ```
 
-4. Start a production-style local server with a disposable `DATA_DIR`. Confirm the dashboard, `/api/health`, project creation, CLI inspection, and clean shutdown.
-5. Test at least one representative video import and MP4 export on Windows using the bundled FFmpeg binaries.
+4. Run `npm.cmd run smoke:release` to start a production-style server with a disposable `DATA_DIR`, create a project through the CLI, import a generated video, export MP4, download it, and cleanly remove the fixture.
+5. Confirm the smoke uses the bundled FFmpeg binaries on Windows; Linux may select a full system build when the bundled binary lacks required filters.
 6. Confirm GitHub CI passes from the exact candidate commit.
 
 ## Version and documentation

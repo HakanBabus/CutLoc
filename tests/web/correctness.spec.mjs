@@ -246,11 +246,12 @@ test('an active CLI session makes an open web project read-only and shows its ow
   }
 });
 
-test('two tabs merge independent edits and surface same-property conflicts', async ({ browser, request }) => {
+test('two tabs merge independent edits and surface same-property conflicts', async ({ browser, request }, testInfo) => {
   test.setTimeout(60_000);
   const fixtureName = `Multi tab conflict ${Date.now()}`;
-  const contextA = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
-  const contextB = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const baseURL = testInfo.project.use.baseURL;
+  const contextA = await browser.newContext({ baseURL });
+  const contextB = await browser.newContext({ baseURL });
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
   let projectId;
@@ -317,11 +318,12 @@ test('two tabs merge independent edits and surface same-property conflicts', asy
   }
 });
 
-test('two tabs surface delete-versus-edit conflicts without deleting the saved clip', async ({ browser, request }) => {
+test('two tabs surface delete-versus-edit conflicts without deleting the saved clip', async ({ browser, request }, testInfo) => {
   test.setTimeout(60_000);
   const fixtureName = `Delete edit conflict ${Date.now()}`;
-  const contextA = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
-  const contextB = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const baseURL = testInfo.project.use.baseURL;
+  const contextA = await browser.newContext({ baseURL });
+  const contextB = await browser.newContext({ baseURL });
   const pageA = await contextA.newPage(); const pageB = await contextB.newPage();
   let projectId;
   const saved = /All changes saved|T[uü]m de[gğ]i[şs]iklikler kaydedildi/i;
@@ -332,6 +334,13 @@ test('two tabs surface delete-versus-edit conflicts without deleting the saved c
     await pageA.getByRole('button', { name: /White surface|Beyaz y[uü]zey/ }).click();
     await expect(pageA.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 10_000 });
     projectId = (await (await request.get('/api/projects')).json()).find((project) => project.name === fixtureName)?.id;
+    expect(projectId).toBeTruthy();
+    await expect.poll(async () => {
+      const detailResponse = await request.get(`/api/projects/${projectId}`);
+      if (!detailResponse.ok()) return 0;
+      const detail = await detailResponse.json();
+      return detail.tracks.flatMap((track) => track.clips).length;
+    }, { timeout: 10_000 }).toBe(1);
     await pageB.goto('/'); await pageB.locator('article').filter({ hasText: fixtureName }).getByRole('button').first().click();
     await expect(pageB.locator('.timeline-clip')).toHaveCount(1);
     await pageA.locator('.timeline-clip').click();

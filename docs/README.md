@@ -131,6 +131,7 @@ Supported root `.env` values are documented in `.env.example`:
 | --- | --- |
 | `HOST` | Local server host; keep this on loopback |
 | `PORT` | Local API port |
+| `WEB_PORT` | Vite development UI port; defaults to `5173` |
 | `DATA_DIR` | Runtime project and settings directory |
 | `TRASH_RETENTION_DAYS` | Days deleted projects remain recoverable; defaults to `30` |
 | `MAX_UPLOAD_BYTES` | Per-upload byte limit |
@@ -166,7 +167,7 @@ CutLoc performs a creative render and re-encodes output; it is not a lossless re
 
 MP4 exports support 720p, 1080p, 2K/1440p, and 4K; 24, 25, 30, 50, and 60 FPS; draft, standard, high, and custom rate controls. Resolution follows the project aspect ratio and is rounded to valid even dimensions.
 
-Before starting an export, preflight validates the project revision, timeline, source files, FFmpeg availability, settings, range, and estimated disk requirement. Invalid In/Out ranges do not silently fall back to the full timeline.
+Before starting an export, preflight validates the project revision, timeline, source files, FFmpeg availability and text-rendering capability, settings, range, and estimated disk requirement. CutLoc prefers the bundled FFmpeg binary but can select a local full build when the bundled platform binary lacks `drawtext`. Invalid In/Out ranges do not silently fall back to the full timeline.
 
 Export jobs are asynchronous. The UI combines server-sent events with a polling watchdog so a short job cannot finish unnoticed during connection setup. Concurrent requests for the same name receive unique output filenames. Completed jobs remain completed and downloadable; only queued or running jobs can be cancelled. Download headers support UTF-8 filenames while retaining an ASCII fallback.
 

@@ -16,19 +16,25 @@ jobs:
   verify:
     name: Build, test and audit
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: npm
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Install full FFmpeg build
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
+      - name: Check local prerequisites
+        run: npm run doctor
 
       - name: Build all workspaces
         run: npm run build
@@ -42,19 +48,28 @@ jobs:
       - name: Run browser regression tests
         run: npm run test:web
 
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-linux-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
   windows-verify:
-    name: Windows build and non-browser tests
+    name: Windows build and browser tests
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: npm
@@ -70,3 +85,18 @@ jobs:
 
       - name: Run non-browser tests
         run: npm.cmd test
+
+      - name: Install Playwright Chromium
+        run: npx.cmd playwright install chromium
+
+      - name: Run browser regression tests
+        run: npm.cmd run test:web
+
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-windows-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

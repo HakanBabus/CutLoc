@@ -184,7 +184,7 @@ npm start
 
 This builds all workspaces and starts the local server at `http://127.0.0.1:4173`. On Windows, the server opens the local URL automatically unless `NO_OPEN=1` is set.
 
-The local server started by `npm run dev` and `npm start` loads the optional root `.env` file through Node.js 24's native environment-file support. The Vite development proxy and root CLI scripts follow the same local `HOST` and `PORT` values, so changing the API port does not split the three surfaces. Existing process environment variables take precedence, and a missing `.env` file is allowed.
+The local server started by `npm run dev` and `npm start` loads the optional root `.env` file through Node.js 24's native environment-file support. The Vite development proxy and root CLI scripts follow the same local `HOST` and `PORT` values; `WEB_PORT` controls the development UI port. Existing process environment variables take precedence, and a missing `.env` file is allowed.
 
 ## CLI and automation
 
@@ -318,7 +318,7 @@ npm.cmd audit --omit=dev --audit-level=high
 
 Before preparing a tagged build, run `npm.cmd run release:check` as the combined candidate gate.
 
-GitHub CI runs the equivalent sequence: locked install, all-workspace build, shared/server/CLI tests, Playwright Chromium installation and browser tests, then the production dependency audit.
+GitHub CI runs the equivalent sequence on Linux and Windows: locked install, prerequisite checks, all-workspace build, shared/server/CLI tests, and Playwright Chromium browser tests. Linux also runs the production dependency audit. Failed browser jobs retain screenshots and traces for diagnosis.
 
 ## Safety boundaries
 
@@ -330,6 +330,7 @@ GitHub CI runs the equivalent sequence: locked install, all-workspace build, sha
 
 ## Documentation map
 
+- [Changelog](CHANGELOG.md) — release-candidate changes, fixes, and known limitations.
 - [Product and development guide](docs/README.md) — architecture, editing model, media/export behavior, local data, testing, and troubleshooting.
 - [CLI and AI-agent guide](docs/CLI.md) — command groups, JSON workflows, sessions, leases, export automation, and safety boundaries.
 - [Release checklist](docs/RELEASE.md) — candidate gates, version synchronization, onboarding, and publish boundaries.

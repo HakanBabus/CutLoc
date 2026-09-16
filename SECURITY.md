@@ -22,6 +22,8 @@ There is no guaranteed response or remediation SLA for this experimental project
 ## Scope and deployment boundary
 
 - Keep the server bound to `127.0.0.1` or another loopback address.
+- Project IDs and managed media paths are validated at the API boundary; do not bypass the API to edit project storage.
+- Local API traffic is rate-limited, with a tighter budget for FFmpeg-backed preview rendering.
 - Do not expose CutLoc through a LAN binding, tunnel, reverse proxy, or public interface.
 - Do not upload media or project data that you are not authorized to process.
 - FFmpeg processes complex native media formats and is not fully sandboxed by this experimental release.

@@ -15,13 +15,20 @@ export function resolveApiProxyTarget(environment = {}) {
   return `http://${urlHost}:${port}`;
 }
 
+export function resolveWebPort(environment = {}) {
+  const port = Number(environment.WEB_PORT ?? 5173);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('CutLoc WEB_PORT must be an integer between 1 and 65535.');
+  return port;
+}
+
 export default defineConfig(({ mode }) => {
   const environment = { ...loadEnv(mode, repoRoot, ''), ...process.env };
   return {
     plugins: [react()],
     server: {
       host: '127.0.0.1',
-      port: 5173,
+      port: resolveWebPort(environment),
+      strictPort: true,
       proxy: { '/api': resolveApiProxyTarget(environment) },
     },
     build: {
