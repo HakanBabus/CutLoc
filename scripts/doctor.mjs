@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -57,8 +58,12 @@ const loopback = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 add('Local host', loopback.has(host.toLowerCase()), host);
 add('API port', Number.isInteger(port) && port >= 1 && port <= 65535, String(process.env.PORT ?? 4173));
 
-const dataDir = path.resolve(repoRoot, process.env.DATA_DIR || 'data');
-const dataParent = fs.existsSync(dataDir) ? dataDir : path.dirname(dataDir);
+const cutlocHome = path.resolve(process.env.CUTLOC_HOME?.trim() || (process.platform === 'win32'
+  ? path.join(process.env.LOCALAPPDATA?.trim() || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Local'), 'CutLoc')
+  : path.join(process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), '.local', 'share'), 'CutLoc')));
+const dataDir = path.resolve(process.env.DATA_DIR?.trim() || path.join(cutlocHome, 'data'));
+let dataParent = dataDir;
+while (!fs.existsSync(dataParent) && path.dirname(dataParent) !== dataParent) dataParent = path.dirname(dataParent);
 try {
   fs.accessSync(dataParent, fs.constants.R_OK | fs.constants.W_OK);
   add('Data directory', true, dataDir);
@@ -76,5 +81,5 @@ if (checks.some((check) => !check.ok)) {
   process.stderr.write('\nCutLoc is not ready. Fix the failed checks, then run npm.cmd run doctor again.\n');
   process.exitCode = 1;
 } else {
-  process.stdout.write('\nCutLoc prerequisites are ready. Start with npm.cmd run dev or npm.cmd start.\n');
+  process.stdout.write('\nCutLoc prerequisites are ready. Run npm.cmd run setup:user once, then use cutloc open.\n');
 }

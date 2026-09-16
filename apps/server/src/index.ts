@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { API_PROTOCOL_VERSION, CUTLOC_VERSION, runtimePaths } from '@cutloc/runtime';
 import { serverT, type ServerTranslationKey, type ServerTranslationValues } from './i18n.js';
 import {
   defaultProject,
@@ -41,11 +42,13 @@ import {
 
 const require = createRequire(import.meta.url);
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const dataDir = path.resolve(process.env.DATA_DIR ?? path.join(rootDir, 'data'));
+const userRuntimePaths = runtimePaths();
+const configuredDataDir = process.env.DATA_DIR?.trim();
+const dataDir = path.resolve(configuredDataDir || userRuntimePaths.data);
 const projectsDir = path.join(dataDir, 'projects');
 const settingsFile = path.join(dataDir, 'settings.json');
 const stockDir = path.join(rootDir, 'apps', 'server', 'stock');
-const port = Number(process.env.PORT ?? 4173);
+let runtimePort = Number(process.env.PORT ?? 4173);
 const webPort = Number(process.env.WEB_PORT ?? 5173);
 const webDist = path.join(rootDir, 'apps/web/dist');
 function boundedNumber(raw: string | undefined, fallback: number, min: number, max: number) {
@@ -127,7 +130,7 @@ function isAllowedWebOrigin(origin: string | undefined) {
   try {
     const parsed = new URL(origin);
     const originPort = parsed.port ? Number(parsed.port) : undefined;
-    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || originPort === port || originPort === webPort);
+    return isLocalHostname(parsed.hostname.toLowerCase()) && (!parsed.port || originPort === runtimePort || originPort === webPort);
   } catch {
     return false;
   }
@@ -1529,7 +1532,17 @@ function maskFilter(mask: NonNullable<TimelineClip['mask']>) {
 async function registerRoutes(app: FastifyInstance) {
   app.get('/api/health', async () => {
     const ffmpeg = binaryPath('ffmpeg');
-    return { ok: true, port, ffmpeg: Boolean(ffmpeg), ffprobe: Boolean(binaryPath('ffprobe')), textRendering: ffmpegHasFilter(ffmpeg, 'drawtext'), dataDir: path.basename(dataDir) };
+    return {
+      ok: true,
+      product: 'CutLoc',
+      version: CUTLOC_VERSION,
+      apiVersion: API_PROTOCOL_VERSION,
+      port: runtimePort,
+      ffmpeg: Boolean(ffmpeg),
+      ffprobe: Boolean(binaryPath('ffprobe')),
+      textRendering: ffmpegHasFilter(ffmpeg, 'drawtext'),
+      dataDir: path.basename(dataDir),
+    };
   });
 
   app.get('/api/settings', async () => settings);
@@ -2259,4 +2272,8 @@ export async function createServer() {
   });
   await registerRoutes(app);
   return app;
+}
+
+export function setRuntimePort(port: number) {
+  runtimePort = port;
 }

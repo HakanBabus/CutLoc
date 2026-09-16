@@ -20,6 +20,7 @@ async function availablePort() {
 }
 
 const testDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-playwright-'));
+const testCutLocHome = path.join(testDataDir, 'home');
 const apiPort = await availablePort();
 let webPort = await availablePort();
 while (webPort === apiPort) webPort = await availablePort();
@@ -38,6 +39,7 @@ try {
       PORT: String(apiPort),
       WEB_PORT: String(webPort),
       DATA_DIR: testDataDir,
+      CUTLOC_HOME: testCutLocHome,
       CUTLOC_E2E_DATA_DIR: testDataDir,
       NO_OPEN: '1',
     },

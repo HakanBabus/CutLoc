@@ -531,6 +531,9 @@ test('bracketed IPv6 localhost hosts are accepted', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/health', headers: { host: '[::1]:4173', origin: 'http://[::1]:5173' } });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
+  assert.equal(response.json().product, 'CutLoc');
+  assert.equal(response.json().version, '1.1.0');
+  assert.equal(response.json().apiVersion, 1);
 });
 
 test('settings validation returns a client error without leaking a server failure', async () => {

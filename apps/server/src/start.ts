@@ -1,7 +1,16 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  acquireRuntimeLock,
+  API_PROTOCOL_VERSION,
+  CUTLOC_VERSION,
+  ensureRuntimeFolders,
+  runtimePaths,
+  writeJsonAtomic,
+} from '@cutloc/runtime';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const envFile = path.join(repoRoot, '.env');
@@ -13,14 +22,58 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 if (!loopbackHosts.has(host.toLowerCase())) {
   throw new Error('CutLoc is local-only and only accepts loopback HOST values.');
 }
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error('CutLoc PORT must be an integer between 1 and 65535.');
+if (!Number.isInteger(port) || port < 0 || port > 65535) {
+  throw new Error('CutLoc PORT must be an integer between 0 and 65535.');
 }
-const { createServer } = await import('./index.js');
+const paths = await ensureRuntimeFolders(runtimePaths());
+const releaseRuntimeLock = await acquireRuntimeLock(paths);
+const { createServer, setRuntimePort } = await import('./index.js');
 const app = await createServer();
-await app.listen({ port, host });
-const browserHost = host === '::1' || host === '[::1]' ? '[::1]' : host;
-console.log(`CutLoc ready: http://${browserHost}:${port}`);
-if (process.platform === 'win32' && process.env.NO_OPEN !== '1') {
-  spawn('cmd.exe', ['/c', 'start', '', `http://${browserHost}:${port}`], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+
+let closing = false;
+async function cleanup() {
+  if (closing) return;
+  closing = true;
+  await fs.promises.rm(paths.instanceFile, { force: true }).catch(() => undefined);
+  await releaseRuntimeLock().catch(() => undefined);
 }
+
+try {
+  await app.listen({ port, host });
+  const address = app.server.address();
+  const activePort = typeof address === 'object' && address ? address.port : port;
+  setRuntimePort(activePort);
+  const browserHost = host === '::1' || host === '[::1]' ? '[::1]' : host;
+  const apiUrl = `http://${browserHost}:${activePort}`;
+  const configuredDataDir = process.env.DATA_DIR?.trim();
+  await writeJsonAtomic(paths.instanceFile, {
+    product: 'CutLoc',
+    version: CUTLOC_VERSION,
+    apiVersion: API_PROTOCOL_VERSION,
+    apiUrl,
+    pid: process.pid,
+    instanceId: crypto.randomUUID(),
+    dataDir: path.resolve(configuredDataDir || paths.data),
+    startedAt: new Date().toISOString(),
+  });
+  console.log(`CutLoc ready: ${apiUrl}`);
+  if (process.platform === 'win32' && process.env.NO_OPEN !== '1') {
+    spawn('cmd.exe', ['/d', '/s', '/c', 'start', '', apiUrl], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+  }
+} catch (error) {
+  await app.close().catch(() => undefined);
+  await cleanup();
+  throw error;
+}
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    void (async () => {
+      await app.close().catch(() => undefined);
+      await cleanup();
+      process.exit(0);
+    })();
+  });
+}
+
+process.once('beforeExit', () => { void cleanup(); });

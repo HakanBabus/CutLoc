@@ -4,12 +4,12 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "declaration": true,
     "outDir": "dist",
     "rootDir": "src",
     "composite": true,
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/runtime" }],
   "include": ["src"]
 }

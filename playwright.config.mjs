@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import path from 'node:path';
 
 const webPort = Number(process.env.WEB_PORT ?? 5173);
 const apiPort = Number(process.env.PORT ?? 4173);
@@ -26,6 +27,6 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort), WEB_PORT: String(webPort), DATA_DIR: testDataDir, NO_OPEN: '1' },
+    env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort), WEB_PORT: String(webPort), DATA_DIR: testDataDir, CUTLOC_HOME: path.join(testDataDir, 'home'), NO_OPEN: '1' },
   },
 });

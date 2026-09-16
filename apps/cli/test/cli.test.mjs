@@ -145,6 +145,59 @@ test('CLI follows local HOST and PORT configuration when no URL override is pass
   assert.equal(JSON.parse(result.stdout).ok, true);
 });
 
+test('status is read-only while live commands auto-start one shared server and open reuses it', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-runtime-'));
+  const environment = {
+    CUTLOC_HOME: home,
+    DATA_DIR: path.join(home, 'data'),
+    CUTLOC_NO_OPEN: '1',
+    CUTLOC_URL: '',
+  };
+  let pid;
+  try {
+    const stopped = await runRawCli(['--compact', 'status', '--json'], '', environment);
+    assert.equal(stopped.code, 0, stopped.stderr);
+    assert.equal(JSON.parse(stopped.stdout).running, false);
+
+    const projects = await runRawCli(['--compact', 'projects', 'list'], '', environment);
+    assert.equal(projects.code, 0, projects.stderr);
+    assert.deepEqual(JSON.parse(projects.stdout), []);
+
+    const running = await runRawCli(['--compact', 'status', '--json'], '', environment);
+    assert.equal(running.code, 0, running.stderr);
+    const runningStatus = JSON.parse(running.stdout);
+    assert.equal(runningStatus.running, true);
+    assert.equal(runningStatus.version, '1.1.0');
+    assert.equal(runningStatus.apiVersion, 1);
+    assert.match(runningStatus.apiUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+    pid = runningStatus.pid;
+
+    const opened = await runRawCli(['--compact', 'open'], '', environment);
+    assert.equal(opened.code, 0, opened.stderr);
+    assert.equal(JSON.parse(opened.stdout).started, false);
+
+    const doctor = await runRawCli(['--compact', 'doctor', '--json'], '', environment);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const diagnosis = JSON.parse(doctor.stdout);
+    assert.equal(diagnosis.ok, true);
+    assert.equal(diagnosis.checks.find((check) => check.name === 'server').ok, true);
+    assert.equal(diagnosis.checks.find((check) => check.name === 'compatibility').ok, true);
+  } finally {
+    if (pid) {
+      try { process.kill(pid); } catch { /* server may already have exited */ }
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        } catch {
+          break;
+        }
+      }
+    }
+    await fsp.rm(home, { recursive: true, force: true });
+  }
+});
+
 test('CLI keeps startup validation errors machine-readable', async () => {
   const invalidUrl = await runRawCli(['--url', 'not-a-url', '--compact', 'projects', 'list']);
   assert.equal(invalidUrl.code, 1);

@@ -44,7 +44,7 @@ const port = await availablePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, [serverEntry], {
   cwd: root,
-  env: { ...process.env, DATA_DIR: dataDir, PORT: String(port), NO_OPEN: '1' },
+  env: { ...process.env, CUTLOC_HOME: path.join(temporaryRoot, 'home'), DATA_DIR: dataDir, PORT: String(port), NO_OPEN: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
   windowsHide: true,
 });
