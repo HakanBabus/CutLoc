@@ -244,7 +244,7 @@ node apps/cli/dist/index.js --compact agent inspect <project-id>
 
 `agent inspect` genel görünümü varsayılan olarak kompakt ve sayfalanmıştır. Dönen veriyi yönetmek için `--cursor`, `--limit`, `--no-guide` veya `--full` kullanın.
 
-Kullanıcı CLI'ı güncel loopback API'yi `%LOCALAPPDATA%\CutLoc\runtime\instance.json` üzerinden keşfeder. Canlı instance yoksa canlı komutlar boş bir portta yeni instance başlatır. Geliştirme araçları `--url`, `CUTLOC_URL`, `HOST` ve `PORT` kullanmaya devam edebilir; CLI loopback dışı sunucuları reddeder.
+Kullanıcı CLI'ı güncel loopback API'yi `%LOCALAPPDATA%\CutLoc\runtime\instance.json` üzerinden keşfeder. Canlı instance yoksa canlı komutlar boş bir portta yeni instance başlatır. `--url` ve `CUTLOC_URL` açık override olarak kalır. Repo içindeki geliştirme CLI yönlendiricisi `.env` içindeki `HOST` ve `PORT` değerlerini de izler; kurulu komut ise başka geliştirme araçlarının CutLoc'u yanlış adrese yönlendirmemesi için bu genel değişken adlarını bilerek yok sayar. CLI loopback dışı sunucuları reddeder.
 
 ### Yapay zekâ aracıyla proje düzenleme
 

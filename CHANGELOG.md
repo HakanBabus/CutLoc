@@ -23,6 +23,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - Runtime status and doctor use the effective project directory, and doctor verifies FFmpeg text rendering.
 - Health discovery rejects loopback services that do not identify the CutLoc product and API protocol.
 - Background server output is retained in `logs\server.log`, and version changes restart stale managed instances.
+- Installed commands ignore unrelated generic `HOST`/`PORT` variables, offline agent guidance no longer advertises a guessed API address, and doctor reports endpoint identity failures as structured checks.
 
 ### Known limitations
 

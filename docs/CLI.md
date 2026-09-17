@@ -36,6 +36,10 @@ Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\in
 
 Health discovery requires the endpoint to identify itself as CutLoc and provide both product and API protocol versions. A generic loopback service returning only `{ "ok": true }` is rejected.
 
+The installed command ignores generic `HOST` and `PORT` environment variables, which are commonly set by unrelated tools. Use `CUTLOC_URL` or `--url` for an explicit installed-CLI override. The repository's `npm.cmd run cli` development wrapper still loads `.env` and opts into its `HOST`/`PORT` values.
+
+When no verified server is running, `agent guide` returns `transport.baseUrl: null`; agents should keep using `cutloc` commands and let a live command discover or start the actual dynamic endpoint.
+
 `agent guide` is static and can run without the server.
 
 ## Invocation modes

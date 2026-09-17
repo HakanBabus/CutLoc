@@ -245,7 +245,7 @@ node apps/cli/dist/index.js --compact agent inspect <project-id>
 The overview form of `agent inspect` is compact and paginated by default. Use
 `--cursor`, `--limit`, `--no-guide`, or `--full` to control its payload.
 
-The user CLI discovers the current loopback API from `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. If no live instance exists, live commands start one on an available port. Development tools can still use `--url`, `CUTLOC_URL`, `HOST`, and `PORT`; non-loopback hosts are rejected.
+The user CLI discovers the current loopback API from `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. If no live instance exists, live commands start one on an available port. `--url` and `CUTLOC_URL` remain explicit overrides. The repository's development CLI wrapper also follows `.env` `HOST` and `PORT`; the installed command intentionally ignores those generic variable names so unrelated development tools cannot redirect CutLoc. Non-loopback hosts are rejected.
 
 ### AI-tool project editing
 

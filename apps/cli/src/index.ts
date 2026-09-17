@@ -87,8 +87,9 @@ const agentGuide = {
   productVersion: CUTLOC_VERSION,
   product: 'CutLoc',
   transport: {
-    baseUrl: 'http://127.0.0.1:4173',
+    baseUrl: null as string | null,
     boundary: 'loopback-only',
+    discovery: 'Use CutLoc CLI commands; the managed server may start on any available loopback port.',
     output: 'Successful commands write JSON to stdout; errors write one JSON object to stderr.',
     compactFlag: '--compact',
   },
@@ -212,8 +213,9 @@ type Health = {
 };
 
 function initialize() {
-  const configuredHost = process.env.HOST?.trim();
-  const configuredPort = process.env.PORT?.trim();
+  const developmentEndpoint = process.env.CUTLOC_DEVELOPMENT_ENDPOINT === '1';
+  const configuredHost = developmentEndpoint ? process.env.HOST?.trim() : undefined;
+  const configuredPort = developmentEndpoint ? process.env.PORT?.trim() : undefined;
   if (configuredPort !== undefined) {
     const port = Number(configuredPort);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('CutLoc CLI port must be an integer between 1 and 65535.');
@@ -254,13 +256,17 @@ async function discoverRuntimeEndpoint() {
   if (discovered) parsedBaseUrl = new URL(discovered.apiUrl);
 }
 
+function healthCompatibilityError(health: Health) {
+  if (health.product !== 'CutLoc') return 'The loopback endpoint is not a CutLoc server.';
+  if (!health.version?.trim()) return 'The CutLoc server did not report a product version.';
+  if (!Number.isInteger(health.apiVersion)) return 'The CutLoc server did not report an API protocol version.';
+  if (health.apiVersion !== API_PROTOCOL_VERSION) return `CutLoc CLI/API protocol mismatch: CLI ${API_PROTOCOL_VERSION}, server ${health.apiVersion}.`;
+  return null;
+}
+
 function assertCompatibleHealth(health: Health) {
-  if (health.product !== 'CutLoc') throw new Error('The loopback endpoint is not a CutLoc server.');
-  if (!health.version?.trim()) throw new Error('The CutLoc server did not report a product version.');
-  if (!Number.isInteger(health.apiVersion)) throw new Error('The CutLoc server did not report an API protocol version.');
-  if (health.apiVersion !== API_PROTOCOL_VERSION) {
-    throw new Error(`CutLoc CLI/API protocol mismatch: CLI ${API_PROTOCOL_VERSION}, server ${health.apiVersion}.`);
-  }
+  const error = healthCompatibilityError(health);
+  if (error) throw new Error(error);
 }
 
 function appEnvironment(appRoot: string) {
@@ -420,31 +426,34 @@ function openBrowser(url: string) {
   spawn(command, commandArgs, { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
 }
 
-async function runtimeStatus() {
+async function runtimeStatus(options: { allowIncompatible?: boolean } = {}) {
   await discoverRuntimeEndpoint();
   const health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
-  if (health) assertCompatibleHealth(health);
+  const compatibilityError = health ? healthCompatibilityError(health) : null;
+  if (compatibilityError && !options.allowIncompatible) throw new Error(compatibilityError);
   const installation = await configuredInstallation();
   const configuredDataDir = configuredDataDirectory(installation.appRoot);
   return {
     ok: true,
     running: Boolean(health),
+    product: health?.product ?? null,
     version: health?.version ?? currentInstance?.version ?? CUTLOC_VERSION,
     cliVersion: CUTLOC_VERSION,
-    apiVersion: health?.apiVersion ?? API_PROTOCOL_VERSION,
+    apiVersion: health ? health.apiVersion ?? null : API_PROTOCOL_VERSION,
     apiUrl: health ? parsedBaseUrl.origin : null,
     pid: health ? currentInstance?.pid ?? null : null,
     startedAt: health ? currentInstance?.startedAt ?? null : null,
     dataDir: health && currentInstance ? currentInstance.dataDir : configuredDataDir,
     home: paths.home,
     logFile: path.join(paths.logs, 'server.log'),
+    compatibilityError,
   };
 }
 
 async function runtimeDoctor() {
   await ensureRuntimeFolders(paths);
   const installation = await configuredInstallation();
-  const status = await runtimeStatus();
+  const status = await runtimeStatus({ allowIncompatible: true });
   const checks: Array<{ name: string; ok: boolean; severity: 'error' | 'warning'; detail: string }> = [];
   const add = (name: string, ok: boolean, detail: string, severity: 'error' | 'warning' = 'error') => checks.push({ name, ok, severity, detail });
   const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -483,7 +492,6 @@ async function runtimeDoctor() {
   const ffmpeg = configuredBinary('FFMPEG_PATH', 'ffmpeg-static');
   const ffprobe = configuredBinary('FFPROBE_PATH', 'ffprobe-static');
   const health = status.running ? await probeHealth() : null;
-  if (health) assertCompatibleHealth(health);
   const textRendering = health
     ? health.textRendering === true
     : Boolean(ffmpeg.path && (() => {
@@ -494,8 +502,9 @@ async function runtimeDoctor() {
   add('ffprobe', health ? health.ffprobe === true : Boolean(ffprobe.path), health ? String(status.apiUrl) : ffprobe.detail);
   add('text-rendering', textRendering, health ? String(status.apiUrl) : ffmpeg.detail);
   add('server', status.running, status.running ? String(status.apiUrl) : 'not running; a live command or cutloc open will start it', 'warning');
-  add('compatibility', !status.running || status.apiVersion === API_PROTOCOL_VERSION, `CLI ${API_PROTOCOL_VERSION}; server ${status.running ? status.apiVersion : 'not running'}`);
-  add('version', !status.running || status.version === CUTLOC_VERSION, `CLI ${CUTLOC_VERSION}; server ${status.running ? status.version : 'not running'}`, 'warning');
+  add('identity', !status.running || status.product === 'CutLoc', status.running ? String(status.product ?? 'missing product identity') : 'server not running');
+  add('compatibility', !status.running || (!status.compatibilityError && status.apiVersion === API_PROTOCOL_VERSION), status.compatibilityError ?? `CLI ${API_PROTOCOL_VERSION}; server ${status.running ? status.apiVersion : 'not running'}`);
+  add('version', !status.running || status.product !== 'CutLoc' || status.version === CUTLOC_VERSION, `CLI ${CUTLOC_VERSION}; server ${status.running ? status.version : 'not running'}`, 'warning');
   const pathEntries = (process.env.PATH ?? '').split(path.delimiter).map((entry) => path.resolve(entry.replace(/^"|"$/g, '')));
   add('path', pathEntries.some((entry) => entry.toLocaleLowerCase() === path.resolve(paths.bin).toLocaleLowerCase()), paths.bin, 'warning');
   return {
@@ -524,7 +533,7 @@ function apiUrl(apiPath: string) {
 }
 
 function liveAgentGuide() {
-  return { ...agentGuide, transport: { ...agentGuide.transport, baseUrl: parsedBaseUrl.origin } };
+  return { ...agentGuide, transport: { ...agentGuide.transport, baseUrl: serverEnsured ? parsedBaseUrl.origin : null } };
 }
 
 async function writeResponseFile(response: Response, fileName: string) {
@@ -847,6 +856,8 @@ async function main() {
     args.shift();
     ensureNoArgs(args);
     await discoverRuntimeEndpoint();
+    const health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
+    if (health && !healthCompatibilityError(health)) serverEnsured = true;
     return print(liveAgentGuide());
   }
 

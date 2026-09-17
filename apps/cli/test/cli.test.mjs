@@ -138,6 +138,7 @@ test('CLI follows local HOST and PORT configuration when no URL override is pass
   const address = server.address();
   const result = await runRawCli(['--compact', 'api', 'GET', '/api/health'], '', {
     CUTLOC_URL: '',
+    CUTLOC_DEVELOPMENT_ENDPOINT: '1',
     HOST: '127.0.0.1',
     PORT: String(address.port),
   });
@@ -228,8 +229,34 @@ test('CLI rejects a loopback endpoint that does not identify its product and pro
     const result = await runRawCli(['--url', `http://127.0.0.1:${address.port}`, '--compact', 'status', '--json']);
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /not a CutLoc server/i);
+    const doctorResult = await runRawCli(['--url', `http://127.0.0.1:${address.port}`, '--compact', 'doctor', '--json']);
+    assert.equal(doctorResult.code, 1);
+    const doctor = JSON.parse(doctorResult.stdout);
+    assert.equal(doctor.checks.find((check) => check.name === 'identity').ok, false);
+    assert.equal(doctor.checks.find((check) => check.name === 'compatibility').ok, false);
   } finally {
     await new Promise((resolve, reject) => impostor.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('installed CLI ignores unrelated HOST and PORT environment variables', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-generic-env-'));
+  try {
+    const environment = {
+      CUTLOC_HOME: home,
+      CUTLOC_URL: '',
+      CUTLOC_DEVELOPMENT_ENDPOINT: '',
+      HOST: '0.0.0.0',
+      PORT: '1',
+    };
+    const result = await runRawCli(['--compact', 'status', '--json'], '', environment);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).running, false);
+    const guide = await runRawCli(['--compact', 'agent', 'guide'], '', environment);
+    assert.equal(guide.code, 0, guide.stderr);
+    assert.equal(JSON.parse(guide.stdout).transport.baseUrl, null);
+  } finally {
+    await fsp.rm(home, { recursive: true, force: true });
   }
 });
 

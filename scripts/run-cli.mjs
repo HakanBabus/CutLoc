@@ -7,5 +7,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const envFile = path.join(repoRoot, '.env');
 if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
+process.env.CUTLOC_DEVELOPMENT_ENDPOINT = '1';
 
 await import(pathToFileURL(path.join(repoRoot, 'apps', 'cli', 'dist', 'index.js')).href);
