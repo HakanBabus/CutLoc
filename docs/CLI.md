@@ -14,7 +14,7 @@ After cloning and installing dependencies, register the command once:
 npm.cmd run setup:user
 ```
 
-Open a new terminal, then run `cutloc` from any directory. The setup writes a command shim under `%LOCALAPPDATA%\CutLoc\bin`, adds and verifies that directory on the user PATH, stores installation metadata, and prepares `%LOCALAPPDATA%\CutLoc\data`. A legacy checkout-local `data/` directory is copied when the target is empty or contains only empty runtime scaffolding. When both locations contain data, setup copies missing projects and trash entries without replacing conflicts, reports the conflicting paths, and never deletes the source.
+Open a new terminal, then run `cutloc` from any directory. The setup writes its command shim atomically under `%LOCALAPPDATA%\CutLoc\bin`, adds and verifies that directory on the user PATH, stores installation metadata, and prepares `%LOCALAPPDATA%\CutLoc\data`. Equivalent PATH entries written with values such as `%LOCALAPPDATA%` are recognized instead of duplicated. A legacy checkout-local `data/` directory is copied when the target is empty or contains only empty runtime scaffolding. When both locations contain data, setup copies missing projects and trash entries without replacing conflicts, reports the conflicting paths, and never deletes the source.
 
 ## Runtime commands
 

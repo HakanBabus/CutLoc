@@ -120,6 +120,17 @@ test('setup:user verifies the PATH update logic without changing the user PATH',
     const output = JSON.parse(result.stdout);
     assert.equal(output.pathUpdated, true);
     assert.equal(output.pathVerified, true);
+
+    const idempotent = await runSetup(['--no-migrate'], {
+      CUTLOC_HOME: home,
+      CUTLOC_SETUP_TEST_MODE: '1',
+      CUTLOC_SETUP_TEST_PATH_SCOPE: 'Process',
+      PATH: `%CUTLOC_HOME%\\bin;${process.env.PATH}`,
+    });
+    assert.equal(idempotent.code, 0, idempotent.stderr);
+    const idempotentOutput = JSON.parse(idempotent.stdout);
+    assert.equal(idempotentOutput.pathUpdated, false);
+    assert.equal(idempotentOutput.pathVerified, true);
   } finally {
     await fsp.rm(home, { recursive: true, force: true });
   }

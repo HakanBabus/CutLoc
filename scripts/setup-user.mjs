@@ -52,6 +52,17 @@ async function exists(target) {
   }
 }
 
+async function writeTextAtomic(file, value) {
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fsp.writeFile(temporary, value, 'utf8');
+    await fsp.rename(temporary, file);
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
 async function directoryHasContent(directory) {
   for (const entry of await fsp.readdir(directory, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isDirectory()) return true;
@@ -118,8 +129,6 @@ async function migrateLegacyData(legacyData) {
 
 const shimFile = path.join(paths.bin, 'cutloc.cmd');
 const shim = `@echo off\r\n"${escapeCmdValue(process.execPath)}" "${escapeCmdValue(installation.cliEntry)}" %*\r\n`;
-await fsp.writeFile(shimFile, shim, 'utf8');
-await writeJsonAtomic(paths.installFile, installation);
 
 let legacyMigration = { status: 'skipped', copied: [], conflicts: [] };
 const legacyDataOverride = setupTestMode ? process.env.CUTLOC_LEGACY_DATA_DIR?.trim() : undefined;
@@ -127,6 +136,9 @@ const legacyData = path.resolve(legacyDataOverride || path.join(appRoot, 'data')
 if (!noMigrate) {
   legacyMigration = await migrateLegacyData(legacyData);
 }
+
+await writeTextAtomic(shimFile, shim);
+await writeJsonAtomic(paths.installFile, installation);
 
 let pathUpdated = false;
 let pathVerified = false;
@@ -136,14 +148,16 @@ if (!noPath) {
     "$current = [Environment]::GetEnvironmentVariable('Path', $scope)",
     "$entries = @($current -split ';' | Where-Object { $_ })",
     "$target = $env:CUTLOC_BIN_TO_ADD",
-    "if (-not ($entries | Where-Object { $_.TrimEnd('\\') -ieq $target.TrimEnd('\\') })) {",
+    "$normalize = { param([string]$value) if ($null -eq $value) { return '' }; return [Environment]::ExpandEnvironmentVariables($value.Trim().Trim('\"')).TrimEnd('\\') }",
+    "$targetNormalized = & $normalize $target",
+    "if (-not ($entries | Where-Object { (& $normalize $_) -ieq $targetNormalized })) {",
     "  $next = (($entries + $target) -join ';')",
     "  [Environment]::SetEnvironmentVariable('Path', $next, $scope)",
     "  Write-Output 'UPDATED'",
     '} else {',
     "  Write-Output 'UNCHANGED'",
     '}',
-    "$verified = @([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ieq $target.TrimEnd('\\') })",
+    "$verified = @([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -and (& $normalize $_) -ieq $targetNormalized })",
     "if (-not $verified.Count) { throw 'CutLoc PATH update could not be verified.' }",
     "Write-Output 'VERIFIED'",
   ].join('; ');
