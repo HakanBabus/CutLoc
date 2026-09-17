@@ -68,7 +68,7 @@ test('setup:user migrates legacy data after runtime created empty scaffold folde
     await fsp.writeFile(path.join(legacy, 'projects', 'legacy-project', 'project.json'), '{"id":"legacy-project"}', 'utf8');
     await fsp.writeFile(path.join(legacy, 'settings.json'), '{"language":"tr"}', 'utf8');
 
-    const result = await runSetup(['--no-path'], { CUTLOC_HOME: home, CUTLOC_LEGACY_DATA_DIR: legacy });
+    const result = await runSetup(['--no-path'], { CUTLOC_HOME: home, CUTLOC_SETUP_TEST_MODE: '1', CUTLOC_LEGACY_DATA_DIR: legacy });
     assert.equal(result.code, 0, result.stderr);
     const output = JSON.parse(result.stdout);
     assert.equal(output.legacyMigration, 'copied');
@@ -94,7 +94,7 @@ test('setup:user merges missing legacy projects without overwriting conflicts', 
     await fsp.writeFile(path.join(legacy, 'projects', 'legacy-only', 'project.json'), 'legacy-only', 'utf8');
     await fsp.writeFile(path.join(legacy, 'settings.json'), 'legacy-settings', 'utf8');
 
-    const result = await runSetup(['--no-path'], { CUTLOC_HOME: home, CUTLOC_LEGACY_DATA_DIR: legacy });
+    const result = await runSetup(['--no-path'], { CUTLOC_HOME: home, CUTLOC_SETUP_TEST_MODE: '1', CUTLOC_LEGACY_DATA_DIR: legacy });
     assert.equal(result.code, 0, result.stderr);
     const output = JSON.parse(result.stdout);
     assert.equal(output.legacyMigration, 'merged-with-conflicts');
@@ -113,6 +113,7 @@ test('setup:user verifies the PATH update logic without changing the user PATH',
   try {
     const result = await runSetup(['--no-migrate'], {
       CUTLOC_HOME: home,
+      CUTLOC_SETUP_TEST_MODE: '1',
       CUTLOC_SETUP_TEST_PATH_SCOPE: 'Process',
     });
     assert.equal(result.code, 0, result.stderr);

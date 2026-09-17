@@ -100,21 +100,65 @@ export function processExists(pid: number) {
   }
 }
 
-export async function readRuntimeInstance(paths = runtimePaths()) {
-  const instance = await readJsonFile<RuntimeInstance>(paths.instanceFile);
-  if (!instance || instance.product !== 'CutLoc' || !processExists(instance.pid)) return null;
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return nonEmptyString(value) && Number.isFinite(Date.parse(value));
+}
+
+function validRuntimeInstance(value: unknown): value is RuntimeInstance {
+  if (!value || typeof value !== 'object') return false;
+  const instance = value as Partial<RuntimeInstance>;
+  if (instance.product !== 'CutLoc'
+    || !nonEmptyString(instance.version)
+    || !Number.isInteger(instance.apiVersion)
+    || !Number.isInteger(instance.pid)
+    || !nonEmptyString(instance.instanceId)
+    || !nonEmptyString(instance.dataDir)
+    || !path.isAbsolute(instance.dataDir)
+    || !validTimestamp(instance.startedAt)
+    || !nonEmptyString(instance.apiUrl)) return false;
   try {
     const url = new URL(instance.apiUrl);
-    if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname)) return null;
+    return ['http:', 'https:'].includes(url.protocol)
+      && !url.username
+      && !url.password
+      && ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname)
+      && url.pathname === '/'
+      && !url.search
+      && !url.hash;
   } catch {
-    return null;
+    return false;
   }
+}
+
+function validUserInstallation(value: unknown): value is UserInstallation {
+  if (!value || typeof value !== 'object') return false;
+  const installation = value as Partial<UserInstallation>;
+  return installation.product === 'CutLoc'
+    && nonEmptyString(installation.version)
+    && nonEmptyString(installation.appRoot)
+    && path.isAbsolute(installation.appRoot)
+    && nonEmptyString(installation.nodePath)
+    && path.isAbsolute(installation.nodePath)
+    && nonEmptyString(installation.cliEntry)
+    && path.isAbsolute(installation.cliEntry)
+    && nonEmptyString(installation.serverEntry)
+    && path.isAbsolute(installation.serverEntry)
+    && validTimestamp(installation.configuredAt);
+}
+
+export async function readRuntimeInstance(paths = runtimePaths()) {
+  const instance = await readJsonFile<unknown>(paths.instanceFile);
+  if (!validRuntimeInstance(instance) || !processExists(instance.pid)) return null;
   return instance;
 }
 
 export async function readUserInstallation(paths = runtimePaths()) {
-  const installation = await readJsonFile<UserInstallation>(paths.installFile);
-  if (!installation || installation.product !== 'CutLoc') return null;
+  const installation = await readJsonFile<unknown>(paths.installFile);
+  if (!validUserInstallation(installation)) return null;
   return installation;
 }
 
@@ -136,10 +180,15 @@ export async function acquireRuntimeLock(paths = runtimePaths()) {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const lock = await readJsonFile<RuntimeLock>(paths.lockFile);
+      const candidateLock = await readJsonFile<unknown>(paths.lockFile);
+      const lock = candidateLock && typeof candidateLock === 'object'
+        && Number.isInteger((candidateLock as Partial<RuntimeLock>).pid)
+        && validTimestamp((candidateLock as Partial<RuntimeLock>).createdAt)
+        ? candidateLock as RuntimeLock
+        : null;
       const createdAt = Date.parse(lock?.createdAt ?? '');
       const fresh = Number.isFinite(createdAt) && Date.now() - createdAt < 30_000;
-      const instance = await readJsonFile<RuntimeInstance>(paths.instanceFile);
+      const instance = await readRuntimeInstance(paths);
       let responding = false;
       if (lock && instance?.pid === lock.pid && processExists(lock.pid)) {
         try {

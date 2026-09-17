@@ -16,6 +16,7 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const paths = await ensureRuntimeFolders(runtimePaths());
 const noPath = process.argv.includes('--no-path');
 const noMigrate = process.argv.includes('--no-migrate');
+const setupTestMode = process.env.CUTLOC_SETUP_TEST_MODE === '1';
 const unknown = process.argv.slice(2).filter((argument) => !['--no-path', '--no-migrate'].includes(argument));
 if (unknown.length) throw new Error(`Unknown setup argument: ${unknown[0]}`);
 if (process.platform !== 'win32' && !noPath) throw new Error('setup:user currently configures the Windows user PATH. Use --no-path for isolated testing.');
@@ -121,7 +122,8 @@ await fsp.writeFile(shimFile, shim, 'utf8');
 await writeJsonAtomic(paths.installFile, installation);
 
 let legacyMigration = { status: 'skipped', copied: [], conflicts: [] };
-const legacyData = path.resolve(process.env.CUTLOC_LEGACY_DATA_DIR?.trim() || path.join(appRoot, 'data'));
+const legacyDataOverride = setupTestMode ? process.env.CUTLOC_LEGACY_DATA_DIR?.trim() : undefined;
+const legacyData = path.resolve(legacyDataOverride || path.join(appRoot, 'data'));
 if (!noMigrate) {
   legacyMigration = await migrateLegacyData(legacyData);
 }
@@ -130,7 +132,7 @@ let pathUpdated = false;
 let pathVerified = false;
 if (!noPath) {
   const script = [
-    "$scope = if ($env:CUTLOC_SETUP_TEST_PATH_SCOPE -eq 'Process') { 'Process' } else { 'User' }",
+    "$scope = if ($env:CUTLOC_SETUP_TEST_MODE -eq '1' -and $env:CUTLOC_SETUP_TEST_PATH_SCOPE -eq 'Process') { 'Process' } else { 'User' }",
     "$current = [Environment]::GetEnvironmentVariable('Path', $scope)",
     "$entries = @($current -split ';' | Where-Object { $_ })",
     "$target = $env:CUTLOC_BIN_TO_ADD",

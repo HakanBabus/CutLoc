@@ -34,6 +34,8 @@ cutloc restart
 
 Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A managed instance from another CutLoc product version is restarted before a live command proceeds. Detached output is appended to `%LOCALAPPDATA%\CutLoc\logs\server.log`. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
 
+Installation and instance records are treated as untrusted runtime state. Incomplete records, relative executable paths, non-loopback URLs, embedded URL credentials, invalid timestamps, and dead process IDs are ignored; a live command then falls back to the registered/source installation path instead of following malformed metadata.
+
 Health discovery requires the endpoint to identify itself as CutLoc and provide both product and API protocol versions. A generic loopback service returning only `{ "ok": true }` is rejected.
 
 The installed command ignores generic `HOST` and `PORT` environment variables, which are commonly set by unrelated tools. Use `CUTLOC_URL` or `--url` for an explicit installed-CLI override. The repository's `npm.cmd run cli` development wrapper still loads `.env` and opts into its `HOST`/`PORT` values.
