@@ -11,6 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const cliFile = path.join(repoRoot, 'apps', 'cli', 'dist', 'index.js');
 const requests = [];
 let baseUrl;
+let mockActiveJobs = 0;
 
 const project = {
   schemaVersion: 1,
@@ -40,7 +41,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
-  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 1, ffmpeg: true, ffprobe: true, textRendering: true });
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, busy: mockActiveJobs > 0 });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
   if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
   if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
@@ -156,6 +157,7 @@ test('status is read-only while live commands auto-start one shared server and o
     CUTLOC_URL: '',
   };
   let pid;
+  let session;
   try {
     const stopped = await runRawCli(['--compact', 'status', '--json'], '', environment);
     assert.equal(stopped.code, 0, stopped.stderr);
@@ -170,7 +172,7 @@ test('status is read-only while live commands auto-start one shared server and o
     const runningStatus = JSON.parse(running.stdout);
     assert.equal(runningStatus.running, true);
     assert.equal(runningStatus.version, '1.1.0');
-    assert.equal(runningStatus.apiVersion, 1);
+    assert.equal(runningStatus.apiVersion, 2);
     assert.match(runningStatus.apiUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
     assert.equal(runningStatus.dataDir, dataDir);
     pid = runningStatus.pid;
@@ -195,14 +197,44 @@ test('status is read-only while live commands auto-start one shared server and o
     assert.notEqual(restartedStatus.pid, pid);
     pid = restartedStatus.pid;
 
-    const stoppedResult = await runRawCli(['--compact', 'stop'], '', environment);
+    const created = await runRawCli(['--compact', 'projects', 'create', 'Busy project'], '', environment);
+    assert.equal(created.code, 0, created.stderr);
+    const projectId = JSON.parse(created.stdout).id;
+    session = spawn(process.execPath, [cliFile, '--compact', 'session', projectId], {
+      cwd: repoRoot,
+      env: { ...process.env, ...environment },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const ready = await new Promise((resolve, reject) => {
+      let output = '';
+      session.once('error', reject);
+      session.stdout.setEncoding('utf8').on('data', (chunk) => {
+        output += chunk;
+        const newline = output.indexOf('\n');
+        if (newline >= 0) resolve(JSON.parse(output.slice(0, newline)));
+      });
+    });
+    assert.equal(ready.ready, true);
+    const refusedStop = await runRawCli(['--compact', 'stop'], '', environment);
+    assert.equal(refusedStop.code, 1);
+    assert.match(JSON.parse(refusedStop.stderr).error, /active editor session/i);
+    assert.equal(JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout).running, true);
+
+    const stoppedResult = await runRawCli(['--compact', 'stop', '--force'], '', environment);
     assert.equal(stoppedResult.code, 0, stoppedResult.stderr);
     assert.equal(JSON.parse(stoppedResult.stdout).stopped, true);
     pid = undefined;
+    session.stdin.end();
+    try { process.kill(session.pid); } catch { /* session already exited */ }
+    session = undefined;
     const afterStop = JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout);
     assert.equal(afterStop.running, false);
     assert.match(await fsp.readFile(path.join(home, 'logs', 'server.log'), 'utf8'), /CutLoc ready:/);
   } finally {
+    if (session) {
+      session.stdin.end();
+      try { process.kill(session.pid); } catch { /* session already exited */ }
+    }
     if (pid) {
       try { process.kill(pid); } catch { /* server may already have exited */ }
       for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -260,6 +292,17 @@ test('installed CLI ignores unrelated HOST and PORT environment variables', asyn
   }
 });
 
+test('stop refuses to interrupt active media work even when forced', async () => {
+  mockActiveJobs = 1;
+  try {
+    const result = await runCli(['stop', '--force']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /active media job/i);
+  } finally {
+    mockActiveJobs = 0;
+  }
+});
+
 test('stopped status and doctor honor the registered checkout DATA_DIR from .env', async () => {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-env-'));
   const home = path.join(base, 'home');
@@ -303,6 +346,8 @@ test('a live command replaces a managed server from an older product version', a
     const server = http.createServer((request, response) => {
       response.setHeader('content-type', 'application/json');
       if (request.method === 'GET' && request.url === '/api/health') return response.end(JSON.stringify({ ok: true, product: 'CutLoc', version: '1.0.0', apiVersion: 1 }));
+      if (request.method === 'GET' && request.url === '/api/jobs') return response.end('[]');
+      if (request.method === 'GET' && request.url === '/api/projects') return response.end('[]');
       if (request.method === 'POST' && request.url === '/api/runtime/shutdown') {
         response.end(JSON.stringify({ ok: true }));
         return setTimeout(() => server.close(() => process.exit(0)), 25);
@@ -365,7 +410,7 @@ test('agent guide is machine-readable and documents the safe full-project workfl
   const result = await runCli(['agent', 'guide']);
   assert.equal(result.code, 0, result.stderr);
   const guide = JSON.parse(result.stdout);
-  assert.equal(guide.protocolVersion, 1);
+  assert.equal(guide.protocolVersion, 2);
   assert.equal(guide.transport.boundary, 'loopback-only');
   assert.equal(guide.transport.baseUrl, baseUrl);
   assert.ok(guide.recommendedWorkflow.some((step) => /projects get/i.test(step)));

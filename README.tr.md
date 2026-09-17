@@ -141,7 +141,7 @@ CutLoc v1.1.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
 - Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
 - Tam ekran önizlemede timecode, toplam süre, oynatma kontrolleri ve kadraj araçları görünür kalır.
 - Tek seferlik `setup:user`, `cutloc` komutunu kullanıcı PATH'ine kaydeder; `cutloc open` ortak sunucuyu başlatır veya yeniden kullanır ve tarayıcı editörünü açar.
-- `cutloc stop` ve `cutloc restart`, ortak sunucunun yaşam döngüsünü açıkça yönetir; canlı komutlar farklı CutLoc sürümünden kalan yönetilen sunucuyu otomatik yeniler.
+- `cutloc stop` ve `cutloc restart`, ortak sunucunun yaşam döngüsünü açıkça yönetir; canlı komutlar uyumsuz kalan yönetilen sunucuyu otomatik yeniler. Stop/restart etkin medya işlerini kesmez; etkin editör oturumlarını kapatmak için açıkça `--force` gerekir.
 - `cutloc status --json` ve `cutloc doctor --json`, makinece okunabilir runtime, sürüm, depolama, araç ve uyumluluk kontrolleri sunar.
 - JSON öncelikli CLI; revizyon duyarlı düzenleme planlarını, proje kilitlerini, medya akışlarını, kurtarmayı, önizleme karesi almayı ve dışa aktarma otomasyonunu korur.
 - Proje depolama sınırları, istek bütçeleri, otomatik kayıt birleştirmesi, yedekler, kurtarılabilir çöp ve kısmi çıktı temizliği otomatik testlerle korunur.

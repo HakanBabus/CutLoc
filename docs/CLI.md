@@ -22,8 +22,8 @@ Open a new terminal, then run `cutloc` from any directory. The setup writes a co
 cutloc open
 cutloc status --json
 cutloc doctor --json
-cutloc stop
-cutloc restart
+cutloc stop [--force]
+cutloc restart [--force]
 ```
 
 - `open` starts or reuses the shared server and opens the browser editor.
@@ -31,6 +31,7 @@ cutloc restart
 - `doctor` checks the source installation, Node.js, the effective data-directory permissions, FFmpeg/ffprobe, FFmpeg text rendering, PATH, server state, product identity, and CLI/API compatibility.
 - `stop` shuts down the managed server without removing projects or settings.
 - `restart` stops the current managed server and starts the registered version again.
+- Both commands refuse to interrupt queued or running media jobs. Finish or cancel those jobs first. Active editor/agent sessions also block shutdown unless `--force` is explicitly supplied.
 
 Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A managed instance from another CutLoc product version is restarted before a live command proceeds. Detached output is appended to `%LOCALAPPDATA%\CutLoc\logs\server.log`. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
 
@@ -300,6 +301,8 @@ Paths must begin with `/api/`. Mutating project paths automatically acquire the 
 | Stale project revision | HTTP `409`; fetch and reconcile the latest project |
 | Project owned by another client | HTTP `423`; wait for or release the lease |
 | Too many active jobs | HTTP `429`; retry after existing work finishes |
+| Stop/restart while media work is active | Rejected; wait for or cancel the reported jobs |
+| Stop/restart while an editor session is active | Rejected unless the deliberate `--force` flag is supplied |
 | Terminal job cancellation | HTTP `409`; the completed/failed/cancelled state is preserved |
 | Binary endpoint without `--out` | Rejected with an explanatory error |
 

@@ -272,6 +272,14 @@ function activeAccessLease(projectId: string) {
   return undefined;
 }
 
+export function runtimeActivity() {
+  for (const projectId of projectAccessLeases.keys()) activeAccessLease(projectId);
+  return {
+    activeJobs: activeJobCount(),
+    activeLeases: projectAccessLeases.size,
+  };
+}
+
 function projectIdFromApiUrl(url: string) {
   const pathname = url.split('?', 1)[0];
   const match = pathname.match(/^\/api\/projects\/([A-Za-z0-9_-]+)(?:\/|$)/);
@@ -1532,6 +1540,7 @@ function maskFilter(mask: NonNullable<TimelineClip['mask']>) {
 async function registerRoutes(app: FastifyInstance) {
   app.get('/api/health', async () => {
     const ffmpeg = binaryPath('ffmpeg');
+    const activity = runtimeActivity();
     return {
       ok: true,
       product: 'CutLoc',
@@ -1542,6 +1551,8 @@ async function registerRoutes(app: FastifyInstance) {
       ffprobe: Boolean(binaryPath('ffprobe')),
       textRendering: ffmpegHasFilter(ffmpeg, 'drawtext'),
       dataDir: path.basename(dataDir),
+      ...activity,
+      busy: activity.activeJobs > 0 || activity.activeLeases > 0,
     };
   });
 

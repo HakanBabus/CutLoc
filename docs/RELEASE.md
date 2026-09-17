@@ -25,7 +25,7 @@ This checklist defines the v1.1.0 source-release gate. Publishing remains a sepa
 
 4. Run `npm.cmd run smoke:release` to start a production-style server with a disposable `DATA_DIR`, create a project through the CLI, import a generated video, export MP4, download it, and cleanly remove the fixture.
 5. Confirm the smoke uses the bundled FFmpeg binaries on Windows; Linux may select a full system build when the bundled binary lacks required filters.
-6. Verify `cutloc status --json`, `doctor --json`, `restart`, and `stop` against an isolated `CUTLOC_HOME`; confirm status/doctor report a custom `DATA_DIR` and the runtime log is created.
+6. Verify `cutloc status --json`, `doctor --json`, `restart`, and `stop` against an isolated `CUTLOC_HOME`; confirm status/doctor report a custom `DATA_DIR`, the runtime log is created, and shutdown refuses an active session until explicitly forced.
 7. Verify setup migration with both empty runtime scaffolding and a destination containing a conflicting project; no existing target or legacy source may be overwritten.
 8. Confirm GitHub CI passes from the exact candidate commit.
 9. Run `git diff --check` and confirm no generated media, runtime data, credentials, or `AGENTS.md` file is staged.

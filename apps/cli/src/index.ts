@@ -40,9 +40,9 @@ Runtime:
     Reports server, version, API address, and runtime state without starting it.
   doctor [--json]
     Checks storage, permissions, FFmpeg, server, and CLI/API compatibility.
-  stop
+  stop [--force]
     Stops the shared server without deleting projects or settings.
-  restart
+  restart [--force]
     Restarts the shared server from the currently registered CutLoc installation.
 
 Projects:
@@ -107,6 +107,7 @@ const agentGuide = {
     'Use media commands for binary uploads and relinks.',
     'Treat projects delete, media remove, backup restore, and trash delete as destructive.',
     'A mutating project command temporarily makes that project read-only in the web editor.',
+    'Stop and restart refuse active media jobs; finish or cancel those jobs first. Use --force only to close known active editor sessions.',
     'Do not retry a revision conflict by discarding the newer server project.',
     'Generic api and session commands do not stream /api/events.',
   ],
@@ -118,7 +119,7 @@ const agentGuide = {
     invariants: ['unique IDs', 'valid asset references', 'source ranges within media duration', 'keyframe and speed-point times within clip duration', 'timeline duration derived from clips'],
   },
   commands: {
-    runtime: ['open', 'status --json', 'doctor --json', 'stop', 'restart'],
+    runtime: ['open', 'status --json', 'doctor --json', 'stop [--force]', 'restart [--force]'],
     discovery: ['agent guide', 'agent inspect [project-id] [--full] [--limit <n>] [--cursor <n>] [--no-guide]', 'projects list', 'projects get <id>', 'media health <project-id>', 'backups list <project-id>', 'jobs list', 'settings get'],
     projects: ['projects create [name] [--preset shorts]', 'projects edit <id> (--file <plan> | --stdin | --data <json>) [--dry-run]', 'projects apply <id> (--file <json> | --stdin | --data <json>)', 'projects duplicate <id>', 'projects bundle <id> --out <file>', 'projects import <file>', 'projects delete <id>'],
     media: ['media add <project-id> <file> [--wait]', 'media add-many <project-id> <files...> [--wait]', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
@@ -210,6 +211,9 @@ type Health = {
   ffprobe?: boolean;
   textRendering?: boolean;
   dataDir?: string;
+  activeJobs?: number;
+  activeLeases?: number;
+  busy?: boolean;
 };
 
 function initialize() {
@@ -313,7 +317,31 @@ async function clearManagedRuntimeMetadata(instance: RuntimeInstance) {
   } catch { /* already removed or invalid */ }
 }
 
-async function stopServer() {
+async function inspectRuntimeActivity(health: Health) {
+  if (Number.isInteger(health.activeJobs) && Number(health.activeJobs) >= 0
+    && Number.isInteger(health.activeLeases) && Number(health.activeLeases) >= 0) {
+    return { known: true, activeJobs: Number(health.activeJobs), activeLeases: Number(health.activeLeases) };
+  }
+  try {
+    const jobsResponse = await fetch(new URL('/api/jobs', parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
+    const projectsResponse = await fetch(new URL('/api/projects', parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
+    if (!jobsResponse.ok || !projectsResponse.ok) return { known: false, activeJobs: 0, activeLeases: 0 };
+    const jobs = await jobsResponse.json() as Array<{ status?: string }>;
+    const projects = await projectsResponse.json() as Array<{ id?: string }>;
+    const activeJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'running').length;
+    if (projects.length > 100 || projects.some((project) => typeof project.id !== 'string')) return { known: false, activeJobs, activeLeases: 0 };
+    const leases = await Promise.all(projects.map(async (project) => {
+      const response = await fetch(new URL(`/api/projects/${encodeURIComponent(project.id!)}/access`, parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
+      if (!response.ok) throw new Error('access state unavailable');
+      return await response.json() as { lease?: unknown };
+    }));
+    return { known: true, activeJobs, activeLeases: leases.filter((entry) => entry.lease).length };
+  } catch {
+    return { known: false, activeJobs: 0, activeLeases: 0 };
+  }
+}
+
+async function stopServer(options: { force?: boolean } = {}) {
   await discoverRuntimeEndpoint();
   const health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
   if (!health) {
@@ -321,17 +349,37 @@ async function stopServer() {
     if (!endpointWasExplicit) parsedBaseUrl = new URL(defaultBaseUrl);
     return { ok: true, running: false, stopped: false, apiUrl: null };
   }
-  assertCompatibleHealth(health);
   const instance = currentInstance;
+  const compatibilityError = healthCompatibilityError(health);
+  if (compatibilityError && !(instance && health.product === 'CutLoc')) throw new Error(compatibilityError);
+  const activity = await inspectRuntimeActivity(health);
+  if (activity.activeJobs > 0) {
+    throw new Error(`CutLoc has ${activity.activeJobs} active media job(s). Wait for them or cancel them before stopping.`);
+  }
+  if (!activity.known && !options.force) {
+    throw new Error('CutLoc could not verify that the server is idle. Retry with --force only after checking active work.');
+  }
+  if (activity.activeLeases > 0 && !options.force) {
+    throw new Error(`CutLoc has ${activity.activeLeases} active editor session(s). Close them or retry with --force.`);
+  }
   let graceful = false;
   try {
-    const response = await fetch(new URL('/api/runtime/shutdown', parsedBaseUrl), {
+    const shutdownUrl = new URL('/api/runtime/shutdown', parsedBaseUrl);
+    if (options.force) shutdownUrl.searchParams.set('force', '1');
+    const response = await fetch(shutdownUrl, {
       method: 'POST',
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(2_000),
     });
+    if (response.status === 409) {
+      const detail = await response.json().catch(() => null) as { error?: string } | null;
+      throw Object.assign(new Error(detail?.error || 'CutLoc is busy and cannot stop safely.'), { code: 'CUTLOC_RUNTIME_BUSY' });
+    }
     graceful = response.ok;
-  } catch { /* older managed servers may not expose the shutdown route */ }
+  } catch (error) {
+    if ((error as { code?: string }).code === 'CUTLOC_RUNTIME_BUSY') throw error;
+    /* older managed servers may not expose the shutdown route */
+  }
 
   if (!graceful) {
     if (!instance) throw new Error('The explicit CutLoc server does not support managed shutdown.');
@@ -360,11 +408,15 @@ async function ensureServerAvailable() {
   await discoverRuntimeEndpoint();
   let health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
   if (health) {
-    assertCompatibleHealth(health);
-    if (!endpointWasExplicit && currentInstance && health.version !== CUTLOC_VERSION) {
+    const managedMismatch = !endpointWasExplicit
+      && currentInstance
+      && health.product === 'CutLoc'
+      && (health.version !== CUTLOC_VERSION || health.apiVersion !== API_PROTOCOL_VERSION);
+    if (managedMismatch) {
       await stopServer();
       health = null;
     } else {
+      assertCompatibleHealth(health);
       serverEnsured = true;
       return { health, started: false };
     }
@@ -817,14 +869,16 @@ async function main() {
   }
 
   if (group === 'stop') {
+    const force = takeBooleanFlag(args, '--force');
     ensureNoArgs(args);
-    return print(await stopServer());
+    return print(await stopServer({ force }));
   }
 
   if (group === 'restart') {
+    const force = takeBooleanFlag(args, '--force');
     ensureNoArgs(args);
     if (endpointWasExplicit) throw new Error('restart is available only for the shared managed CutLoc server.');
-    const stopped = await stopServer();
+    const stopped = await stopServer({ force });
     const runtime = await ensureServerAvailable();
     return print({
       ok: true,

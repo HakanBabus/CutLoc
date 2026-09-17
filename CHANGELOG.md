@@ -25,6 +25,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - Background server output is retained in `logs\server.log`, and version changes restart stale managed instances.
 - Installed commands ignore unrelated generic `HOST`/`PORT` variables, offline agent guidance no longer advertises a guessed API address, and doctor reports endpoint identity failures as structured checks.
 - Persisted installation, instance, and lock records are structurally validated before use; incomplete or unsafe metadata is ignored instead of crashing or redirecting the CLI.
+- Runtime protocol v2 exposes active work state. Automatic upgrades and stop/restart no longer interrupt media jobs, while closing an active editor session requires an explicit `--force`.
 
 ### Known limitations
 

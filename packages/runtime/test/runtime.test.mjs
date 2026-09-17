@@ -26,7 +26,7 @@ test('runtime readers reject incomplete, unsafe, and malformed persisted metadat
   const validInstance = {
     product: 'CutLoc',
     version: '1.1.0',
-    apiVersion: 1,
+    apiVersion: 2,
     apiUrl: 'http://127.0.0.1:4173',
     pid: process.pid,
     instanceId: 'test-instance',
