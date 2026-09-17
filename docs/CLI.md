@@ -31,7 +31,7 @@ cutloc restart [--force]
 - `doctor` checks the source installation, Node.js, the effective data-directory permissions, FFmpeg/ffprobe, FFmpeg text rendering, PATH, server state, product identity, and CLI/API compatibility.
 - `stop` shuts down the managed server without removing projects or settings.
 - `restart` stops the current managed server and starts the registered version again.
-- Both commands refuse to interrupt queued or running media jobs. Finish or cancel those jobs first. Active editor/agent sessions also block shutdown unless `--force` is explicitly supplied.
+- Both commands refuse to interrupt queued or running media jobs and active preview rendering. Finish or cancel that work first. Active editor/agent sessions also block shutdown unless `--force` is explicitly supplied. Open browser event streams are drained automatically so they cannot leave shutdown hanging.
 
 Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A managed instance from another CutLoc product version is restarted before a live command proceeds. Detached output is appended to `%LOCALAPPDATA%\CutLoc\logs\server.log`. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
 

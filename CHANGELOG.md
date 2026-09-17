@@ -26,6 +26,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - Installed commands ignore unrelated generic `HOST`/`PORT` variables, offline agent guidance no longer advertises a guessed API address, and doctor reports endpoint identity failures as structured checks.
 - Persisted installation, instance, and lock records are structurally validated before use; incomplete or unsafe metadata is ignored instead of crashing or redirecting the CLI.
 - Runtime protocol v2 exposes active work state. Automatic upgrades and stop/restart no longer interrupt media jobs, while closing an active editor session requires an explicit `--force`.
+- Active preview renders are protected from stop/restart, and browser progress streams are closed cleanly so an open editor cannot leave shutdown hanging.
 - User setup writes the command shim atomically and recognizes equivalent expanded or environment-variable-based PATH entries, preventing partial commands and duplicate registration.
 
 ### Known limitations

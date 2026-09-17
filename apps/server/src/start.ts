@@ -27,7 +27,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 }
 const paths = await ensureRuntimeFolders(runtimePaths());
 const releaseRuntimeLock = await acquireRuntimeLock(paths);
-const { createServer, runtimeActivity, setRuntimePort } = await import('./index.js');
+const { closeRuntimeConnections, createServer, runtimeActivity, setRuntimePort } = await import('./index.js');
 const app = await createServer();
 
 let cleanupStarted = false;
@@ -42,15 +42,17 @@ let shutdownStarted = false;
 async function shutdown(exitCode = 0) {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  await app.close().catch(() => undefined);
+  const closePromise = app.close().catch(() => undefined);
+  closeRuntimeConnections();
+  await closePromise;
   await cleanup();
   process.exit(exitCode);
 }
 
 app.post<{ Querystring: { force?: string } }>('/api/runtime/shutdown', async (request, reply) => {
   const activity = runtimeActivity();
-  if (activity.activeJobs > 0) {
-    return reply.code(409).send({ error: 'CutLoc has active media jobs. Wait for them or cancel them before stopping.', code: 'CUTLOC_RUNTIME_BUSY', ...activity });
+  if (activity.activeJobs > 0 || activity.activePreviews > 0) {
+    return reply.code(409).send({ error: 'CutLoc has active media or preview work. Wait for it or cancel queued jobs before stopping.', code: 'CUTLOC_RUNTIME_BUSY', ...activity });
   }
   if (activity.activeLeases > 0 && request.query.force !== '1') {
     return reply.code(409).send({ error: 'CutLoc has active editor sessions. Close them or use a forced stop.', code: 'CUTLOC_RUNTIME_BUSY', ...activity });

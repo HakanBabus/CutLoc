@@ -536,6 +536,7 @@ test('bracketed IPv6 localhost hosts are accepted', async () => {
   assert.equal(response.json().apiVersion, 2);
   assert.equal(response.json().activeJobs, 0);
   assert.equal(response.json().activeLeases, 0);
+  assert.equal(response.json().activePreviews, 0);
   assert.equal(response.json().busy, false);
 });
 

@@ -213,6 +213,7 @@ type Health = {
   dataDir?: string;
   activeJobs?: number;
   activeLeases?: number;
+  activePreviews?: number;
   busy?: boolean;
 };
 
@@ -319,25 +320,26 @@ async function clearManagedRuntimeMetadata(instance: RuntimeInstance) {
 
 async function inspectRuntimeActivity(health: Health) {
   if (Number.isInteger(health.activeJobs) && Number(health.activeJobs) >= 0
-    && Number.isInteger(health.activeLeases) && Number(health.activeLeases) >= 0) {
-    return { known: true, activeJobs: Number(health.activeJobs), activeLeases: Number(health.activeLeases) };
+    && Number.isInteger(health.activeLeases) && Number(health.activeLeases) >= 0
+    && Number.isInteger(health.activePreviews) && Number(health.activePreviews) >= 0) {
+    return { known: true, activeJobs: Number(health.activeJobs), activeLeases: Number(health.activeLeases), activePreviews: Number(health.activePreviews) };
   }
   try {
     const jobsResponse = await fetch(new URL('/api/jobs', parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
     const projectsResponse = await fetch(new URL('/api/projects', parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
-    if (!jobsResponse.ok || !projectsResponse.ok) return { known: false, activeJobs: 0, activeLeases: 0 };
+    if (!jobsResponse.ok || !projectsResponse.ok) return { known: false, activeJobs: 0, activeLeases: 0, activePreviews: 0 };
     const jobs = await jobsResponse.json() as Array<{ status?: string }>;
     const projects = await projectsResponse.json() as Array<{ id?: string }>;
     const activeJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'running').length;
-    if (projects.length > 100 || projects.some((project) => typeof project.id !== 'string')) return { known: false, activeJobs, activeLeases: 0 };
+    if (projects.length > 100 || projects.some((project) => typeof project.id !== 'string')) return { known: false, activeJobs, activeLeases: 0, activePreviews: 0 };
     const leases = await Promise.all(projects.map(async (project) => {
       const response = await fetch(new URL(`/api/projects/${encodeURIComponent(project.id!)}/access`, parsedBaseUrl), { signal: AbortSignal.timeout(1_500) });
       if (!response.ok) throw new Error('access state unavailable');
       return await response.json() as { lease?: unknown };
     }));
-    return { known: true, activeJobs, activeLeases: leases.filter((entry) => entry.lease).length };
+    return { known: true, activeJobs, activeLeases: leases.filter((entry) => entry.lease).length, activePreviews: 0 };
   } catch {
-    return { known: false, activeJobs: 0, activeLeases: 0 };
+    return { known: false, activeJobs: 0, activeLeases: 0, activePreviews: 0 };
   }
 }
 
@@ -355,6 +357,9 @@ async function stopServer(options: { force?: boolean } = {}) {
   const activity = await inspectRuntimeActivity(health);
   if (activity.activeJobs > 0) {
     throw new Error(`CutLoc has ${activity.activeJobs} active media job(s). Wait for them or cancel them before stopping.`);
+  }
+  if (activity.activePreviews > 0) {
+    throw new Error(`CutLoc has ${activity.activePreviews} active preview render(s). Wait for them before stopping.`);
   }
   if (!activity.known && !options.force) {
     throw new Error('CutLoc could not verify that the server is idle. Retry with --force only after checking active work.');

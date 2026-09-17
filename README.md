@@ -141,7 +141,7 @@ CutLoc v1.1.0 builds on the first stable source release:
 - The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
 - Fullscreen preview retains its timecode, duration, transport controls, and framing tools.
 - A one-time `setup:user` command registers `cutloc` on the user PATH; `cutloc open` starts or reuses the shared server and opens the browser editor.
-- `cutloc stop` and `cutloc restart` provide an explicit shared-server lifecycle; live commands automatically replace an incompatible managed server. Stop/restart refuses to interrupt active media jobs, and active editor sessions require an explicit `--force`.
+- `cutloc stop` and `cutloc restart` provide an explicit shared-server lifecycle; live commands automatically replace an incompatible managed server. Stop/restart refuses to interrupt active media or preview work, and active editor sessions require an explicit `--force`. Open browser progress connections are closed cleanly during shutdown.
 - `cutloc status --json` and `cutloc doctor --json` expose machine-readable runtime, version, storage, tool, and compatibility checks.
 - The JSON-first CLI retains revision-aware edit plans, project leases, media workflows, recovery, preview-frame capture, and export automation.
 - Project storage boundaries, request budgets, autosave merging, backups, recoverable trash, and partial-export cleanup are covered by automated tests.

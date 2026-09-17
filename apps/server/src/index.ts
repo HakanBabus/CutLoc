@@ -277,7 +277,13 @@ export function runtimeActivity() {
   return {
     activeJobs: activeJobCount(),
     activeLeases: projectAccessLeases.size,
+    activePreviews: activePreviewRenders,
   };
+}
+
+export function closeRuntimeConnections() {
+  for (const client of clients) client.reply.raw.end();
+  clients.clear();
 }
 
 function projectIdFromApiUrl(url: string) {
@@ -1552,7 +1558,7 @@ async function registerRoutes(app: FastifyInstance) {
       textRendering: ffmpegHasFilter(ffmpeg, 'drawtext'),
       dataDir: path.basename(dataDir),
       ...activity,
-      busy: activity.activeJobs > 0 || activity.activeLeases > 0,
+      busy: activity.activeJobs > 0 || activity.activeLeases > 0 || activity.activePreviews > 0,
     };
   });
 

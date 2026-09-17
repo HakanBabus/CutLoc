@@ -12,6 +12,7 @@ const cliFile = path.join(repoRoot, 'apps', 'cli', 'dist', 'index.js');
 const requests = [];
 let baseUrl;
 let mockActiveJobs = 0;
+let mockActivePreviews = 0;
 
 const project = {
   schemaVersion: 1,
@@ -41,7 +42,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
-  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, busy: mockActiveJobs > 0 });
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, activePreviews: mockActivePreviews, busy: mockActiveJobs > 0 || mockActivePreviews > 0 });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
   if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
   if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
@@ -158,6 +159,8 @@ test('status is read-only while live commands auto-start one shared server and o
   };
   let pid;
   let session;
+  let eventsRequest;
+  let eventsResponse;
   try {
     const stopped = await runRawCli(['--compact', 'status', '--json'], '', environment);
     assert.equal(stopped.code, 0, stopped.stderr);
@@ -215,6 +218,14 @@ test('status is read-only while live commands auto-start one shared server and o
       });
     });
     assert.equal(ready.ready, true);
+    await new Promise((resolve, reject) => {
+      eventsRequest = http.get(new URL('/api/events', restartedStatus.apiUrl), (response) => {
+        eventsResponse = response;
+        response.once('data', resolve);
+        response.once('error', reject);
+      });
+      eventsRequest.once('error', reject);
+    });
     const refusedStop = await runRawCli(['--compact', 'stop'], '', environment);
     assert.equal(refusedStop.code, 1);
     assert.match(JSON.parse(refusedStop.stderr).error, /active editor session/i);
@@ -235,6 +246,8 @@ test('status is read-only while live commands auto-start one shared server and o
       session.stdin.end();
       try { process.kill(session.pid); } catch { /* session already exited */ }
     }
+    eventsResponse?.destroy();
+    eventsRequest?.destroy();
     if (pid) {
       try { process.kill(pid); } catch { /* server may already have exited */ }
       for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -300,6 +313,17 @@ test('stop refuses to interrupt active media work even when forced', async () =>
     assert.match(JSON.parse(result.stderr).error, /active media job/i);
   } finally {
     mockActiveJobs = 0;
+  }
+});
+
+test('stop refuses to interrupt active preview rendering even when forced', async () => {
+  mockActivePreviews = 1;
+  try {
+    const result = await runCli(['stop', '--force']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /active preview render/i);
+  } finally {
+    mockActivePreviews = 0;
   }
 });
 
