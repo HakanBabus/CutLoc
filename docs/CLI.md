@@ -14,7 +14,7 @@ After cloning and installing dependencies, register the command once:
 npm.cmd run setup:user
 ```
 
-Open a new terminal, then run `cutloc` from any directory. The setup writes a command shim under `%LOCALAPPDATA%\CutLoc\bin`, adds that directory to the user PATH, stores installation metadata, and prepares `%LOCALAPPDATA%\CutLoc\data`. If a legacy checkout-local `data/` directory exists and the new destination is empty, setup copies it without deleting the source.
+Open a new terminal, then run `cutloc` from any directory. The setup writes a command shim under `%LOCALAPPDATA%\CutLoc\bin`, adds and verifies that directory on the user PATH, stores installation metadata, and prepares `%LOCALAPPDATA%\CutLoc\data`. A legacy checkout-local `data/` directory is copied when the target is empty or contains only empty runtime scaffolding. When both locations contain data, setup copies missing projects and trash entries without replacing conflicts, reports the conflicting paths, and never deletes the source.
 
 ## Runtime commands
 
@@ -22,13 +22,19 @@ Open a new terminal, then run `cutloc` from any directory. The setup writes a co
 cutloc open
 cutloc status --json
 cutloc doctor --json
+cutloc stop
+cutloc restart
 ```
 
 - `open` starts or reuses the shared server and opens the browser editor.
 - `status` is read-only: it reports whether CutLoc is running without starting it.
-- `doctor` checks the source installation, Node.js, storage permissions, FFmpeg/ffprobe, PATH, server state, and CLI/API protocol compatibility.
+- `doctor` checks the source installation, Node.js, the effective data-directory permissions, FFmpeg/ffprobe, FFmpeg text rendering, PATH, server state, product identity, and CLI/API compatibility.
+- `stop` shuts down the managed server without removing projects or settings.
+- `restart` stops the current managed server and starts the registered version again.
 
-Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
+Live commands discover the current API through `%LOCALAPPDATA%\CutLoc\runtime\instance.json`. When no live instance exists, they start the server on an available loopback port and wait until it is ready. A managed instance from another CutLoc product version is restarted before a live command proceeds. Detached output is appended to `%LOCALAPPDATA%\CutLoc\logs\server.log`. A command-line `--url` or `CUTLOC_URL` remains an explicit development override and is never auto-started.
+
+Health discovery requires the endpoint to identify itself as CutLoc and provide both product and API protocol versions. A generic loopback service returning only `{ "ok": true }` is rejected.
 
 `agent guide` is static and can run without the server.
 

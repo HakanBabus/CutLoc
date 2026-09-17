@@ -141,11 +141,12 @@ CutLoc v1.1.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
 - Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
 - Tam ekran önizlemede timecode, toplam süre, oynatma kontrolleri ve kadraj araçları görünür kalır.
 - Tek seferlik `setup:user`, `cutloc` komutunu kullanıcı PATH'ine kaydeder; `cutloc open` ortak sunucuyu başlatır veya yeniden kullanır ve tarayıcı editörünü açar.
+- `cutloc stop` ve `cutloc restart`, ortak sunucunun yaşam döngüsünü açıkça yönetir; canlı komutlar farklı CutLoc sürümünden kalan yönetilen sunucuyu otomatik yeniler.
 - `cutloc status --json` ve `cutloc doctor --json`, makinece okunabilir runtime, sürüm, depolama, araç ve uyumluluk kontrolleri sunar.
 - JSON öncelikli CLI; revizyon duyarlı düzenleme planlarını, proje kilitlerini, medya akışlarını, kurtarmayı, önizleme karesi almayı ve dışa aktarma otomasyonunu korur.
 - Proje depolama sınırları, istek bütçeleri, otomatik kayıt birleştirmesi, yedekler, kurtarılabilir çöp ve kısmi çıktı temizliği otomatik testlerle korunur.
 
-Proje biçimi `schemaVersion: 1` olarak kalır. `setup:user`, checkout içindeki eski `data/` klasörünü yalnızca yeni kullanıcı veri hedefi boşsa kopyalar; eski kopyayı silmez.
+Proje biçimi `schemaVersion: 1` olarak kalır. `setup:user`, checkout içindeki eski `data/` klasörünü yeni hedef boşsa veya yalnızca runtime'ın oluşturduğu boş klasörleri içeriyorsa kopyalar. İki tarafta da veri varsa eksik eski projeler ve çöp kayıtları hedefteki çakışmaları ezmeden birleştirilir. Eski kopya daima korunur ve çakışmalar kurulum sonucunda listelenir.
 
 ## Teknolojiler
 
@@ -220,6 +221,8 @@ CutLoc; mevcut projeleri yönetmek, eksiksiz proje düzenlemeleri uygulamak, med
 cutloc --help
 cutloc status --json
 cutloc doctor --json
+cutloc stop
+cutloc restart
 ```
 
 Bir yapay zekâ ajanı veya başka bir JSON tüketicisi için makinece okunabilir rehber ve canlı inceleme komutlarıyla başlayın. `cli:agent` betiği npm yaşam döngüsü çıktısını susturur ve kompakt JSON'u otomatik etkinleştirir:
@@ -286,7 +289,7 @@ Projeyi değiştiren komutlar kısa ömürlü ve özel bir proje kilidi alır. P
 
 | Alan | Komutlar |
 | --- | --- |
-| Runtime | `open`, `status --json` ve `doctor --json` |
+| Runtime | `open`, `status --json`, `doctor --json`, `stop` ve `restart` |
 | Ajan keşfi | `agent guide` ve kompakt/sayfalanmış `agent inspect [project-id]` |
 | Projeler | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
 | Medya | `media add/add-many/remove/relink/rebuild/health/stock` |
@@ -305,6 +308,7 @@ Windows çalışma zamanı dosyaları varsayılan olarak checkout dışında tut
 %LOCALAPPDATA%\CutLoc\
 ├── bin\
 ├── logs\
+│   └── server.log
 ├── runtime\
 ├── temp\
 └── data\
@@ -321,7 +325,7 @@ Windows çalışma zamanı dosyaları varsayılan olarak checkout dışında tut
     └── settings.json
 ```
 
-`CUTLOC_HOME` izole testlerde kullanıcı runtime kökünün tamamını, `DATA_DIR` ise yalnızca proje/ayar depolamasını değiştirir. Depodaki [`.env.example`](.env.example) geliştirme override'larını içerir. `.env`, API anahtarları, proje medyası, çıktılar veya runtime verisini asla commit'e eklemeyin.
+`CUTLOC_HOME` izole testlerde kullanıcı runtime kökünün tamamını, `DATA_DIR` ise yalnızca proje/ayar depolamasını değiştirir. Yönetilen `cutloc` başlangıcı, `DATA_DIR` değerini hem işlem ortamından hem kayıtlı checkout içindeki `.env` dosyasından uygular; `status` ve `doctor` etkin dizini raporlayıp test eder. Arka plan sunucusunun çıktısı `logs\server.log` içinde tutulur. Depodaki [`.env.example`](.env.example) geliştirme override'larını içerir. `.env`, API anahtarları, proje medyası, çıktılar veya runtime verisini asla commit'e eklemeyin.
 
 ## Doğrulama
 

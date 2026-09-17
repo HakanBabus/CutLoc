@@ -40,7 +40,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
-  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, ffmpeg: true, ffprobe: true });
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 1, ffmpeg: true, ffprobe: true, textRendering: true });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
   if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
   if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
@@ -147,9 +147,10 @@ test('CLI follows local HOST and PORT configuration when no URL override is pass
 
 test('status is read-only while live commands auto-start one shared server and open reuses it', async () => {
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-runtime-'));
+  const dataDir = path.join(home, 'custom-data');
   const environment = {
     CUTLOC_HOME: home,
-    DATA_DIR: path.join(home, 'data'),
+    DATA_DIR: dataDir,
     CUTLOC_NO_OPEN: '1',
     CUTLOC_URL: '',
   };
@@ -170,6 +171,7 @@ test('status is read-only while live commands auto-start one shared server and o
     assert.equal(runningStatus.version, '1.1.0');
     assert.equal(runningStatus.apiVersion, 1);
     assert.match(runningStatus.apiUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.equal(runningStatus.dataDir, dataDir);
     pid = runningStatus.pid;
 
     const opened = await runRawCli(['--compact', 'open'], '', environment);
@@ -182,6 +184,23 @@ test('status is read-only while live commands auto-start one shared server and o
     assert.equal(diagnosis.ok, true);
     assert.equal(diagnosis.checks.find((check) => check.name === 'server').ok, true);
     assert.equal(diagnosis.checks.find((check) => check.name === 'compatibility').ok, true);
+    assert.equal(diagnosis.checks.find((check) => check.name === 'text-rendering').ok, true);
+    assert.equal(diagnosis.checks.find((check) => check.name === 'storage').detail, dataDir);
+
+    const restarted = await runRawCli(['--compact', 'restart'], '', environment);
+    assert.equal(restarted.code, 0, restarted.stderr);
+    assert.equal(JSON.parse(restarted.stdout).restarted, true);
+    const restartedStatus = JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout);
+    assert.notEqual(restartedStatus.pid, pid);
+    pid = restartedStatus.pid;
+
+    const stoppedResult = await runRawCli(['--compact', 'stop'], '', environment);
+    assert.equal(stoppedResult.code, 0, stoppedResult.stderr);
+    assert.equal(JSON.parse(stoppedResult.stdout).stopped, true);
+    pid = undefined;
+    const afterStop = JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout);
+    assert.equal(afterStop.running, false);
+    assert.match(await fsp.readFile(path.join(home, 'logs', 'server.log'), 'utf8'), /CutLoc ready:/);
   } finally {
     if (pid) {
       try { process.kill(pid); } catch { /* server may already have exited */ }
@@ -194,6 +213,106 @@ test('status is read-only while live commands auto-start one shared server and o
         }
       }
     }
+    await fsp.rm(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI rejects a loopback endpoint that does not identify its product and protocol', async () => {
+  const impostor = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((resolve) => impostor.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = impostor.address();
+    const result = await runRawCli(['--url', `http://127.0.0.1:${address.port}`, '--compact', 'status', '--json']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /not a CutLoc server/i);
+  } finally {
+    await new Promise((resolve, reject) => impostor.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('stopped status and doctor honor the registered checkout DATA_DIR from .env', async () => {
+  const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-env-'));
+  const home = path.join(base, 'home');
+  const appRoot = path.join(base, 'registered-app');
+  const configuredData = path.join(base, 'configured-data');
+  try {
+    const cliEntry = path.join(appRoot, 'apps', 'cli', 'dist', 'index.js');
+    const serverEntry = path.join(appRoot, 'apps', 'server', 'dist', 'start.js');
+    await fsp.mkdir(path.dirname(cliEntry), { recursive: true });
+    await fsp.mkdir(path.dirname(serverEntry), { recursive: true });
+    await fsp.mkdir(home, { recursive: true });
+    await fsp.writeFile(cliEntry, '', 'utf8');
+    await fsp.writeFile(serverEntry, '', 'utf8');
+    await fsp.writeFile(path.join(appRoot, '.env'), `DATA_DIR=${configuredData.replaceAll('\\', '\\\\')}\n`, 'utf8');
+    await fsp.writeFile(path.join(home, 'install.json'), JSON.stringify({
+      product: 'CutLoc',
+      version: '1.1.0',
+      appRoot,
+      nodePath: process.execPath,
+      cliEntry,
+      serverEntry,
+      configuredAt: new Date().toISOString(),
+    }), 'utf8');
+    const environment = { CUTLOC_HOME: home, DATA_DIR: '' };
+    const statusResult = await runRawCli(['--compact', 'status', '--json'], '', environment);
+    assert.equal(statusResult.code, 0, statusResult.stderr);
+    assert.equal(JSON.parse(statusResult.stdout).dataDir, configuredData);
+    const doctorResult = await runRawCli(['--compact', 'doctor', '--json'], '', environment);
+    assert.equal(doctorResult.code, 0, doctorResult.stderr);
+    const doctor = JSON.parse(doctorResult.stdout);
+    assert.equal(doctor.checks.find((check) => check.name === 'storage').detail, configuredData);
+  } finally {
+    await fsp.rm(base, { recursive: true, force: true });
+  }
+});
+
+test('a live command replaces a managed server from an older product version', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-upgrade-'));
+  const legacyScript = `
+    const http = require('node:http');
+    const server = http.createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.method === 'GET' && request.url === '/api/health') return response.end(JSON.stringify({ ok: true, product: 'CutLoc', version: '1.0.0', apiVersion: 1 }));
+      if (request.method === 'POST' && request.url === '/api/runtime/shutdown') {
+        response.end(JSON.stringify({ ok: true }));
+        return setTimeout(() => server.close(() => process.exit(0)), 25);
+      }
+      response.statusCode = 404; response.end('{}');
+    });
+    server.listen(0, '127.0.0.1', () => console.log(server.address().port));
+  `;
+  const legacy = spawn(process.execPath, ['-e', legacyScript], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let managedPid;
+  try {
+    const port = await new Promise((resolve, reject) => {
+      legacy.once('error', reject);
+      legacy.stdout.setEncoding('utf8').once('data', (chunk) => resolve(Number(chunk.trim())));
+    });
+    await fsp.mkdir(path.join(home, 'runtime'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'runtime', 'instance.json'), JSON.stringify({
+      product: 'CutLoc', version: '1.0.0', apiVersion: 1, apiUrl: `http://127.0.0.1:${port}`,
+      pid: legacy.pid, instanceId: 'legacy-instance', dataDir: path.join(home, 'data'), startedAt: new Date().toISOString(),
+    }), 'utf8');
+    await fsp.writeFile(path.join(home, 'runtime', 'server.lock'), JSON.stringify({ pid: legacy.pid, createdAt: new Date().toISOString() }), 'utf8');
+    const environment = { CUTLOC_HOME: home, DATA_DIR: path.join(home, 'data'), CUTLOC_NO_OPEN: '1' };
+    const result = await runRawCli(['--compact', 'projects', 'list'], '', environment);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), []);
+    const status = JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout);
+    assert.equal(status.version, '1.1.0');
+    assert.notEqual(status.pid, legacy.pid);
+    managedPid = status.pid;
+    const stopped = await runRawCli(['--compact', 'stop'], '', environment);
+    assert.equal(stopped.code, 0, stopped.stderr);
+    managedPid = undefined;
+  } finally {
+    if (managedPid) {
+      try { process.kill(managedPid); } catch { /* already stopped */ }
+    }
+    try { process.kill(legacy.pid); } catch { /* replaced server already exited */ }
     await fsp.rm(home, { recursive: true, force: true });
   }
 });

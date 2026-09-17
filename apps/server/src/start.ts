@@ -30,13 +30,27 @@ const releaseRuntimeLock = await acquireRuntimeLock(paths);
 const { createServer, setRuntimePort } = await import('./index.js');
 const app = await createServer();
 
-let closing = false;
+let cleanupStarted = false;
 async function cleanup() {
-  if (closing) return;
-  closing = true;
+  if (cleanupStarted) return;
+  cleanupStarted = true;
   await fs.promises.rm(paths.instanceFile, { force: true }).catch(() => undefined);
   await releaseRuntimeLock().catch(() => undefined);
 }
+
+let shutdownStarted = false;
+async function shutdown(exitCode = 0) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  await app.close().catch(() => undefined);
+  await cleanup();
+  process.exit(exitCode);
+}
+
+app.post('/api/runtime/shutdown', async (_request, reply) => {
+  reply.send({ ok: true });
+  setTimeout(() => { void shutdown(); }, 25).unref();
+});
 
 try {
   await app.listen({ port, host });
@@ -68,11 +82,7 @@ try {
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
-    void (async () => {
-      await app.close().catch(() => undefined);
-      await cleanup();
-      process.exit(0);
-    })();
+    void shutdown();
   });
 }
 

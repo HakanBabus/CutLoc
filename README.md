@@ -141,11 +141,12 @@ CutLoc v1.1.0 builds on the first stable source release:
 - The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
 - Fullscreen preview retains its timecode, duration, transport controls, and framing tools.
 - A one-time `setup:user` command registers `cutloc` on the user PATH; `cutloc open` starts or reuses the shared server and opens the browser editor.
+- `cutloc stop` and `cutloc restart` provide an explicit shared-server lifecycle; live commands automatically replace a managed server from a different CutLoc version.
 - `cutloc status --json` and `cutloc doctor --json` expose machine-readable runtime, version, storage, tool, and compatibility checks.
 - The JSON-first CLI retains revision-aware edit plans, project leases, media workflows, recovery, preview-frame capture, and export automation.
 - Project storage boundaries, request budgets, autosave merging, backups, recoverable trash, and partial-export cleanup are covered by automated tests.
 
-The project format remains on `schemaVersion: 1`. During `setup:user`, an existing checkout-local `data/` directory is copied to the new user data directory only when that destination is empty; the legacy copy is retained.
+The project format remains on `schemaVersion: 1`. During `setup:user`, an existing checkout-local `data/` directory is copied when the new destination is empty or contains only runtime-created empty folders. If both locations contain data, missing legacy projects and trash entries are merged without overwriting destination conflicts. The legacy copy is always retained and conflicts are listed in the setup result.
 
 ## Technology
 
@@ -220,6 +221,8 @@ After `setup:user`, inspect the command surface from any directory. Live command
 cutloc --help
 cutloc status --json
 cutloc doctor --json
+cutloc stop
+cutloc restart
 ```
 
 For an AI agent or another JSON consumer, start with the machine-readable guide and live inspection commands. The `cli:agent` script suppresses npm lifecycle chatter and enables compact JSON automatically:
@@ -287,7 +290,7 @@ Project-changing commands acquire an exclusive, short-lived project lease. If th
 
 | Area | Commands |
 | --- | --- |
-| Runtime | `open`, `status --json`, and `doctor --json` |
+| Runtime | `open`, `status --json`, `doctor --json`, `stop`, and `restart` |
 | Agent discovery | `agent guide` and compact/paginated `agent inspect [project-id]` |
 | Projects | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
 | Media | `media add/add-many/remove/relink/rebuild/health/stock` |
@@ -306,6 +309,7 @@ By default, Windows runtime files are written outside the checkout:
 %LOCALAPPDATA%\CutLoc\
 ├── bin\
 ├── logs\
+│   └── server.log
 ├── runtime\
 ├── temp\
 └── data\
@@ -322,7 +326,7 @@ By default, Windows runtime files are written outside the checkout:
     └── settings.json
 ```
 
-`CUTLOC_HOME` overrides the complete user-runtime root for isolated testing. `DATA_DIR` overrides only project/settings storage. The repository includes an [`.env.example`](.env.example) with development overrides. Never commit `.env`, API keys, project media, exports, or runtime data.
+`CUTLOC_HOME` overrides the complete user-runtime root for isolated testing. `DATA_DIR` overrides only project/settings storage and is honored by managed `cutloc` startup whether it comes from the process environment or the registered checkout's `.env`. `status` and `doctor` report and test the active configured directory. Detached server output is retained in `logs\server.log`. The repository includes an [`.env.example`](.env.example) with development overrides. Never commit `.env`, API keys, project media, exports, or runtime data.
 
 ## Verification
 

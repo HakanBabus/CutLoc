@@ -7,7 +7,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 ### Added
 
 - One-time `npm.cmd run setup:user` registration for the user-level `cutloc` command without an EXE or desktop package.
-- `cutloc open`, `cutloc status --json`, and `cutloc doctor --json` runtime workflows.
+- `cutloc open`, `cutloc status --json`, `cutloc doctor --json`, `cutloc stop`, and `cutloc restart` runtime workflows.
 - Automatic shared-server startup on an available loopback port for live CLI commands.
 - A single runtime contract for installation metadata, instance discovery, user storage, logs, and temporary files.
 
@@ -15,7 +15,14 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 
 - Windows projects, settings, proxies, backups, and exports now default to `%LOCALAPPDATA%\CutLoc\data` instead of the source checkout.
 - `agent guide` documents repo-independent discovery and automatic startup.
-- Existing checkout-local data is copied during user setup only when the new destination is empty; the source remains intact.
+- Existing checkout-local data is copied after empty runtime scaffolding and safely merged when both locations contain data; destination conflicts and the legacy source remain intact.
+
+### Fixed
+
+- Managed startup now honors checkout `.env` storage overrides instead of forcing the default `DATA_DIR`.
+- Runtime status and doctor use the effective project directory, and doctor verifies FFmpeg text rendering.
+- Health discovery rejects loopback services that do not identify the CutLoc product and API protocol.
+- Background server output is retained in `logs\server.log`, and version changes restart stale managed instances.
 
 ### Known limitations
 

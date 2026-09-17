@@ -119,7 +119,7 @@ npm.cmd run dev
 npm.cmd start
 ```
 
-`npm start` builds every workspace and serves the built application from the local server. `cutloc open` uses the already-built output registered by `setup:user`, starts it silently on an available loopback port, and opens the browser.
+`npm start` builds every workspace and serves the built application from the local server. `cutloc open` uses the already-built output registered by `setup:user`, starts it silently on an available loopback port, and opens the browser. Use `cutloc stop` or `cutloc restart` to manage that shared background process; its output is retained in the runtime log.
 
 ## Local data and configuration
 
@@ -130,7 +130,7 @@ The default Windows runtime structure is:
 ├── bin\cutloc.cmd
 ├── install.json
 ├── runtime\instance.json
-├── logs\
+├── logs\server.log
 ├── temp\
 └── data\
     ├── projects\<project-id>\
@@ -154,6 +154,8 @@ Supported root `.env` values are documented in `.env.example`:
 | `NO_OPEN` | Prevent automatic browser opening when set to `1` |
 
 Never commit `.env`, user-runtime data, imported media, backups, or exports.
+
+Managed CLI startup honors `DATA_DIR`, `FFMPEG_PATH`, and `FFPROBE_PATH` from the process environment first and then from the registered checkout's `.env`. `cutloc status --json` reports the effective project directory, while `cutloc doctor --json` tests that directory's permissions and FFmpeg text-rendering support.
 
 ## Media behavior
 
@@ -225,6 +227,8 @@ Also run `git diff --check` before committing. Browser tests use a temporary `DA
 ### The UI opens but requests fail
 
 Confirm that the API responds at `http://127.0.0.1:4173/api/health` and that the browser is using the expected local origin.
+
+For the managed shared server, run `cutloc doctor --json` and inspect `%LOCALAPPDATA%\CutLoc\logs\server.log`. Use `cutloc restart` after correcting configuration.
 
 ### A project is read-only
 

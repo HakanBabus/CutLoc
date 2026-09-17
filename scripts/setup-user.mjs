@@ -42,24 +42,35 @@ function escapeCmdValue(value) {
   return value.replaceAll('%', '%%').replaceAll('^', '^^');
 }
 
-const shimFile = path.join(paths.bin, 'cutloc.cmd');
-const shim = `@echo off\r\n"${escapeCmdValue(process.execPath)}" "${escapeCmdValue(installation.cliEntry)}" %*\r\n`;
-await fsp.writeFile(shimFile, shim, 'utf8');
-await writeJsonAtomic(paths.installFile, installation);
+async function exists(target) {
+  try {
+    await fsp.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-let legacyMigration = 'skipped';
-const legacyData = path.join(appRoot, 'data');
-if (!noMigrate) {
-  const [legacyEntries, targetEntries] = await Promise.all([
-    fsp.readdir(legacyData).catch(() => []),
-    fsp.readdir(paths.data).catch(() => []),
-  ]);
-  if (legacyEntries.length && targetEntries.length === 0 && path.resolve(legacyData) !== path.resolve(paths.data)) {
+async function directoryHasContent(directory) {
+  for (const entry of await fsp.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory()) return true;
+    if (await directoryHasContent(path.join(directory, entry.name))) return true;
+  }
+  return false;
+}
+
+async function migrateLegacyData(legacyData) {
+  const legacyEntries = await fsp.readdir(legacyData, { withFileTypes: true }).catch(() => []);
+  if (!legacyEntries.length || path.resolve(legacyData) === path.resolve(paths.data)) {
+    return { status: 'nothing-to-copy', copied: [], conflicts: [] };
+  }
+
+  if (!await directoryHasContent(paths.data)) {
     const staging = `${paths.data}.migration-${process.pid}-${Date.now()}`;
     await fsp.mkdir(staging, { recursive: true });
     try {
       for (const entry of legacyEntries) {
-        await fsp.cp(path.join(legacyData, entry), path.join(staging, entry), { recursive: true, force: false, errorOnExist: true });
+        await fsp.cp(path.join(legacyData, entry.name), path.join(staging, entry.name), { recursive: true, force: false, errorOnExist: true });
       }
       await fsp.rm(paths.data, { recursive: true, force: true });
       await fsp.rename(staging, paths.data);
@@ -67,27 +78,72 @@ if (!noMigrate) {
       await fsp.rm(staging, { recursive: true, force: true });
       throw error;
     }
-    legacyMigration = 'copied';
-  } else if (legacyEntries.length && targetEntries.length) {
-    legacyMigration = 'target-not-empty';
-  } else {
-    legacyMigration = 'nothing-to-copy';
+    return { status: 'copied', copied: legacyEntries.map((entry) => entry.name), conflicts: [] };
   }
+
+  const copied = [];
+  const conflicts = [];
+  for (const entry of legacyEntries) {
+    const source = path.join(legacyData, entry.name);
+    const target = path.join(paths.data, entry.name);
+    if (!await exists(target)) {
+      await fsp.cp(source, target, { recursive: true, force: false, errorOnExist: true });
+      copied.push(entry.name);
+      continue;
+    }
+
+    const targetStat = await fsp.lstat(target);
+    if (entry.isDirectory() && targetStat.isDirectory() && ['projects', 'trash'].includes(entry.name)) {
+      for (const child of await fsp.readdir(source, { withFileTypes: true })) {
+        const relative = path.join(entry.name, child.name);
+        const childTarget = path.join(target, child.name);
+        if (await exists(childTarget)) {
+          conflicts.push(relative);
+        } else {
+          await fsp.cp(path.join(source, child.name), childTarget, { recursive: true, force: false, errorOnExist: true });
+          copied.push(relative);
+        }
+      }
+      continue;
+    }
+    conflicts.push(entry.name);
+  }
+
+  const status = conflicts.length
+    ? copied.length ? 'merged-with-conflicts' : 'conflicts-retained'
+    : copied.length ? 'merged' : 'already-present';
+  return { status, copied, conflicts };
+}
+
+const shimFile = path.join(paths.bin, 'cutloc.cmd');
+const shim = `@echo off\r\n"${escapeCmdValue(process.execPath)}" "${escapeCmdValue(installation.cliEntry)}" %*\r\n`;
+await fsp.writeFile(shimFile, shim, 'utf8');
+await writeJsonAtomic(paths.installFile, installation);
+
+let legacyMigration = { status: 'skipped', copied: [], conflicts: [] };
+const legacyData = path.resolve(process.env.CUTLOC_LEGACY_DATA_DIR?.trim() || path.join(appRoot, 'data'));
+if (!noMigrate) {
+  legacyMigration = await migrateLegacyData(legacyData);
 }
 
 let pathUpdated = false;
+let pathVerified = false;
 if (!noPath) {
   const script = [
-    "$current = [Environment]::GetEnvironmentVariable('Path', 'User')",
+    "$scope = if ($env:CUTLOC_SETUP_TEST_PATH_SCOPE -eq 'Process') { 'Process' } else { 'User' }",
+    "$current = [Environment]::GetEnvironmentVariable('Path', $scope)",
     "$entries = @($current -split ';' | Where-Object { $_ })",
     "$target = $env:CUTLOC_BIN_TO_ADD",
     "if (-not ($entries | Where-Object { $_.TrimEnd('\\') -ieq $target.TrimEnd('\\') })) {",
     "  $next = (($entries + $target) -join ';')",
-    "  [Environment]::SetEnvironmentVariable('Path', $next, 'User')",
+    "  [Environment]::SetEnvironmentVariable('Path', $next, $scope)",
     "  Write-Output 'UPDATED'",
     '} else {',
     "  Write-Output 'UNCHANGED'",
     '}',
+    "$verified = @([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ieq $target.TrimEnd('\\') })",
+    "if (-not $verified.Count) { throw 'CutLoc PATH update could not be verified.' }",
+    "Write-Output 'VERIFIED'",
   ].join('; ');
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
@@ -96,6 +152,7 @@ if (!noPath) {
   });
   if (result.status !== 0) throw new Error(`Could not update the user PATH: ${result.stderr || result.stdout}`);
   pathUpdated = result.stdout.includes('UPDATED');
+  pathVerified = result.stdout.includes('VERIFIED');
 }
 
 process.stdout.write(`${JSON.stringify({
@@ -105,6 +162,9 @@ process.stdout.write(`${JSON.stringify({
   dataDir: paths.data,
   command: shimFile,
   pathUpdated,
-  legacyMigration,
+  pathVerified,
+  legacyMigration: legacyMigration.status,
+  legacyCopied: legacyMigration.copied,
+  legacyConflicts: legacyMigration.conflicts,
   next: pathUpdated ? 'Open a new terminal, then run: cutloc open' : 'Run: cutloc open',
 }, null, 2)}\n`);

@@ -6,16 +6,18 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import readline from 'node:readline';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 import {
   API_PROTOCOL_VERSION,
   CUTLOC_VERSION,
   ensureRuntimeFolders,
+  processExists,
   readRuntimeInstance,
   readUserInstallation,
   runtimePaths,
@@ -38,6 +40,10 @@ Runtime:
     Reports server, version, API address, and runtime state without starting it.
   doctor [--json]
     Checks storage, permissions, FFmpeg, server, and CLI/API compatibility.
+  stop
+    Stops the shared server without deleting projects or settings.
+  restart
+    Restarts the shared server from the currently registered CutLoc installation.
 
 Projects:
   projects list | create [name] [--preset shorts] [--aspect <aspect>] [--fps <fps>]
@@ -111,7 +117,7 @@ const agentGuide = {
     invariants: ['unique IDs', 'valid asset references', 'source ranges within media duration', 'keyframe and speed-point times within clip duration', 'timeline duration derived from clips'],
   },
   commands: {
-    runtime: ['open', 'status --json', 'doctor --json'],
+    runtime: ['open', 'status --json', 'doctor --json', 'stop', 'restart'],
     discovery: ['agent guide', 'agent inspect [project-id] [--full] [--limit <n>] [--cursor <n>] [--no-guide]', 'projects list', 'projects get <id>', 'media health <project-id>', 'backups list <project-id>', 'jobs list', 'settings get'],
     projects: ['projects create [name] [--preset shorts]', 'projects edit <id> (--file <plan> | --stdin | --data <json>) [--dry-run]', 'projects apply <id> (--file <json> | --stdin | --data <json>)', 'projects duplicate <id>', 'projects bundle <id> --out <file>', 'projects import <file>', 'projects delete <id>'],
     media: ['media add <project-id> <file> [--wait]', 'media add-many <project-id> <files...> [--wait]', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
@@ -190,6 +196,8 @@ const paths = runtimePaths();
 const cliFile = fileURLToPath(import.meta.url);
 const inferredAppRoot = path.resolve(path.dirname(cliFile), '../../..');
 const requireFromRoot = createRequire(path.join(inferredAppRoot, 'package.json'));
+const defaultBaseUrl = 'http://127.0.0.1:4173';
+const appEnvironmentCache = new Map<string, NodeJS.ProcessEnv>();
 
 type Health = {
   ok?: boolean;
@@ -216,7 +224,7 @@ function initialize() {
   const flagUrl = takeFlag(args, '--url');
   const configuredUrl = process.env.CUTLOC_URL?.trim();
   endpointWasExplicit = Boolean(flagUrl || configuredUrl || environmentUrl);
-  const baseUrl = flagUrl ?? (configuredUrl || environmentUrl || 'http://127.0.0.1:4173');
+  const baseUrl = flagUrl ?? (configuredUrl || environmentUrl || defaultBaseUrl);
   compact = takeBooleanFlag(args, '--compact');
   parsedBaseUrl = new URL(baseUrl);
   if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) throw new Error('CutLoc CLI only connects to HTTP(S) loopback servers.');
@@ -237,16 +245,41 @@ async function probeHealth(baseUrl = parsedBaseUrl, timeoutMs = 1_500): Promise<
 }
 
 async function discoverRuntimeEndpoint() {
-  if (endpointWasExplicit) return;
-  currentInstance = await readRuntimeInstance(paths);
-  if (currentInstance) parsedBaseUrl = new URL(currentInstance.apiUrl);
+  const discovered = await readRuntimeInstance(paths);
+  if (endpointWasExplicit) {
+    currentInstance = discovered && new URL(discovered.apiUrl).origin === parsedBaseUrl.origin ? discovered : null;
+    return;
+  }
+  currentInstance = discovered;
+  if (discovered) parsedBaseUrl = new URL(discovered.apiUrl);
 }
 
 function assertCompatibleHealth(health: Health) {
-  if (health.product && health.product !== 'CutLoc') throw new Error('The loopback endpoint is not a CutLoc server.');
-  if (health.apiVersion !== undefined && health.apiVersion !== API_PROTOCOL_VERSION) {
+  if (health.product !== 'CutLoc') throw new Error('The loopback endpoint is not a CutLoc server.');
+  if (!health.version?.trim()) throw new Error('The CutLoc server did not report a product version.');
+  if (!Number.isInteger(health.apiVersion)) throw new Error('The CutLoc server did not report an API protocol version.');
+  if (health.apiVersion !== API_PROTOCOL_VERSION) {
     throw new Error(`CutLoc CLI/API protocol mismatch: CLI ${API_PROTOCOL_VERSION}, server ${health.apiVersion}.`);
   }
+}
+
+function appEnvironment(appRoot: string) {
+  const cached = appEnvironmentCache.get(appRoot);
+  if (cached) return cached;
+  const envFile = path.join(appRoot, '.env');
+  let parsed: NodeJS.ProcessEnv = {};
+  if (fs.existsSync(envFile)) parsed = parseEnv(fs.readFileSync(envFile, 'utf8'));
+  appEnvironmentCache.set(appRoot, parsed);
+  return parsed;
+}
+
+function configuredValue(name: string, appRoot: string) {
+  return process.env[name]?.trim() || appEnvironment(appRoot)[name]?.trim() || undefined;
+}
+
+function configuredDataDirectory(appRoot: string) {
+  const configured = configuredValue('DATA_DIR', appRoot);
+  return path.resolve(appRoot, configured || paths.data);
 }
 
 async function configuredInstallation() {
@@ -263,13 +296,72 @@ async function configuredInstallation() {
   };
 }
 
+async function clearManagedRuntimeMetadata(instance: RuntimeInstance) {
+  try {
+    const stored = JSON.parse(await fsp.readFile(paths.instanceFile, 'utf8')) as RuntimeInstance;
+    if (stored.instanceId === instance.instanceId) await fsp.rm(paths.instanceFile, { force: true });
+  } catch { /* already removed or invalid */ }
+  try {
+    const lock = JSON.parse(await fsp.readFile(paths.lockFile, 'utf8')) as { pid?: number };
+    if (lock.pid === instance.pid) await fsp.rm(paths.lockFile, { force: true });
+  } catch { /* already removed or invalid */ }
+}
+
+async function stopServer() {
+  await discoverRuntimeEndpoint();
+  const health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
+  if (!health) {
+    currentInstance = null;
+    if (!endpointWasExplicit) parsedBaseUrl = new URL(defaultBaseUrl);
+    return { ok: true, running: false, stopped: false, apiUrl: null };
+  }
+  assertCompatibleHealth(health);
+  const instance = currentInstance;
+  let graceful = false;
+  try {
+    const response = await fetch(new URL('/api/runtime/shutdown', parsedBaseUrl), {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(2_000),
+    });
+    graceful = response.ok;
+  } catch { /* older managed servers may not expose the shutdown route */ }
+
+  if (!graceful) {
+    if (!instance) throw new Error('The explicit CutLoc server does not support managed shutdown.');
+    try {
+      process.kill(instance.pid, 'SIGTERM');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+  }
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const responding = await probeHealth(parsedBaseUrl, 250);
+    if (!responding && (!instance || !processExists(instance.pid))) break;
+    if (attempt === 49) throw new Error('CutLoc server did not stop within 5 seconds.');
+  }
+  if (instance) await clearManagedRuntimeMetadata(instance);
+  const apiUrl = parsedBaseUrl.origin;
+  currentInstance = null;
+  serverEnsured = false;
+  if (!endpointWasExplicit) parsedBaseUrl = new URL(defaultBaseUrl);
+  return { ok: true, running: false, stopped: true, graceful, apiUrl };
+}
+
 async function ensureServerAvailable() {
   await discoverRuntimeEndpoint();
   let health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
   if (health) {
     assertCompatibleHealth(health);
-    serverEnsured = true;
-    return { health, started: false };
+    if (!endpointWasExplicit && currentInstance && health.version !== CUTLOC_VERSION) {
+      await stopServer();
+      health = null;
+    } else {
+      serverEnsured = true;
+      return { health, started: false };
+    }
   }
   if (endpointWasExplicit) throw new Error(`CutLoc server is not reachable at ${parsedBaseUrl.origin}.`);
 
@@ -278,24 +370,36 @@ async function ensureServerAvailable() {
     throw new Error('CutLoc server build is missing. Run npm.cmd run setup:user from the CutLoc checkout once.');
   }
   await ensureRuntimeFolders(paths);
-  const child = spawn(installation.nodePath, [installation.serverEntry], {
-    cwd: installation.appRoot,
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      CUTLOC_HOME: paths.home,
-      DATA_DIR: process.env.DATA_DIR?.trim() || paths.data,
-      HOST: '127.0.0.1',
-      PORT: '0',
-      NO_OPEN: '1',
-    },
-  });
+  const childEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    CUTLOC_HOME: paths.home,
+    HOST: '127.0.0.1',
+    PORT: '0',
+    NO_OPEN: '1',
+  };
+  if (!process.env.DATA_DIR?.trim()) delete childEnvironment.DATA_DIR;
+  const logFile = path.join(paths.logs, 'server.log');
+  await fsp.appendFile(logFile, `\n[${new Date().toISOString()}] CLI starting CutLoc ${CUTLOC_VERSION}\n`, 'utf8');
+  const logHandle = fs.openSync(logFile, 'a');
+  let child;
+  try {
+    child = spawn(installation.nodePath, [installation.serverEntry], {
+      cwd: installation.appRoot,
+      detached: true,
+      windowsHide: true,
+      stdio: ['ignore', logHandle, logHandle],
+      env: childEnvironment,
+    });
+  } finally {
+    fs.closeSync(logHandle);
+  }
+  const startupState: { error?: Error } = {};
+  child.once('error', (error) => { startupState.error = error; });
   child.unref();
 
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
+    if (startupState.error) throw new Error(`CutLoc server could not start: ${startupState.error.message}. See ${logFile}`);
     currentInstance = await readRuntimeInstance(paths);
     if (!currentInstance) continue;
     parsedBaseUrl = new URL(currentInstance.apiUrl);
@@ -306,7 +410,7 @@ async function ensureServerAvailable() {
       return { health, started: true };
     }
   }
-  throw new Error('CutLoc server did not become ready within 20 seconds. Run cutloc doctor --json for diagnostics.');
+  throw new Error(`CutLoc server did not become ready within 20 seconds. See ${logFile} and run cutloc doctor --json.`);
 }
 
 function openBrowser(url: string) {
@@ -320,17 +424,20 @@ async function runtimeStatus() {
   await discoverRuntimeEndpoint();
   const health = endpointWasExplicit || currentInstance ? await probeHealth() : null;
   if (health) assertCompatibleHealth(health);
+  const installation = await configuredInstallation();
+  const configuredDataDir = configuredDataDirectory(installation.appRoot);
   return {
     ok: true,
     running: Boolean(health),
     version: health?.version ?? currentInstance?.version ?? CUTLOC_VERSION,
     cliVersion: CUTLOC_VERSION,
-    apiVersion: health?.apiVersion ?? currentInstance?.apiVersion ?? API_PROTOCOL_VERSION,
-    apiUrl: health ? parsedBaseUrl.origin : currentInstance?.apiUrl ?? null,
+    apiVersion: health?.apiVersion ?? API_PROTOCOL_VERSION,
+    apiUrl: health ? parsedBaseUrl.origin : null,
     pid: health ? currentInstance?.pid ?? null : null,
     startedAt: health ? currentInstance?.startedAt ?? null : null,
-    dataDir: paths.data,
+    dataDir: health && currentInstance ? currentInstance.dataDir : configuredDataDir,
     home: paths.home,
+    logFile: path.join(paths.logs, 'server.log'),
   };
 }
 
@@ -344,11 +451,13 @@ async function runtimeDoctor() {
   add('node', nodeMajor === 24, `${process.versions.node} (required: 24.x)`);
   add('installation', fs.existsSync(installation.serverEntry) && fs.existsSync(installation.cliEntry), installation.appRoot);
 
-  const permissionProbe = path.join(paths.temp, `.doctor-${process.pid}-${Date.now()}`);
+  const dataDirectory = path.resolve(status.dataDir);
+  const permissionProbe = path.join(dataDirectory, `.doctor-${process.pid}-${Date.now()}`);
   try {
+    await fsp.mkdir(dataDirectory, { recursive: true });
     await fsp.writeFile(permissionProbe, 'ok', 'utf8');
     await fsp.rm(permissionProbe, { force: true });
-    add('storage', true, paths.home);
+    add('storage', true, dataDirectory);
   } catch (error) {
     add('storage', false, error instanceof Error ? error.message : String(error));
   }
@@ -362,12 +471,31 @@ async function runtimeDoctor() {
       return null;
     }
   }
-  const ffmpeg = dependencyBinary('ffmpeg-static');
-  const ffprobe = dependencyBinary('ffprobe-static');
-  add('ffmpeg', status.running ? Boolean((await probeHealth())?.ffmpeg) : Boolean(ffmpeg), ffmpeg ?? 'unavailable');
-  add('ffprobe', status.running ? Boolean((await probeHealth())?.ffprobe) : Boolean(ffprobe), ffprobe ?? 'unavailable');
+  function configuredBinary(environmentName: 'FFMPEG_PATH' | 'FFPROBE_PATH', packageName: string) {
+    const configured = configuredValue(environmentName, installation.appRoot);
+    if (configured) {
+      const resolved = path.resolve(installation.appRoot, configured);
+      return { path: fs.existsSync(resolved) ? resolved : null, detail: resolved };
+    }
+    const bundled = dependencyBinary(packageName);
+    return { path: bundled, detail: bundled ?? 'unavailable' };
+  }
+  const ffmpeg = configuredBinary('FFMPEG_PATH', 'ffmpeg-static');
+  const ffprobe = configuredBinary('FFPROBE_PATH', 'ffprobe-static');
+  const health = status.running ? await probeHealth() : null;
+  if (health) assertCompatibleHealth(health);
+  const textRendering = health
+    ? health.textRendering === true
+    : Boolean(ffmpeg.path && (() => {
+      const result = spawnSync(ffmpeg.path, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+      return result.status === 0 && /^\s*[.A-Z]+\s+drawtext\s/m.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+    })());
+  add('ffmpeg', health ? health.ffmpeg === true : Boolean(ffmpeg.path), health ? String(status.apiUrl) : ffmpeg.detail);
+  add('ffprobe', health ? health.ffprobe === true : Boolean(ffprobe.path), health ? String(status.apiUrl) : ffprobe.detail);
+  add('text-rendering', textRendering, health ? String(status.apiUrl) : ffmpeg.detail);
   add('server', status.running, status.running ? String(status.apiUrl) : 'not running; a live command or cutloc open will start it', 'warning');
   add('compatibility', !status.running || status.apiVersion === API_PROTOCOL_VERSION, `CLI ${API_PROTOCOL_VERSION}; server ${status.running ? status.apiVersion : 'not running'}`);
+  add('version', !status.running || status.version === CUTLOC_VERSION, `CLI ${CUTLOC_VERSION}; server ${status.running ? status.version : 'not running'}`, 'warning');
   const pathEntries = (process.env.PATH ?? '').split(path.delimiter).map((entry) => path.resolve(entry.replace(/^"|"$/g, '')));
   add('path', pathEntries.some((entry) => entry.toLocaleLowerCase() === path.resolve(paths.bin).toLocaleLowerCase()), paths.bin, 'warning');
   return {
@@ -677,6 +805,27 @@ async function main() {
     print(diagnosis);
     if (!diagnosis.ok) process.exitCode = 1;
     return;
+  }
+
+  if (group === 'stop') {
+    ensureNoArgs(args);
+    return print(await stopServer());
+  }
+
+  if (group === 'restart') {
+    ensureNoArgs(args);
+    if (endpointWasExplicit) throw new Error('restart is available only for the shared managed CutLoc server.');
+    const stopped = await stopServer();
+    const runtime = await ensureServerAvailable();
+    return print({
+      ok: true,
+      running: true,
+      restarted: stopped.stopped,
+      started: runtime.started,
+      version: runtime.health.version,
+      apiVersion: runtime.health.apiVersion,
+      apiUrl: parsedBaseUrl.origin,
+    });
   }
 
   if (group === 'open') {
