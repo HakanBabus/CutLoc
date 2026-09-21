@@ -368,7 +368,8 @@ export function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: F
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [filter, locale, project.assets, project.tracks, search]);
   const hasFilePayload = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes('Files');
   const importDroppedFiles = async (files: File[]) => {
-    const supported = files.filter((file) => /^(video|audio|image)\//.test(file.type));
+    const supportedExtensions = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff']);
+    const supported = files.filter((file) => /^(video|audio|image)\//.test(file.type) || supportedExtensions.has(file.name.split('.').pop()?.toLocaleLowerCase() ?? ''));
     if (!supported.length) {
       setNotice(t('library.dropUnsupported'));
       return;
@@ -429,9 +430,15 @@ export function AssetPanelPro({ onImport, onOpenSettings }: { onImport: (file: F
       setStockBusyId(null);
     }
   };
-  const removeAsset = (asset: Asset) => {
-    mutateProject((draft) => { draft.assets = draft.assets.filter((item) => item.id !== asset.id); for (const track of draft.tracks) track.clips = track.clips.filter((clip) => clip.assetId !== asset.id); draft.duration = projectDuration(draft); });
+  const removeAsset = async (asset: Asset) => {
     closeMenu();
+    try {
+      const updated = await api<Project>(`/api/projects/${project.id}/media/${asset.id}`, { method: 'DELETE' });
+      applyServerProject(updated);
+      await refreshMediaHealth();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : t('library.operationFailed'));
+    }
   };
   const showInfo = (asset: Asset) => { setNotice(`${asset.name} · ${asset.mimeType} · ${asset.duration ? formatTime(asset.duration) : t('library.noDuration')} · ${t('library.bytes', { count: formatNumber(asset.size) })}`); closeMenu(); };
   const rebuildDerived = async (asset: Asset) => {
@@ -590,6 +597,19 @@ function AssetCardPro({ projectId, asset, usage, health, view, onAdd, onPreview 
 
 function MediaPreviewModal({ projectId, asset, onClose }: { projectId: string; asset: Asset; onClose: () => void }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLElement>(null);
   const source = `/api/projects/${projectId}/media/${asset.id}`;
-  return <div className="media-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="media-preview-modal" role="dialog" aria-modal="true" aria-label={t('library.previewAria', { name: asset.name })}><div className="modal-head"><div><p className="eyebrow">{t('library.sourceMonitor')}</p><h2>{asset.name}</h2></div><button onClick={onClose} aria-label={t('library.closePreview')}>×</button></div><div className="media-preview-stage">{asset.type === 'video' ? <video src={source} controls autoPlay playsInline /> : asset.type === 'audio' ? <audio src={source} controls autoPlay /> : <img src={source} alt={asset.name} />}</div><p className="media-preview-note">{t('library.previewNote')}</p></section></div>;
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLElement>('button')?.focus();
+    return () => previous?.focus();
+  }, []);
+  return <div className="media-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="media-preview-modal" role="dialog" aria-modal="true" aria-label={t('library.previewAria', { name: asset.name })} onKeyDown={(event) => {
+    if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button, video[controls], audio[controls], [tabindex]:not([tabindex="-1"])')).filter((item) => !item.hasAttribute('disabled'));
+    const first = focusable[0]; const last = focusable.at(-1);
+    if (first && last && event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (first && last && !event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }}><div className="modal-head"><div><p className="eyebrow">{t('library.sourceMonitor')}</p><h2>{asset.name}</h2></div><button onClick={onClose} aria-label={t('library.closePreview')}>×</button></div><div className="media-preview-stage">{asset.type === 'video' ? <video src={source} controls autoPlay playsInline /> : asset.type === 'audio' ? <audio src={source} controls autoPlay /> : <img src={source} alt={asset.name} />}</div><p className="media-preview-note">{t('library.previewNote')}</p></section></div>;
 }

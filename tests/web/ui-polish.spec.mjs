@@ -226,6 +226,23 @@ test('theme palettes and animation controls stay coherent across the workspace',
       return Math.abs(sourceTimeAt(clip.speedCurve, clip.speed, clip.duration) - clip.sourceDuration);
     }).toBeLessThan(0.001);
     await page.locator('.inspector-tool-tabs').getByRole('tab', { name: /Animation|Animasyon/ }).click();
+    await expect(page.locator('.keyframe-quick-guide')).toBeVisible();
+    const ruler = page.locator('.ruler');
+    const rulerBox = await ruler.boundingBox();
+    expect(rulerBox).toBeTruthy();
+    await ruler.click({ position: { x: 2, y: rulerBox.height / 2 } });
+    const xMotionRow = page.locator('.keyframe-property-row').filter({ hasText: /Horizontal position|Yatay konum/i });
+    await xMotionRow.locator('.keyframe-toggle').click();
+    await expect(xMotionRow.locator('.keyframe-toggle b')).toHaveText('◆');
+    await ruler.click({ position: { x: Math.max(40, rulerBox.width * 0.45), y: rulerBox.height / 2 } });
+    const liveMotionInput = page.locator('.keyframe-live-editor input');
+    await liveMotionInput.fill('180');
+    await expect.poll(async () => {
+      const response = await request.get(`/api/projects/${projectId}`);
+      const saved = await response.json();
+      return saved.tracks.flatMap((track) => track.clips).find((item) => item.type === 'image')?.keyframes.filter((keyframe) => keyframe.property === 'x').map((keyframe) => keyframe.value);
+    }).toEqual([0, 180]);
+    await expect(page.locator('.keyframe-graph circle')).toHaveCount(2);
     await expect(page.locator('.animation-card')).toHaveCount(9);
     const animationStudio = page.locator('.animation-studio-v3');
     await expect(animationStudio).toHaveAttribute('data-category', 'all');

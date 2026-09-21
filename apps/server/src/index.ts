@@ -8,6 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import { chromium, type Browser, type Page } from 'playwright';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
@@ -19,11 +20,15 @@ import {
   defaultSettings,
   DEFAULT_SHORTCUT_SETTINGS,
   clamp,
+  effectiveVisualFit,
   normalizeTextLineBreaks,
   exportDimensions,
+  enforceLockedTrackInvariants,
+  ExportFpsSchema,
   projectDuration,
   ProjectSchema,
   ExportOptionsSchema,
+  ExportResolutionSchema,
   JobSchema,
   SettingsSchema,
   sliceClipForRange,
@@ -31,6 +36,8 @@ import {
   speedCurveSegments,
   speedAt,
   adjustmentLayersForVisual,
+  mergeVisualFilters,
+  resolveTextFrameGeometry,
   visualLayerPlan,
   type Asset,
   type ExportOptions,
@@ -47,6 +54,7 @@ const configuredDataDir = process.env.DATA_DIR?.trim();
 const dataDir = path.resolve(configuredDataDir || userRuntimePaths.data);
 const projectsDir = path.join(dataDir, 'projects');
 const settingsFile = path.join(dataDir, 'settings.json');
+const jobsFile = path.join(dataDir, 'jobs.json');
 const stockDir = path.join(rootDir, 'apps', 'server', 'stock');
 let runtimePort = Number(process.env.PORT ?? 4173);
 const webPort = Number(process.env.WEB_PORT ?? 5173);
@@ -65,7 +73,7 @@ const maxSseClients = 32;
 const maxConcurrentJobs = 2;
 const maxConcurrentPreviews = 2;
 const globalRequestsPerMinute = 3_000;
-const previewRequestsPerMinute = 30;
+const previewRequestsPerMinute = 120;
 const minAccessLeaseMs = 5_000;
 const maxAccessLeaseMs = 60_000;
 
@@ -79,6 +87,10 @@ type InternalProjectAccessLease = ProjectAccessLease & { token: string };
 const projectAccessLeases = new Map<string, InternalProjectAccessLease>();
 let settings: Settings = defaultSettings();
 let activePreviewRenders = 0;
+const previewFrameCache = new Map<string, Buffer>();
+const maxPreviewFrameCacheEntries = 12;
+const maxPreviewFrameCacheBytes = 64 * 1024 * 1024;
+let previewFrameCacheBytes = 0;
 
 function message(key: ServerTranslationKey, values?: ServerTranslationValues) {
   return serverT(settings.language, key, values);
@@ -98,7 +110,7 @@ function activeJobCount() {
 }
 
 type TimelineClip = Project['tracks'][number]['clips'][number];
-type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean; projectRevision?: number };
+type ExportRequest = Partial<ExportOptions> & { audioOnly?: boolean; frameOnly?: boolean; projectRevision?: number };
 type LegacyBundle = { format?: string; version?: number; project?: unknown };
 type PortableBundleManifest = {
   format: 'cutloc-project';
@@ -181,6 +193,68 @@ async function atomicWrite(file: string, content: string) {
   const temp = `${safeFile}.${process.pid}.${Date.now()}.tmp`;
   await fsp.writeFile(temp, content, 'utf8');
   await fsp.rename(temp, safeFile);
+}
+
+let jobsPersistTimer: NodeJS.Timeout | undefined;
+let jobsPersistChain = Promise.resolve();
+
+function persistedJobs() {
+  return Array.from(jobs.values()).map((job) => {
+    const { absoluteOutputPath: _absolute, outputPath: _legacyOutput, ...persisted } = job;
+    return persisted;
+  });
+}
+
+async function persistJobs() {
+  await atomicWrite(jobsFile, JSON.stringify(persistedJobs(), null, 2));
+}
+
+function enqueueJobsPersist() {
+  jobsPersistChain = jobsPersistChain.then(persistJobs, persistJobs).catch(() => undefined);
+}
+
+function scheduleJobsPersist() {
+  if (jobsPersistTimer) clearTimeout(jobsPersistTimer);
+  jobsPersistTimer = setTimeout(() => {
+    jobsPersistTimer = undefined;
+    enqueueJobsPersist();
+  }, 100);
+  jobsPersistTimer.unref?.();
+}
+
+async function flushJobsPersist() {
+  if (jobsPersistTimer) {
+    clearTimeout(jobsPersistTimer);
+    jobsPersistTimer = undefined;
+    enqueueJobsPersist();
+  }
+  await jobsPersistChain;
+}
+
+async function loadJobs() {
+  try {
+    const raw = JSON.parse(await fsp.readFile(jobsFile, 'utf8')) as unknown;
+    if (!Array.isArray(raw)) throw new Error('Invalid jobs history');
+    jobs.clear();
+    for (const item of raw.slice(-maxJobHistory)) {
+      const publicPart = JobSchema.parse(item);
+      const relativeOutputPath = typeof item === 'object' && item !== null && 'relativeOutputPath' in item && typeof item.relativeOutputPath === 'string'
+        ? item.relativeOutputPath
+        : undefined;
+      if (relativeOutputPath) safeJoin(projectPath(publicPart.projectId), relativeOutputPath);
+      const restored: InternalJob = { ...publicPart, ...(relativeOutputPath ? { relativeOutputPath } : {}) };
+      if (restored.status === 'queued' || restored.status === 'running') {
+        restored.status = 'failed';
+        restored.error = message('jobInterrupted');
+        restored.updatedAt = new Date().toISOString();
+      }
+      jobs.set(restored.id, restored);
+    }
+    pruneJobs();
+    await persistJobs();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') await atomicWrite(jobsFile, '[]').catch(() => undefined);
+  }
 }
 
 async function readProject(projectId: string): Promise<Project> {
@@ -448,6 +522,7 @@ function updateJob(jobId: string, patch: Partial<InternalJob>) {
   if (!job) return;
   const next = { ...job, ...patch, updatedAt: new Date().toISOString() };
   jobs.set(jobId, next);
+  scheduleJobsPersist();
   pruneJobs();
   publish('job', publicJob(next));
 }
@@ -489,13 +564,16 @@ function pruneJobs() {
     .filter((job) => ['completed', 'failed', 'cancelled'].includes(job.status))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   for (const job of removable.slice(0, Math.max(0, jobs.size - maxJobHistory))) jobs.delete(job.id);
+  scheduleJobsPersist();
 }
 
 async function makeJob(projectId: string, kind: Job['kind'], runner: (job: InternalJob) => Promise<void>) {
   assertProjectActive(projectId);
+  if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message(kind === 'proxy' ? 'tooManyMediaJobs' : 'tooManyJobs')), { statusCode: 429 });
   const now = new Date().toISOString();
   const job: Job = { id: id('job'), projectId, kind, status: 'queued', progress: 0, createdAt: now, updatedAt: now };
   jobs.set(job.id, job);
+  scheduleJobsPersist();
   pruneJobs();
   publish('job', publicJob(job));
   // A cancelled process can still reject while its child is being reaped.  Do
@@ -571,59 +649,254 @@ async function runFfmpeg(args: string[], job: Job, outputPath?: string) {
 }
 
 const jobProgressDuration = new Map<string, number>();
+const activeDerivedJobs = new Map<string, Job>();
+
+async function stageGeneratedFiles(files: Array<{ tempPath: string; finalPath: string }>) {
+  const staged = files.map(({ tempPath, finalPath }) => ({ tempPath, finalPath, backupPath: `${finalPath}.previous-${crypto.randomUUID()}`, hadPrevious: fs.existsSync(finalPath), published: false }));
+  try {
+    for (const file of staged) {
+      if (file.hadPrevious) await fsp.rename(file.finalPath, file.backupPath);
+      await fsp.rename(file.tempPath, file.finalPath);
+      file.published = true;
+    }
+  } catch (error) {
+    for (const file of staged.slice().reverse()) {
+      if (file.published) await fsp.rm(file.finalPath, { force: true }).catch(() => undefined);
+      if (file.hadPrevious && fs.existsSync(file.backupPath)) await fsp.rename(file.backupPath, file.finalPath).catch(() => undefined);
+    }
+    throw error;
+  }
+  return {
+    commit: async () => { await Promise.all(staged.filter((file) => file.hadPrevious).map((file) => fsp.rm(file.backupPath, { force: true }))); },
+    rollback: async () => {
+      for (const file of staged.slice().reverse()) {
+        await fsp.rm(file.finalPath, { force: true }).catch(() => undefined);
+        if (file.hadPrevious && fs.existsSync(file.backupPath)) await fsp.rename(file.backupPath, file.finalPath).catch(() => undefined);
+      }
+    },
+  };
+}
+
+async function launchRenderBrowser(): Promise<Browser> {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (bundledError) {
+    try {
+      return await chromium.launch({ headless: true, channel: 'chrome' });
+    } catch {
+      throw new Error(`Chromium renderer could not start: ${bundledError instanceof Error ? bundledError.message : String(bundledError)}`);
+    }
+  }
+}
+
+async function prepareRenderPage(browser: Browser, projectId: string, width: number, height: number) {
+  const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
+  await page.goto(`http://127.0.0.1:${runtimePort}/?renderProject=${encodeURIComponent(projectId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
+  await page.waitForFunction((id) => (window as Window & { __cutlocRenderer?: { projectId: string } }).__cutlocRenderer?.projectId === id, projectId, { timeout: 30_000 });
+  const canvas = page.locator('.canvas-frame');
+  await canvas.waitFor({ state: 'visible', timeout: 30_000 });
+  const box = await canvas.boundingBox();
+  if (!box || Math.abs(box.width - width) > 1 || Math.abs(box.height - height) > 1) {
+    await page.close();
+    throw new Error(`Browser compositor size mismatch: expected ${width}x${height}, received ${box ? `${box.width}x${box.height}` : 'no canvas'}`);
+  }
+  return page;
+}
+
+async function browserRenderedFrame(projectId: string, width: number, height: number, time: number, signal?: AbortSignal) {
+  const browser = await launchRenderBrowser();
+  const abort = () => { void browser.close().catch(() => undefined); };
+  signal?.addEventListener('abort', abort, { once: true });
+  let page: Page | undefined;
+  try {
+    if (signal?.aborted) throw new Error(message('cancelled'));
+    page = await prepareRenderPage(browser, projectId, width, height);
+    await page.evaluate(async (seekTime) => {
+      const renderer = (window as Window & { __cutlocRenderer?: { seek: (time: number) => Promise<unknown> } }).__cutlocRenderer;
+      if (!renderer) throw new Error('Browser compositor is not ready');
+      await renderer.seek(seekTime);
+    }, time);
+    if (signal?.aborted) throw new Error(message('cancelled'));
+    return await page.locator('.canvas-frame').screenshot({ type: 'png', animations: 'disabled' });
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    await page?.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
+  }
+}
+
+async function browserRenderedExport(project: Project, options: ExportOptions, outputPath: string, job: Job) {
+  const ffmpeg = binaryPath('ffmpeg');
+  if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
+  const { width, height } = outputDimensions(project, project.canvas.aspect, options.resolution);
+  const rangeStart = options.range?.start ?? 0;
+  const rangeEnd = options.range?.end ?? project.duration;
+  const duration = Math.max(1 / options.fps, rangeEnd - rangeStart);
+  const frameCount = Math.max(1, Math.ceil(duration * options.fps));
+  const audioRender = compileComposition(project, { ...options, aspect: project.canvas.aspect, format: 'wav', audioOnly: true }, `${outputPath}.audio.wav`);
+  const filterIndex = audioRender.args.indexOf('-filter_complex');
+  if (filterIndex < 0) throw new Error('Audio graph is missing');
+  const audioInputs = audioRender.args.slice(0, filterIndex);
+  const audioGraph = audioRender.args[filterIndex + 1];
+  const imageInputIndex = audioInputs.filter((value) => value === '-i').length;
+  const quality = options.quality === 'draft'
+    ? { preset: 'veryfast', crf: 28 }
+    : options.quality === 'high'
+      ? { preset: 'slow', crf: 18 }
+      : { preset: 'medium', crf: 23 };
+  const encodeArgs = [
+    ...audioInputs,
+    '-f', 'image2pipe', '-framerate', ffmpegNumber(options.fps), '-vcodec', 'png', '-i', 'pipe:0',
+    '-filter_complex', audioGraph,
+    '-map', `${imageInputIndex}:v`, '-map', '[aout]', '-t', ffmpegNumber(duration), '-r', ffmpegNumber(options.fps), '-fps_mode', 'cfr',
+    '-c:v', 'libx264', '-preset', quality.preset,
+    ...(options.rateMode === 'bitrate' && options.videoBitrateKbps ? ['-b:v', `${options.videoBitrateKbps}k`] : ['-crf', String(options.crf ?? quality.crf)]),
+    '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', `${options.audioBitrateKbps}k`, '-movflags', '+faststart', outputPath,
+  ];
+  const browser = await launchRenderBrowser();
+  const concurrency = width * height > 1920 * 1080 ? 2 : Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2)));
+  const pages: Page[] = [];
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    for (let index = 0; index < concurrency; index += 1) pages.push(await prepareRenderPage(browser, project.id, width, height));
+    child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...encodeArgs], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    if (!child.stdin || !child.stderr) throw new Error('FFmpeg pipe creation failed');
+    const encoderInput = child.stdin;
+    const encoderError = child.stderr;
+    jobProcesses.set(job.id, child);
+    let stderr = '';
+    encoderError.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-64 * 1024); });
+    const completion = new Promise<void>((resolve, reject) => {
+      child!.once('error', reject);
+      child!.once('close', (code) => {
+        if (code === 0 && jobs.get(job.id)?.status !== 'cancelled') resolve();
+        else reject(new Error(jobs.get(job.id)?.status === 'cancelled' ? message('cancelled') : stderr.slice(-2400) || `FFmpeg exit code ${code}`));
+      });
+    });
+    const writeFrame = async (buffer: Buffer) => {
+      if (!encoderInput.write(buffer)) await new Promise<void>((resolve) => encoderInput.once('drain', resolve));
+    };
+    for (let start = 0; start < frameCount; start += pages.length) {
+      if (jobs.get(job.id)?.status === 'cancelled') throw new Error(message('cancelled'));
+      const indices = pages.map((_, offset) => start + offset).filter((index) => index < frameCount);
+      const frames = await Promise.all(indices.map(async (frameIndex, offset) => {
+        const time = rangeStart + frameIndex / options.fps;
+        await pages[offset].evaluate(async (seekTime) => {
+          const renderer = (window as Window & { __cutlocRenderer?: { seek: (time: number) => Promise<unknown> } }).__cutlocRenderer;
+          if (!renderer) throw new Error('Browser compositor is not ready');
+          await renderer.seek(seekTime);
+        }, time);
+        return pages[offset].locator('.canvas-frame').screenshot({ type: 'png', animations: 'disabled' });
+      }));
+      for (const frame of frames) await writeFrame(frame);
+      updateJob(job.id, { status: 'running', phase: 'rendering', progress: Math.min(0.96, (start + frames.length) / frameCount * 0.96) });
+    }
+    encoderInput.end();
+    await completion;
+    const stat = await fsp.stat(outputPath);
+    if (stat.size <= 0) throw new Error(message('ffmpegEmpty'));
+  } finally {
+    jobProcesses.delete(job.id);
+    if (child && child.exitCode === null) child.kill();
+    await Promise.all(pages.map((page) => page.close().catch(() => undefined)));
+    await browser.close().catch(() => undefined);
+  }
+}
+
+async function publishGeneratedFile(tempPath: string, finalPath: string) {
+  const publication = await stageGeneratedFiles([{ tempPath, finalPath }]);
+  await publication.commit();
+}
 
 async function queueDerivedMediaJob(projectId: string, asset: Asset) {
   assertProjectActive(projectId);
+  const assetJobKey = `${projectId}:${asset.id}`;
+  const existing = activeDerivedJobs.get(assetJobKey);
+  if (existing && (existing.status === 'queued' || existing.status === 'running')) return existing;
   const sourcePath = assetFile(projectId, asset);
   if (!fs.existsSync(sourcePath)) throw Object.assign(new Error(message('sourceMissing')), { statusCode: 404 });
-  if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyMediaJobs')), { statusCode: 429 });
+  const sourceSnapshot = await fsp.stat(sourcePath);
+  const sourceFingerprint = `${sourceSnapshot.size}:${sourceSnapshot.mtimeMs}:${sourceSnapshot.ctimeMs}`;
   const quality = settings?.proxyQuality === 'draft'
     ? { width: 640, crf: 32, preset: 'veryfast' }
     : settings?.proxyQuality === 'high'
       ? { width: 1280, crf: 26, preset: 'faster' }
       : { width: 960, crf: 30, preset: 'veryfast' };
-  return makeJob(projectId, 'proxy', async (jobInfo) => {
-    assertProjectActive(projectId);
-    updateJob(jobInfo.id, { status: 'running', message: message('derivativesPreparing') });
-    await serverTestHooks.beforeDerivedWrite?.(projectId);
-    assertProjectActive(projectId);
-    const proxyDir = path.join(projectPath(projectId), 'proxies');
-    const thumbnailDir = path.join(projectPath(projectId), 'thumbnails');
-    const waveformDir = path.join(projectPath(projectId), 'waveforms');
-    await Promise.all([ensureDir(proxyDir), ensureDir(thumbnailDir), ensureDir(waveformDir)]);
-    if (!binaryPath('ffmpeg')) throw new Error(message('ffmpegDerivativesMissing'));
-    const proxyPath = path.join(proxyDir, `${asset.id}.mp4`);
-    const thumbnailPath = path.join(thumbnailDir, `${asset.id}.jpg`);
-    const waveformPath = path.join(waveformDir, `${asset.id}.png`);
-    jobProgressDuration.set(jobInfo.id, asset.duration || 1);
-    let proxyRelative: string | undefined;
-    let thumbnailRelative: string | undefined;
-    let waveformRelative: string | undefined;
-    if (asset.type === 'video') {
+  const job = await makeJob(projectId, 'proxy', async (jobInfo) => {
+    const tempPaths: string[] = [];
+    try {
       assertProjectActive(projectId);
-      await runFfmpeg(['-i', sourcePath, '-vf', `scale=${quality.width}:-2:force_original_aspect_ratio=decrease`, '-c:v', 'libx264', '-preset', quality.preset, '-crf', String(quality.crf), '-c:a', 'aac', '-b:a', '128k', proxyPath], jobInfo, proxyPath);
-      proxyRelative = path.relative(projectPath(projectId), proxyPath);
-    }
-    if (asset.type === 'video' || asset.type === 'image') {
+      updateJob(jobInfo.id, { status: 'running', message: message('derivativesPreparing') });
+      await serverTestHooks.beforeDerivedWrite?.(projectId);
       assertProjectActive(projectId);
-      const thumbnailInput = asset.type === 'video' ? ['-ss', '0.2', '-i', sourcePath] : ['-i', sourcePath];
-      await runFfmpeg([...thumbnailInput, '-frames:v', '1', '-vf', 'scale=480:-2', thumbnailPath], jobInfo, thumbnailPath);
-      thumbnailRelative = path.relative(projectPath(projectId), thumbnailPath);
-    }
-    if (asset.hasAudio || asset.type === 'audio') {
+      const proxyDir = path.join(projectPath(projectId), 'proxies');
+      const thumbnailDir = path.join(projectPath(projectId), 'thumbnails');
+      const waveformDir = path.join(projectPath(projectId), 'waveforms');
+      await Promise.all([ensureDir(proxyDir), ensureDir(thumbnailDir), ensureDir(waveformDir)]);
+      if (!binaryPath('ffmpeg')) throw new Error(message('ffmpegDerivativesMissing'));
+      const proxyPath = path.join(proxyDir, `${asset.id}.mp4`);
+      const thumbnailPath = path.join(thumbnailDir, `${asset.id}.jpg`);
+      const waveformPath = path.join(waveformDir, `${asset.id}.png`);
+      const proxyTemp = path.join(proxyDir, `${asset.id}.${jobInfo.id}.tmp.mp4`);
+      const thumbnailTemp = path.join(thumbnailDir, `${asset.id}.${jobInfo.id}.tmp.jpg`);
+      const waveformTemp = path.join(waveformDir, `${asset.id}.${jobInfo.id}.tmp.png`);
+      tempPaths.push(proxyTemp, thumbnailTemp, waveformTemp);
+      jobProgressDuration.set(jobInfo.id, asset.duration || 1);
+      let proxyRelative: string | undefined;
+      let thumbnailRelative: string | undefined;
+      let waveformRelative: string | undefined;
+      if (asset.type === 'video') {
+        assertProjectActive(projectId);
+        await runFfmpeg(['-i', sourcePath, '-vf', `scale=${quality.width}:-2:force_original_aspect_ratio=decrease`, '-c:v', 'libx264', '-preset', quality.preset, '-crf', String(quality.crf), '-c:a', 'aac', '-b:a', '128k', proxyTemp], jobInfo, proxyTemp);
+        proxyRelative = path.relative(projectPath(projectId), proxyPath);
+      }
+      if (asset.type === 'video' || asset.type === 'image') {
+        assertProjectActive(projectId);
+        const thumbnailTime = Math.max(0, Math.min(0.2, Math.max(0, asset.duration - 0.001)));
+        const thumbnailInput = asset.type === 'video' && thumbnailTime > 0 ? ['-ss', ffmpegNumber(thumbnailTime), '-i', sourcePath] : ['-i', sourcePath];
+        await runFfmpeg([...thumbnailInput, '-frames:v', '1', '-vf', 'scale=480:-2', thumbnailTemp], jobInfo, thumbnailTemp);
+        thumbnailRelative = path.relative(projectPath(projectId), thumbnailPath);
+      }
+      if (asset.hasAudio || asset.type === 'audio') {
+        assertProjectActive(projectId);
+        await runFfmpeg(['-i', sourcePath, '-filter_complex', 'showwavespic=s=900x120:colors=80e6c4:scale=sqrt', '-frames:v', '1', waveformTemp], jobInfo, waveformTemp);
+        waveformRelative = path.relative(projectPath(projectId), waveformPath);
+      }
       assertProjectActive(projectId);
-      await runFfmpeg(['-i', sourcePath, '-filter_complex', 'showwavespic=s=900x120:colors=80e6c4:scale=sqrt', '-frames:v', '1', waveformPath], jobInfo, waveformPath);
-      waveformRelative = path.relative(projectPath(projectId), waveformPath);
+      await withProjectLock(projectId, async () => {
+        const updated = await readProject(projectId);
+        const index = updated.assets.findIndex((item) => item.id === asset.id);
+        const currentAsset = index >= 0 ? updated.assets[index] : undefined;
+        const currentSource = await fsp.stat(sourcePath).catch(() => undefined);
+        const currentFingerprint = currentSource ? `${currentSource.size}:${currentSource.mtimeMs}:${currentSource.ctimeMs}` : '';
+        const sameSource = currentAsset
+          && currentAsset.name === asset.name
+          && currentAsset.size === asset.size
+          && currentAsset.path.replaceAll('\\', '/') === asset.path.replaceAll('\\', '/')
+          && currentFingerprint === sourceFingerprint;
+        if (!sameSource) throw new Error(message('cancelled'));
+        const publication = await stageGeneratedFiles([
+          ...(proxyRelative ? [{ tempPath: proxyTemp, finalPath: proxyPath }] : []),
+          ...(thumbnailRelative ? [{ tempPath: thumbnailTemp, finalPath: thumbnailPath }] : []),
+          ...(waveformRelative ? [{ tempPath: waveformTemp, finalPath: waveformPath }] : []),
+        ]);
+        try {
+          updated.assets[index] = { ...currentAsset, proxyPath: proxyRelative, thumbnailPath: thumbnailRelative, waveformPath: waveformRelative };
+          await saveProject(ProjectSchema.parse({ ...updated, revision: updated.revision + 1, updatedAt: new Date().toISOString() }));
+          await publication.commit();
+        } catch (error) {
+          await publication.rollback();
+          throw error;
+        }
+      });
+      updateJob(jobInfo.id, { status: 'completed', progress: 1, message: message('mediaReady') });
+    } finally {
+      await Promise.all(tempPaths.map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
+      if (activeDerivedJobs.get(assetJobKey)?.id === jobInfo.id) activeDerivedJobs.delete(assetJobKey);
     }
-    assertProjectActive(projectId);
-    await withProjectLock(projectId, async () => {
-      const updated = await readProject(projectId);
-      const index = updated.assets.findIndex((item) => item.id === asset.id);
-      if (index >= 0) updated.assets[index] = { ...updated.assets[index], proxyPath: proxyRelative, thumbnailPath: thumbnailRelative, waveformPath: waveformRelative };
-      await saveProject(ProjectSchema.parse({ ...updated, revision: updated.revision + 1, updatedAt: new Date().toISOString() }));
-    });
-    updateJob(jobInfo.id, { status: 'completed', progress: 1, message: message('mediaReady') });
   });
+  activeDerivedJobs.set(assetJobKey, job);
+  return job;
 }
 
 function safeJoin(base: string, candidate: string) {
@@ -805,7 +1078,7 @@ function numberOr(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-const supportedExportFps = [24, 25, 30, 50, 60] as const;
+const supportedExportFps = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60] as const;
 
 function nearestExportFps(value: unknown, fallback = 30) {
   const requested = numberOr(value, fallback);
@@ -825,7 +1098,7 @@ function normalizeExportOptions(project: Project, request: ExportRequest = {}): 
     format,
     aspect: request.aspect ?? defaultAspect(project),
     resolution: request.resolution ?? '1080p',
-    fps: nearestExportFps(request.fps, numberOr(project.canvas.fps, 30)),
+    fps: request.fps ?? nearestExportFps(project.canvas.fps, 30),
     quality: request.quality ?? 'standard',
     audioBitrateKbps: request.audioBitrateKbps ?? 256,
   });
@@ -841,19 +1114,37 @@ function safeExportName(project: Project, requested: string | undefined, extensi
   return `${safe}.${extension}`;
 }
 
-async function runFfmpegStandalone(args: string[], outputPath: string) {
+async function runFfmpegStandalone(args: string[], outputPath: string, signal?: AbortSignal) {
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...args], { windowsHide: true });
     const timeout = setTimeout(() => child.kill(), Math.min(maxFfmpegRuntimeMs, 120_000));
     let stderr = '';
-    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16_000); });
-    child.once('error', (error) => { clearTimeout(timeout); reject(error); });
-    child.once('close', (code) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
-      if (code === 0) resolve();
-      else reject(new Error(stderr.slice(-2400) || `FFmpeg exit code ${code}`));
+      signal?.removeEventListener('abort', abort);
+      callback();
+    };
+    const abort = () => {
+      child.kill();
+      finish(() => reject(Object.assign(new Error('Preview render cancelled'), { name: 'AbortError' })));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16_000); });
+    child.once('error', (error) => finish(() => reject(error)));
+    child.once('close', (code) => {
+      finish(() => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr.slice(-2400) || `FFmpeg exit code ${code}`));
+      });
     });
   });
   const stat = await fsp.stat(outputPath);
@@ -887,22 +1178,6 @@ function visibleRenderClip(clip: TimelineClip, rangeStart: number, rangeEnd: num
   if (visibleEnd <= visibleStart) return null;
   const sliced = sliceClipForRange(clip, visibleStart - clipStart, visibleEnd - clipStart);
   return { ...sliced, start: visibleStart - rangeStart, duration: visibleEnd - visibleStart };
-}
-
-function mergeAdjustmentFilters(base: TimelineClip['filters'], layers: TimelineClip['filters'][]): TimelineClip['filters'] {
-  const stack = [base, ...layers];
-  return {
-    ...base,
-    brightness: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.brightness, 0), 0), -1, 1),
-    contrast: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.contrast, 0), 0), -1, 1),
-    saturation: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.saturation, 0), 0), -1, 1),
-    temperature: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.temperature, 0), 0), -1, 1),
-    hue: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.hue, 0), 0), -180, 180),
-    vignette: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.vignette, 0), 0), 0, 1),
-    blur: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.blur, 0), 0), 0, 24),
-    grayscale: clamp(stack.reduce((sum, filter) => sum + numberOr(filter.grayscale, 0), 0), 0, 1),
-    chromaKey: [...stack].reverse().find((filter) => filter.chromaKey)?.chromaKey,
-  };
 }
 
 type AdjustmentRenderSegment = {
@@ -965,6 +1240,10 @@ function appendColorFilters(target: string[], values: TimelineClip['filters'], i
 
 function ffmpegColor(value: string) {
   const normalized = String(value || '').trim().replace(/^#/, '');
+  if (/^[0-9a-f]{8}$/i.test(normalized)) {
+    const alpha = Number.parseInt(normalized.slice(6), 16) / 255;
+    return `0x${normalized.slice(0, 6)}@${ffmpegNumber(alpha)}`;
+  }
   return /^[0-9a-f]{6}$/i.test(normalized) ? `0x${normalized}` : '0x101116';
 }
 
@@ -980,6 +1259,28 @@ function ffmpegText(value: string) {
 function ffmpegFont(value: string) {
   const family = String(value || 'Arial').split(',')[0].trim() || 'Arial';
   return ffmpegText(family);
+}
+
+function ffmpegFontSource(value: string, weight = 400, fontStyle: 'normal' | 'italic' = 'normal') {
+  const family = String(value || 'Arial').split(',')[0].trim() || 'Arial';
+  const bold = weight >= 600;
+  const italic = fontStyle === 'italic';
+  const windowsFiles: Record<string, [string, string, string, string]> = {
+    arial: ['arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf'],
+    'courier new': ['cour.ttf', 'courbd.ttf', 'couri.ttf', 'courbi.ttf'],
+    'segoe ui': ['segoeui.ttf', 'segoeuib.ttf', 'segoeuii.ttf', 'segoeuiz.ttf'],
+    'times new roman': ['times.ttf', 'timesbd.ttf', 'timesi.ttf', 'timesbi.ttf'],
+  };
+  const names = windowsFiles[family.toLowerCase()];
+  if (process.platform === 'win32' && names) {
+    const index = bold ? italic ? 3 : 1 : italic ? 2 : 0;
+    const fontFile = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', names[index]);
+    if (fs.existsSync(fontFile)) {
+      const escaped = fontFile.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'");
+      return `fontfile='${escaped}'`;
+    }
+  }
+  return `font='${ffmpegFont(family)}'`;
 }
 
 function atempoChain(speed: number) {
@@ -1008,7 +1309,7 @@ function exportClipDuration(clip: TimelineClip, projectDuration: number) {
  * clips, audio-only timelines, gaps, and multiple overlay tracks all export
  * consistently with the preview's timeline coordinates.
  */
-function buildExportArgs(project: Project, request: ExportRequest, output: string) {
+function compileComposition(project: Project, request: ExportRequest, output: string) {
   const body = normalizeExportOptions(project, request);
   const { width: outWidth, height: outHeight } = outputDimensions(project, body.aspect, body.resolution);
   // Clip transforms are stored in project-canvas pixels. Export presets may
@@ -1020,7 +1321,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
   const audioOnly = body.format === 'mp3' || body.format === 'wav' || request.audioOnly === true;
   const visualPlan = visualLayerPlan(project);
   const visualByClipId = new Map(visualPlan.map((item) => [item.clip.id, item]));
-  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number }> = [];
+  const allTimelineClips: Array<{ clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number; visualVisible: boolean }> = [];
   const allTextClips: Array<{ clip: TimelineClip; stackOrder: number }> = [];
   for (const { track, clip, stackOrder: clipStackOrder } of visualPlan) {
       if (clip.adjustment) continue;
@@ -1028,25 +1329,30 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
         if (clip.textStyle?.text || clip.subtitle?.text) allTextClips.push({ clip, stackOrder: clipStackOrder });
         continue;
       }
-      if (!clip.assetId) continue;
+  }
+  for (const track of [...project.tracks].sort((left, right) => left.order - right.order)) {
+    for (const clip of track.clips) {
+      if (clip.adjustment || clip.type === 'text' || clip.type === 'subtitle' || !clip.assetId || numberOr(clip.duration, 0) <= 0) continue;
       const asset = project.assets.find((item) => item.id === clip.assetId);
       if (!asset) throw new Error(message('clipMediaMissing', { name: clip.name }));
       const file = assetFile(project.id, asset);
       if (!fs.existsSync(file)) throw new Error(message('mediaFileMissingNamed', { name: asset.name }));
-      if (numberOr(clip.duration, 0) <= 0) continue;
-      allTimelineClips.push({ clip, asset, trackMuted: track.muted, trackVolume: clamp(numberOr(track.volume, 1), 0, 2), stackOrder: clipStackOrder });
+      const visual = visualByClipId.get(clip.id);
+      allTimelineClips.push({ clip, asset, trackMuted: track.muted, trackVolume: clamp(numberOr(track.volume, 1), 0, 2), stackOrder: visual?.stackOrder ?? -1, visualVisible: Boolean(visual) });
+    }
   }
   if (!allTimelineClips.length && !allTextClips.length) throw new Error(message('timelineNeedsClip'));
 
   const fullDuration = Math.max(0.1, numberOr(project.duration, 0), ...allTimelineClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))), ...allTextClips.map(({ clip }) => Math.max(0, numberOr(clip.start, 0)) + Math.max(0, numberOr(clip.duration, 0))));
-  const rangeStart = clamp(numberOr(body.range?.start, 0), 0, Math.max(0, fullDuration - 0.001));
-  const rangeEnd = clamp(numberOr(body.range?.end, fullDuration), rangeStart + 0.001, fullDuration);
+  if (body.range && (body.range.start >= fullDuration || body.range.end > fullDuration + 0.000001)) throw new Error(message('invalidExportRange'));
+  const rangeStart = body.range?.start ?? 0;
+  const rangeEnd = body.range?.end ?? fullDuration;
   const projectDuration = Math.max(0.1, rangeEnd - rangeStart);
   const clips = allTimelineClips
     .map((entry) => {
       const visible = visibleRenderClip(entry.clip, rangeStart, rangeEnd);
       if (!visible) return { ...entry, clip: null, adjustmentSegments: [] as AdjustmentRenderSegment[] };
-      const visual = visualByClipId.get(entry.clip.id)!;
+      const visual = visualByClipId.get(entry.clip.id);
       const layers = visualPlan.filter(({ clip }) => clip.adjustment
         && numberOr(clip.start, 0) < numberOr(entry.clip.start, 0) + numberOr(entry.clip.duration, 0)
         && numberOr(clip.start, 0) + numberOr(clip.duration, 0) > numberOr(entry.clip.start, 0));
@@ -1063,13 +1369,13 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
         const end = boundaries[index + 1];
         if (end <= start) return [];
         const midpoint = (start + end) / 2 + rangeStart;
-        const activeLayers = adjustmentLayersForVisual(visualPlan, visual, midpoint).filter((layer) => layers.includes(layer));
+        const activeLayers = visual ? adjustmentLayersForVisual(visualPlan, visual, midpoint).filter((layer) => layers.includes(layer)) : [];
         if (!activeLayers.length) return [];
-        return [{ start: start - visible.start, end: end - visible.start, filters: mergeAdjustmentFilters(EMPTY_FILTERS, activeLayers.map(({ clip }) => clip.filters)) }];
+        return [{ start: start - visible.start, end: end - visible.start, filters: mergeVisualFilters(EMPTY_FILTERS, activeLayers.map(({ clip }) => clip.filters)) }];
       });
       return { ...entry, clip: visible, adjustmentSegments };
     })
-    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number; adjustmentSegments: AdjustmentRenderSegment[] } => Boolean(entry.clip));
+    .filter((entry): entry is { clip: TimelineClip; asset: Asset; trackMuted: boolean; trackVolume: number; stackOrder: number; visualVisible: boolean; adjustmentSegments: AdjustmentRenderSegment[] } => Boolean(entry.clip));
   const textClips = allTextClips
     .map((entry) => ({ ...entry, clip: visibleRenderClip(entry.clip, rangeStart, rangeEnd) }))
     .filter((entry): entry is { clip: TimelineClip; stackOrder: number } => Boolean(entry.clip));
@@ -1080,12 +1386,12 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
   const filterLines: string[] = [];
 
   for (const entry of clips) {
-    const { clip, asset, trackMuted, trackVolume, stackOrder: clipStackOrder, adjustmentSegments } = entry;
+    const { clip, asset, trackMuted, trackVolume, stackOrder: clipStackOrder, visualVisible, adjustmentSegments } = entry;
     const clipDuration = Math.max(0, numberOr(clip.duration, 0));
     if (clipDuration <= 0) continue;
     const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
     const isImage = asset.type === 'image' || clip.type === 'image';
-    const wantsVideo = !audioOnly && (clip.type === 'video' || clip.type === 'image') && (asset.type === 'video' || asset.type === 'image');
+    const wantsVideo = visualVisible && !audioOnly && (clip.type === 'video' || clip.type === 'image') && (asset.type === 'video' || asset.type === 'image');
     const wantsAudio = asset.hasAudio && (clip.type === 'video' || clip.type === 'audio') && !trackMuted;
     if (!wantsVideo && !wantsAudio) continue;
 
@@ -1111,33 +1417,90 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     const appendTextClip = ({ clip }: { clip: TimelineClip; stackOrder: number }, index: number) => {
       const style = clip.textStyle ?? { text: clip.subtitle?.text ?? clip.name, fontFamily: 'Arial', fontSize: 42, fontWeight: 700, fontStyle: 'normal', textDecoration: 'none', letterSpacing: 0, lineHeight: 1.2, padding: 4, color: '#ffffff', background: 'transparent', stroke: 'transparent', strokeWidth: 0, shadow: true, align: 'center' as const };
       const transform = clip.transform;
-      const text = ffmpegText(style.text);
-      const fontSize = Math.max(8, Math.round(numberOr(style.fontSize, 42) * outputScaleY * Math.max(0.05, numberOr(transform.scale, 1))));
+      const lines = normalizeTextLineBreaks(style.text).split('\n');
+      const baseFontSize = numberOr(style.fontSize, 42);
+      const fontSize = Math.max(8, Math.round(baseFontSize * outputScaleY));
+      const paddingX = Math.max(0, numberOr(style.padding, 0) * outputScaleX);
+      const paddingY = Math.max(0, numberOr(style.padding, 0) * outputScaleY);
+      const longestLine = Math.max(1, ...lines.map((line) => line.length));
+      const baseTextWidth = longestLine * baseFontSize * 0.58;
+      const spacedTextWidth = Math.max(baseFontSize * 0.2, baseTextWidth + Math.max(0, longestLine - 1) * numberOr(style.letterSpacing, 0));
+      const letterSpacingScale = clamp(spacedTextWidth / Math.max(1, baseTextWidth), 0.2, 4);
+      // Browser font metrics are consistently a little wider than FFmpeg's
+      // Windows drawtext rasterization, even when both resolve to Arial. Keep
+      // a small horizontal metric correction in the export contract so text
+      // and its background occupy the same footprint as the canvas preview.
+      const textWidthScale = letterSpacingScale * 1.1;
+      const textGeometry = resolveTextFrameGeometry(style, project.canvas.width, project.canvas.height);
+      // The later horizontal metric correction emulates browser glyph and
+      // letter spacing. Compensate the transparent source box before applying
+      // it so the final layer footprint remains the shared canvas geometry.
+      const sourceWidth = Math.max(2, Math.ceil((textGeometry.width * outputScaleX) / textWidthScale / 2) * 2);
+      const sourceHeight = Math.max(2, Math.ceil(textGeometry.height * outputScaleY / 2) * 2);
       const fontColor = ffmpegColor(style.color);
       const strokeColor = ffmpegColor(style.stroke);
-      const textStart = ffmpegNumber(clip.start);
-      const textEnd = ffmpegNumber(clip.start + clip.duration);
-      const localTime = `(t-${textStart})`;
-      const x = `(${keyframeExpression(clip, 'x', numberOr(transform.x, 0), localTime)})*${ffmpegNumber(outputScaleX)}`;
-      const y = `(${keyframeExpression(clip, 'y', numberOr(transform.y, 0), localTime)})*${ffmpegNumber(outputScaleY)}`;
+      const duration = Math.max(0.001, numberOr(clip.duration, 0));
       const textEnter = clamp(numberOr(clip.transitionIn?.duration, 0), 0, clip.duration);
       const textLeave = clamp(numberOr(clip.transitionOut?.duration, 0), 0, clip.duration);
       const usesTextFadeIn = clip.transitionIn?.type !== 'none' && clip.transitionIn?.type !== 'slide' && clip.transitionIn?.type !== 'zoom' && textEnter > 0;
       const usesTextFadeOut = clip.transitionOut?.type !== 'none' && clip.transitionOut?.type !== 'slide' && clip.transitionOut?.type !== 'zoom' && textLeave > 0;
-      const alphaExpressions: string[] = [keyframeExpression(clip, 'opacity', clamp(numberOr(transform.opacity, 1), 0, 1), localTime)];
+      const alphaExpressions: string[] = [keyframeExpression(clip, 'opacity', clamp(numberOr(transform.opacity, 1), 0, 1), 'T')];
       const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, clip.duration);
       const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, clip.duration);
-      if (usesTextFadeIn) alphaExpressions.push(`if(lt(t,${textStart}+${ffmpegNumber(textEnter)}),(t-${textStart})/${ffmpegNumber(textEnter)},1)`);
-      else if (fadeIn > 0) alphaExpressions.push(`if(lt(t,${textStart}+${ffmpegNumber(fadeIn)}),(t-${textStart})/${ffmpegNumber(fadeIn)},1)`);
-      if (usesTextFadeOut) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(textLeave)}),(${textEnd}-t)/${ffmpegNumber(textLeave)},1)`);
-      else if (fadeOut > 0) alphaExpressions.push(`if(gt(t,${textEnd}-${ffmpegNumber(fadeOut)}),(${textEnd}-t)/${ffmpegNumber(fadeOut)},1)`);
-      const textAlpha = alphaExpressions.reduce((value, expression) => `(${value})*(${expression})`, '1').replaceAll(',', '\\,');
-      const draw = [`drawtext=font='${ffmpegFont(style.fontFamily)}'`, `text='${text}'`, `fontsize=${fontSize}`, `fontcolor=${fontColor}`, `x=(w-text_w)/2+${ffmpegExpression(x)}`, `y=(h-text_h)/2+${ffmpegExpression(y)}`, `enable='between(t,${textStart},${textEnd})'`, `alpha='${textAlpha}'`];
-      if (style.background !== 'transparent') draw.push('box=1', `boxcolor=${ffmpegColor(style.background)}`, `boxborderw=${Math.max(0, Math.round(numberOr(style.padding, 0) * outputScaleY))}`);
-      if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(numberOr(style.strokeWidth, 0) * outputScaleY)}`, `bordercolor=${strokeColor}`);
-      if (style.shadow) draw.push(`shadowx=${ffmpegNumber(2 * outputScaleX)}`, `shadowy=${ffmpegNumber(2 * outputScaleY)}`, 'shadowcolor=0x00000099');
+      if (usesTextFadeIn) alphaExpressions.push(`if(lt(T,${ffmpegNumber(textEnter)}),T/${ffmpegNumber(textEnter)},1)`);
+      else if (fadeIn > 0) alphaExpressions.push(`if(lt(T,${ffmpegNumber(fadeIn)}),T/${ffmpegNumber(fadeIn)},1)`);
+      if (usesTextFadeOut) alphaExpressions.push(`if(gt(T,${ffmpegNumber(duration - textLeave)}),(${ffmpegNumber(duration)}-T)/${ffmpegNumber(textLeave)},1)`);
+      else if (fadeOut > 0) alphaExpressions.push(`if(gt(T,${ffmpegNumber(duration - fadeOut)}),(${ffmpegNumber(duration)}-T)/${ffmpegNumber(fadeOut)},1)`);
+
+      const source = `[textsrc${index}]`;
+      const transformed = `[texttransform${index}]`;
+      const textFilters: string[] = ['format=rgba'];
+      if (style.background !== 'transparent') textFilters.push(`drawbox=x=0:y=0:w=iw:h=ih:color=${ffmpegColor(style.background)}:t=fill:replace=1`);
+      lines.forEach((line, lineIndex) => {
+        const alignX = style.align === 'left' ? ffmpegNumber(paddingX) : style.align === 'right' ? `w-text_w-${ffmpegNumber(paddingX)}` : '(w-text_w)/2';
+        const lineHeight = fontSize * numberOr(style.lineHeight, 1.2);
+        const lineTop = paddingY + lineIndex * lineHeight;
+        const draw = [`drawtext=${ffmpegFontSource(style.fontFamily, style.fontWeight, style.fontStyle)}`, `text='${ffmpegText(line)}'`, `fontsize=${fontSize}`, `fontcolor=${fontColor}`, `x=${alignX}`, `y=${ffmpegNumber(lineTop)}+(${ffmpegNumber(lineHeight)}-text_h)/2`];
+        if (numberOr(style.strokeWidth, 0) > 0 && style.stroke !== 'transparent') draw.push(`borderw=${ffmpegNumber(numberOr(style.strokeWidth, 0) * outputScaleY)}`, `bordercolor=${strokeColor}`);
+        if (style.shadow) draw.push(`shadowx=${ffmpegNumber(2 * outputScaleX)}`, `shadowy=${ffmpegNumber(2 * outputScaleY)}`, 'shadowcolor=0x00000099');
+        textFilters.push(draw.join(':'));
+      });
+      if (alphaExpressions.some((expression) => expression !== '1')) textFilters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(${alphaExpressions.join('*')})'`);
+      if (clip.transitionIn?.type === 'wipe') textFilters.push(wipeAlphaFilter(clip.transitionIn, duration, true));
+      if (clip.transitionOut?.type === 'wipe') textFilters.push(wipeAlphaFilter(clip.transitionOut, duration, false));
+      if (Math.abs(textWidthScale - 1) > 0.0001) textFilters.push(`scale=ceil(iw*${ffmpegNumber(textWidthScale)}/2)*2:ih`);
+      const baseScale = Math.max(0.05, numberOr(transform.scale, 1));
+      const scaleExpression = keyframeExpression(clip, 'scale', baseScale);
+      const transitionScale = transitionScaleExpression(clip, duration);
+      const hasScaleKeyframes = clip.keyframes.some((keyframe) => keyframe.property === 'scale');
+      if (hasScaleKeyframes || transitionScale !== '1') {
+        const maximumKeyframeScale = Math.max(baseScale, ...clip.keyframes.filter((keyframe) => keyframe.property === 'scale').map((keyframe) => Math.max(0.05, keyframe.value)));
+        const maximumTransitionScale = clip.transitionOut?.type === 'zoom'
+          ? 1 + 0.18 * clamp(numberOr(clip.transitionOut.intensity, 1), 0.1, 2)
+          : 1;
+        const maximumScale = maximumKeyframeScale * maximumTransitionScale;
+        const paddedWidth = Math.max(2, Math.ceil(sourceWidth * textWidthScale * maximumScale / 2) * 2 + 8);
+        const paddedHeight = Math.max(2, Math.ceil(sourceHeight * maximumScale / 2) * 2 + 8);
+        textFilters.push(`scale=w=ceil(iw*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:h=ceil(ih*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:eval=frame`);
+        textFilters.push('format=rgba', `pad=${paddedWidth}:${paddedHeight}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame`);
+      } else if (Math.abs(baseScale - 1) > 0.0001) {
+        textFilters.push(`scale=ceil(iw*${ffmpegNumber(baseScale)}/2)*2:ceil(ih*${ffmpegNumber(baseScale)}/2)*2`);
+      }
+      const rotationExpression = keyframeExpression(clip, 'rotation', numberOr(transform.rotation, 0));
+      if (clip.keyframes.some((keyframe) => keyframe.property === 'rotation') || Math.abs(numberOr(transform.rotation, 0)) > 0.001) {
+        textFilters.push(`rotate=(${ffmpegExpression(rotationExpression)})*PI/180:ow='hypot(iw,ih)':oh='hypot(iw,ih)':fillcolor=none`);
+      }
+      textFilters.push(`setpts=PTS-STARTPTS+${ffmpegNumber(Math.max(0, numberOr(clip.start, 0)))}/TB`);
+      filterLines.push(`color=c=black@0:s=${sourceWidth}x${sourceHeight}:r=${ffmpegNumber(fps)}:d=${ffmpegNumber(duration)}${source}`);
+      filterLines.push(`${source}${textFilters.join(',')}${transformed}`);
+
+      const overlayLocalTime = `(t-${ffmpegNumber(clip.start)})`;
+      const x = keyframeExpression(clip, 'x', numberOr(transform.x, 0), overlayLocalTime);
+      const y = keyframeExpression(clip, 'y', numberOr(transform.y, 0), overlayLocalTime);
+      const transitionX = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'x', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
+      const transitionY = [clip.transitionIn, clip.transitionOut].map((transition, transitionIndex) => transition ? transitionOffsetExpression(transition, duration, transitionIndex === 0, 'y', overlayLocalTime) : '0').filter((expression) => expression !== '0').join('+') || '0';
       const next = `[text${index}]`;
-      filterLines.push(`${current}${draw.join(':')}${next}`);
+      filterLines.push(`${current}${transformed}overlay=x=(main_w-overlay_w)/2+(${ffmpegExpression(x)}+${ffmpegExpression(transitionX)})*${ffmpegNumber(outputScaleX)}:y=(main_h-overlay_h)/2+(${ffmpegExpression(y)}+${ffmpegExpression(transitionY)})*${ffmpegNumber(outputScaleY)}:eof_action=pass:shortest=0:format=auto${next}`);
       current = next;
     };
     videoClips.forEach(({ clip, inputIndex, duration, stackOrder: clipStackOrder, adjustmentSegments }, index) => {
@@ -1166,7 +1529,7 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
         const crop = normalizeCrop(clip.crop);
         filters.push(`crop=iw*${ffmpegNumber(crop.width)}:ih*${ffmpegNumber(crop.height)}:iw*${ffmpegNumber(crop.x)}:ih*${ffmpegNumber(crop.y)}`);
       }
-      const fit = transform.fit;
+      const fit = effectiveVisualFit(project.canvas.fitMode, transform.fit);
       if (fit === 'cover') filters.push(`scale=${outWidth}:${outHeight}:force_original_aspect_ratio=increase`, `crop=${outWidth}:${outHeight}`);
       else if (fit === 'stretch') filters.push(`scale=${outWidth}:${outHeight}`);
       else filters.push(`scale=${outWidth}:${outHeight}:force_original_aspect_ratio=decrease`);
@@ -1174,14 +1537,8 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       const scaleExpression = keyframeExpression(clip, 'scale', scale);
       const hasScaleKeyframes = clip.keyframes.some((keyframe) => keyframe.property === 'scale');
       const transitionScale = transitionScaleExpression(clip, duration);
-      if (hasScaleKeyframes || transitionScale !== '1') filters.push(`scale=w=ceil(iw*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:h=ceil(ih*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:eval=frame`);
-      else if (Math.abs(scale - 1) > 0.0001) filters.push(`scale=ceil(iw*${ffmpegNumber(scale)}/2)*2:ceil(ih*${ffmpegNumber(scale)}/2)*2`);
       if (transform.flipX) filters.push('hflip');
       if (transform.flipY) filters.push('vflip');
-      const rotation = numberOr(transform.rotation, 0);
-      const rotationExpression = keyframeExpression(clip, 'rotation', rotation);
-      if (clip.keyframes.some((keyframe) => keyframe.property === 'rotation')) filters.push(`rotate=(${ffmpegExpression(rotationExpression)})*PI/180:fillcolor=none`);
-      else if (Math.abs(rotation) > 0.001) filters.push(`rotate=${ffmpegNumber(rotation * Math.PI / 180)}:fillcolor=none`);
       appendColorFilters(filters, clip.filters);
       for (const segment of adjustmentSegments) appendColorFilters(filters, segment.filters, segment);
       const opacity = Math.max(0, Math.min(1, numberOr(transform.opacity, 1)));
@@ -1199,6 +1556,29 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       if (clip.transitionIn?.type === 'wipe') filters.push(wipeAlphaFilter(clip.transitionIn, duration, true));
       if (clip.transitionOut?.type === 'wipe') filters.push(wipeAlphaFilter(clip.transitionOut, duration, false));
       if (clip.mask) filters.push(maskFilter(clip.mask));
+      if (hasScaleKeyframes || transitionScale !== '1') {
+        // Dynamic frame dimensions are negotiated from the first frame by
+        // several FFmpeg filters. Without a fixed transparent envelope, a
+        // scale animation that starts at 0.68 can stay visually stuck at 0.68
+        // even while the scale expression advances. Pad every scaled frame to
+        // a stable maximum footprint so downstream rotate/overlay filters see
+        // one stream size while the visible content continues to animate.
+        const maximumKeyframeScale = Math.max(scale, ...clip.keyframes.filter((keyframe) => keyframe.property === 'scale').map((keyframe) => Math.max(0.05, keyframe.value)));
+        const maximumTransitionScale = clip.transitionOut?.type === 'zoom'
+          ? 1 + 0.18 * clamp(numberOr(clip.transitionOut.intensity, 1), 0.1, 2)
+          : 1;
+        const maximumScale = maximumKeyframeScale * maximumTransitionScale;
+        const paddedWidth = Math.max(2, Math.ceil(outWidth * maximumScale / 2) * 2);
+        const paddedHeight = Math.max(2, Math.ceil(outHeight * maximumScale / 2) * 2);
+        filters.push(`scale=w=ceil(iw*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:h=ceil(ih*(${ffmpegExpression(scaleExpression)})*(${ffmpegExpression(transitionScale)})/2)*2:eval=frame`);
+        filters.push('format=rgba', `pad=${paddedWidth}:${paddedHeight}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame`);
+      } else if (Math.abs(scale - 1) > 0.0001) {
+        filters.push(`scale=ceil(iw*${ffmpegNumber(scale)}/2)*2:ceil(ih*${ffmpegNumber(scale)}/2)*2`);
+      }
+      const rotation = numberOr(transform.rotation, 0);
+      const rotationExpression = keyframeExpression(clip, 'rotation', rotation);
+      if (clip.keyframes.some((keyframe) => keyframe.property === 'rotation')) filters.push(`rotate=(${ffmpegExpression(rotationExpression)})*PI/180:fillcolor=none`);
+      else if (Math.abs(rotation) > 0.001) filters.push(`rotate=${ffmpegNumber(rotation * Math.PI / 180)}:fillcolor=none`);
       filters.push(`setpts=PTS-STARTPTS+${ffmpegNumber(Math.max(0, numberOr(clip.start, 0)))}/TB`);
       const label = `[v${index}]`;
       filterLines.push(`${timedVideo}${filters.length ? filters.join(',') : 'null'}${label}`);
@@ -1228,45 +1608,49 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
     filterLines.push(`${current}format=yuv420p[vout]`);
   }
 
-  const audioLabels: string[] = [];
-  audioClips.forEach(({ clip, inputIndex, duration, trackVolume }, index) => {
-    const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
-    const segments = speedCurveSegments(duration, speed, clip.speedCurve);
-    const sourceLabels = segments.map((_, segmentIndex) => `[asrc${index}_${segmentIndex}]`);
-    if (segments.length > 1) filterLines.push(`[${inputIndex}:a]asplit=${segments.length}${segments.map((_, segmentIndex) => `[abranch${index}_${segmentIndex}]`).join('')}`);
-    const renderedSegments: string[] = [];
-    segments.forEach((segment, segmentIndex) => {
-      const source = segments.length > 1 ? `[abranch${index}_${segmentIndex}]` : `[${inputIndex}:a]`;
-      const segmentFilters = [`atrim=start=${ffmpegNumber(segment.sourceTime)}:duration=${ffmpegNumber(segment.sourceDuration)}`, 'asetpts=PTS-STARTPTS', ...atempoChain(segment.speed), `atrim=duration=${ffmpegNumber(segment.duration)}`, 'asetpts=PTS-STARTPTS'];
-      const label = sourceLabels[segmentIndex];
-      filterLines.push(`${source}${segmentFilters.join(',')}${label}`);
-      renderedSegments.push(label);
+  if (!request.frameOnly) {
+    const audioLabels: string[] = [];
+    audioClips.forEach(({ clip, inputIndex, duration, trackVolume }, index) => {
+      const speed = Math.max(0.25, Math.min(4, numberOr(clip.speed, 1)));
+      const segments = speedCurveSegments(duration, speed, clip.speedCurve);
+      const sourceLabels = segments.map((_, segmentIndex) => `[asrc${index}_${segmentIndex}]`);
+      if (segments.length > 1) filterLines.push(`[${inputIndex}:a]asplit=${segments.length}${segments.map((_, segmentIndex) => `[abranch${index}_${segmentIndex}]`).join('')}`);
+      const renderedSegments: string[] = [];
+      segments.forEach((segment, segmentIndex) => {
+        const source = segments.length > 1 ? `[abranch${index}_${segmentIndex}]` : `[${inputIndex}:a]`;
+        const segmentFilters = [`atrim=start=${ffmpegNumber(segment.sourceTime)}:duration=${ffmpegNumber(segment.sourceDuration)}`, 'asetpts=PTS-STARTPTS', ...atempoChain(segment.speed), `atrim=duration=${ffmpegNumber(segment.duration)}`, 'asetpts=PTS-STARTPTS'];
+        const label = sourceLabels[segmentIndex];
+        filterLines.push(`${source}${segmentFilters.join(',')}${label}`);
+        renderedSegments.push(label);
+      });
+      const timedAudio = `[atimed${index}]`;
+      if (renderedSegments.length > 1) filterLines.push(`${renderedSegments.join('')}concat=n=${renderedSegments.length}:v=0:a=1,asetpts=PTS-STARTPTS${timedAudio}`);
+      else filterLines.push(`${renderedSegments[0]}asetpts=PTS-STARTPTS${timedAudio}`);
+      const filters: string[] = [];
+      const clipVolume = Math.max(0, Math.min(2, numberOr(clip.volume, 1)));
+      const volumeExpression = `(${keyframeExpression(clip, 'volume', clipVolume)})*${ffmpegNumber(clamp(trackVolume, 0, 2))}`;
+      if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}`);
+      const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
+      const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);
+      if (fadeIn > 0) filters.push(`afade=t=in:st=0:d=${ffmpegNumber(fadeIn)}`);
+      if (fadeOut > 0) filters.push(`afade=t=out:st=${ffmpegNumber(Math.max(0, duration - fadeOut))}:d=${ffmpegNumber(fadeOut)}`);
+      if (clip.normalize) filters.push('dynaudnorm=f=150:g=15');
+      const delay = Math.max(0, Math.round(numberOr(clip.start, 0) * 1000));
+      if (delay > 0) filters.push(`adelay=${delay}:all=1`);
+      const label = `[a${index}]`;
+      filterLines.push(`${timedAudio}${filters.length ? filters.join(',') : 'anull'}${label}`);
+      audioLabels.push(label);
     });
-    const timedAudio = `[atimed${index}]`;
-    if (renderedSegments.length > 1) filterLines.push(`${renderedSegments.join('')}concat=n=${renderedSegments.length}:v=0:a=1,asetpts=PTS-STARTPTS${timedAudio}`);
-    else filterLines.push(`${renderedSegments[0]}asetpts=PTS-STARTPTS${timedAudio}`);
-    const filters: string[] = [];
-    const clipVolume = Math.max(0, Math.min(2, numberOr(clip.volume, 1)));
-    const volumeExpression = `(${keyframeExpression(clip, 'volume', clipVolume)})*${ffmpegNumber(clamp(trackVolume, 0, 2))}`;
-    if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}`);
-    const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
-    const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);
-    if (fadeIn > 0) filters.push(`afade=t=in:st=0:d=${ffmpegNumber(fadeIn)}`);
-    if (fadeOut > 0) filters.push(`afade=t=out:st=${ffmpegNumber(Math.max(0, duration - fadeOut))}:d=${ffmpegNumber(fadeOut)}`);
-    if (clip.normalize) filters.push('dynaudnorm=f=150:g=15');
-    const delay = Math.max(0, Math.round(numberOr(clip.start, 0) * 1000));
-    if (delay > 0) filters.push(`adelay=${delay}:all=1`);
-    const label = `[a${index}]`;
-    filterLines.push(`${timedAudio}${filters.length ? filters.join(',') : 'anull'}${label}`);
-    audioLabels.push(label);
-  });
-  if (audioLabels.length) filterLines.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[aout]`);
-  else filterLines.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${ffmpegNumber(projectDuration)}[aout]`);
+    if (audioLabels.length) filterLines.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,aresample=48000:async=1:first_pts=0,aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.95:attack=5:release=50[aout]`);
+    else filterLines.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${ffmpegNumber(projectDuration)}[aout]`);
+  }
 
   const args = [...inputArgs, '-filter_complex', filterLines.join(';')];
   const outputFormat = body.format;
-  if (audioOnly) {
-    args.push('-map', '[aout]', '-vn', '-t', ffmpegNumber(projectDuration));
+  if (request.frameOnly) {
+    args.push('-map', '[vout]', '-frames:v', '1', '-c:v', 'png', '-f', 'image2');
+  } else if (audioOnly) {
+    args.push('-map', '[aout]', '-vn', '-t', ffmpegNumber(projectDuration), '-ar', '48000', '-ac', '2');
     if (outputFormat === 'wav') args.push('-c:a', 'pcm_s16le');
     else args.push('-c:a', 'libmp3lame', '-b:a', `${body.audioBitrateKbps}k`);
   } else {
@@ -1275,10 +1659,10 @@ function buildExportArgs(project: Project, request: ExportRequest, output: strin
       : body.quality === 'high'
         ? { preset: 'slow', crf: 18 }
         : { preset: 'medium', crf: 23 };
-    args.push('-map', '[vout]', '-map', '[aout]', '-t', ffmpegNumber(projectDuration), '-r', ffmpegNumber(fps), '-c:v', 'libx264', '-preset', quality.preset);
+    args.push('-map', '[vout]', '-map', '[aout]', '-t', ffmpegNumber(projectDuration), '-r', ffmpegNumber(fps), '-fps_mode', 'cfr', '-c:v', 'libx264', '-preset', quality.preset);
     if (body.rateMode === 'bitrate' && body.videoBitrateKbps) args.push('-b:v', `${body.videoBitrateKbps}k`);
     else args.push('-crf', String(body.crf ?? quality.crf));
-    args.push('-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', `${body.audioBitrateKbps}k`, '-movflags', '+faststart');
+    args.push('-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', `${body.audioBitrateKbps}k`, '-movflags', '+faststart');
   }
   args.push(output);
   return { args, duration: projectDuration, audioOnly, outputFormat };
@@ -1298,12 +1682,11 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
   const warnings: Array<{ code: string; message: string; severity?: 'info' | 'warning'; clipIds?: string[]; properties?: string[] }> = [];
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) errors.push({ code: 'FFMPEG_MISSING', message: message('preflightFfmpegMissing') });
-  const needsDrawtext = project.tracks.some((track) => track.clips.some((clip) => clip.type === 'text' || clip.type === 'subtitle'));
-  if (ffmpeg && needsDrawtext && !ffmpegHasFilter(ffmpeg, 'drawtext')) {
-    errors.push({ code: 'FFMPEG_DRAWTEXT_MISSING', message: message('preflightFfmpegMissing') });
-  }
   try {
-    const render = buildExportArgs(project, options, path.join(exportDir, '.preflight.tmp'));
+    const browserVideo = options.format === 'mp4';
+    const preflightExtension = browserVideo || options.format === 'wav' ? 'wav' : 'mp3';
+    const preflightOutput = path.join(exportDir, `.preflight-${crypto.randomUUID()}.${preflightExtension}`);
+    const render = compileComposition(project, browserVideo ? { ...options, format: 'wav', audioOnly: true } : options, preflightOutput);
     const estimatedBytes = estimateExportBytes(options, render.duration);
     try {
       const stat = fs.statfsSync(exportDir);
@@ -1315,7 +1698,17 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
     }
     if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { fps: options.fps }) });
     if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: message('preflightLargeOutput') });
-    const approximateTextClips = project.tracks.flatMap((track) => track.clips).filter((clip) => clip.textStyle && (Math.abs(clip.transform.rotation) > 0.001 || clip.textStyle.letterSpacing !== 0 || clip.textStyle.textDecoration !== 'none'));
+    if (ffmpeg && errors.length === 0) {
+      try {
+        const probeArgs = [...render.args.slice(0, -1), '-t', ffmpegNumber(Math.min(0.08, render.duration)), preflightOutput];
+        await runFfmpegStandalone(probeArgs, preflightOutput);
+      } catch (error) {
+        errors.push({ code: 'FFMPEG_GRAPH_INVALID', message: error instanceof Error ? error.message : message('preflightInvalidTimeline') });
+      } finally {
+        await fsp.rm(preflightOutput, { force: true }).catch(() => undefined);
+      }
+    }
+    const approximateTextClips = browserVideo ? [] : project.tracks.flatMap((track) => track.clips).filter((clip) => clip.textStyle && (Math.abs(clip.transform.rotation) > 0.001 || clip.textStyle.letterSpacing !== 0 || clip.textStyle.textDecoration !== 'none'));
     if (approximateTextClips.length) {
       const properties = Array.from(new Set(approximateTextClips.flatMap((clip) => [
         ...(Math.abs(clip.transform.rotation) > 0.001 ? ['rotation'] : []),
@@ -1535,10 +1928,14 @@ function maskFilter(mask: NonNullable<TimelineClip['mask']>) {
     const condition = mask.invert ? `not(${inside})` : inside;
     return `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(${condition},alpha(X,Y),0)'`;
   }
-  const featherSize = ffmpegNumber(Math.max(0.0001, feather));
+  // The browser SVG uses a Gaussian blur of `feather * 6` in a 100-unit
+  // viewBox. Model the same narrow, symmetric edge here. Treating `feather`
+  // as a full-frame percentage made a 0.1 mask fade across 10% of the image,
+  // turning crisp preview shapes into much smaller blurry export blobs.
+  const featherSize = ffmpegNumber(Math.max(0.0001, feather * 0.12));
   const softness = mask.type === 'ellipse'
-    ? `clip((1-sqrt(((X/W-${ffmpegNumber(mask.x + mask.width / 2)})/${ffmpegNumber(Math.max(0.01, mask.width / 2))})^2+((Y/H-${ffmpegNumber(mask.y + mask.height / 2)})/${ffmpegNumber(Math.max(0.01, mask.height / 2))})^2))/${featherSize},0,1)`
-    : `clip(min(min((X/W-${left})/${featherSize},(${right}-X/W)/${featherSize}),min((Y/H-${top})/${featherSize},(${bottom}-Y/H)/${featherSize})),0,1)`;
+    ? `clip(0.5+(1-sqrt(((X/W-${ffmpegNumber(mask.x + mask.width / 2)})/${ffmpegNumber(Math.max(0.01, mask.width / 2))})^2+((Y/H-${ffmpegNumber(mask.y + mask.height / 2)})/${ffmpegNumber(Math.max(0.01, mask.height / 2))})^2))/${featherSize},0,1)`
+    : `clip(0.5+min(min(X/W-${left},${right}-X/W),min(Y/H-${top},${bottom}-Y/H))/${featherSize},0,1)`;
   const alpha = mask.invert ? `(1-(${softness}))` : softness;
   return `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${alpha}'`;
 }
@@ -1618,10 +2015,11 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { name?: string; preset?: string; aspect?: Project['canvas']['aspect']; fps?: number; background?: string } }>('/api/projects', async (request, reply) => {
     const project = defaultProject(id('project'), request.body?.name?.trim() || message('newProject'));
-    const presetCanvas = request.body?.preset === 'shorts' ? { width: 1080, height: 1920, aspect: '9:16' as const, fitMode: 'fill' as const, fps: 30, background: '#070B14' } : {};
+    const defaultProjectFps = settings.defaultExport.fps;
+    const presetCanvas = request.body?.preset === 'shorts' ? { width: 1080, height: 1920, aspect: '9:16' as const, fitMode: 'fill' as const, fps: defaultProjectFps, background: '#070B14' } : {};
     const aspectDimensions: Partial<Record<Project['canvas']['aspect'], { width: number; height: number }>> = {
       '16:9': { width: 1920, height: 1080 }, '9:16': { width: 1080, height: 1920 }, '1:1': { width: 1080, height: 1080 },
-      '4:5': { width: 1080, height: 1350 }, '3:2': { width: 1620, height: 1080 }, '21:9': { width: 2520, height: 1080 },
+      '4:5': { width: 1080, height: 1350 }, '3:2': { width: 1620, height: 1080 }, '21:9': { width: 2560, height: 1080 },
     };
     const dimensions = request.body?.aspect ? aspectDimensions[request.body.aspect] : undefined;
     const configured = ProjectSchema.parse({
@@ -1630,7 +2028,7 @@ async function registerRoutes(app: FastifyInstance) {
         ...project.canvas,
         ...presetCanvas,
         ...(dimensions ? { ...dimensions, aspect: request.body!.aspect } : {}),
-        ...(request.body?.fps !== undefined ? { fps: request.body.fps } : {}),
+        ...{ fps: request.body?.fps ?? defaultProjectFps },
         ...(request.body?.background ? { background: request.body.background } : {}),
       },
     });
@@ -1680,7 +2078,10 @@ async function registerRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId', async (request, reply) => {
     try { return await readProject(request.params.projectId); }
-    catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+    catch (error) {
+      const missing = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+      return reply.code(missing ? 404 : 500).send({ error: missing ? message('projectNotFound') : localizedError(error, 'projectReadFailed') });
+    }
   });
 
   app.get<{ Params: { projectId: string } }>('/api/projects/:projectId/access', async (request, reply) => {
@@ -1688,8 +2089,9 @@ async function registerRoutes(app: FastifyInstance) {
       await readProject(request.params.projectId);
       const lease = activeAccessLease(request.params.projectId);
       return { lease: lease ? publicAccessLease(lease) : null };
-    } catch {
-      return reply.code(404).send({ error: message('projectNotFound') });
+    } catch (error) {
+      const missing = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+      return reply.code(missing ? 404 : 500).send({ error: missing ? message('projectNotFound') : localizedError(error, 'projectReadFailed') });
     }
   });
 
@@ -1755,7 +2157,10 @@ async function registerRoutes(app: FastifyInstance) {
     let project: Project;
     try {
       project = await readProject(request.params.projectId);
-    } catch { return reply.code(404).send({ error: message('projectNotFound') }); }
+    } catch (error) {
+      const missing = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+      return reply.code(missing ? 404 : 500).send({ error: missing ? message('projectNotFound') : localizedError(error, 'projectReadFailed') });
+    }
     try {
       const bundle = await createPortableBundle(project);
       return reply.header('Content-Type', 'application/zip').header('Content-Length', bundle.byteLength).header('Content-Disposition', `attachment; filename="${safeExportName(project, project.name, 'cutloc')}"`).send(Buffer.from(bundle));
@@ -1808,9 +2213,12 @@ async function registerRoutes(app: FastifyInstance) {
     try {
       const next = await withProjectLock(request.params.projectId, async () => {
         const current = await readProject(request.params.projectId);
-        if (request.body.revision !== undefined && request.body.revision !== current.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409, project: current });
+        if (request.body.revision === undefined) throw Object.assign(new Error(message('revisionRequired')), { statusCode: 409, project: current });
+        if (request.body.revision !== current.revision) throw Object.assign(new Error(message('revisionConflict')), { statusCode: 409, project: current });
         const rawUpdated = { ...current, ...request.body, id: current.id, schemaVersion: 1 as const, revision: current.revision + 1, updatedAt: new Date().toISOString() };
         const updated = ProjectSchema.parse({ ...rawUpdated, duration: projectDuration(rawUpdated as Project) });
+        const guarded = enforceLockedTrackInvariants(current, updated);
+        if (JSON.stringify(guarded.tracks) !== JSON.stringify(updated.tracks)) throw Object.assign(new Error(message('lockedTrackConflict')), { statusCode: 409, project: current });
         const retainedAssetIds = new Set(updated.assets.map((asset) => asset.id));
         const removedAssetFiles = current.assets
           .filter((asset) => !retainedAssetIds.has(asset.id))
@@ -1998,6 +2406,10 @@ async function registerRoutes(app: FastifyInstance) {
           const finalRelativePath = path.join('media', asset.id + expected.storedExtension);
           const finalPath = safeJoin(projectPath(current.id), finalRelativePath);
           const previousPath = assetFile(current.id, asset);
+          const staleDerivedPaths = [asset.proxyPath, asset.thumbnailPath, asset.waveformPath]
+            .filter((item): item is string => Boolean(item))
+            .map((relative) => safeManagedAssetPath(current.id, relative))
+            .filter((file) => file !== previousPath && file !== finalPath);
           let savedAsset: Asset;
           let savedProject: Project;
           const stat = await fsp.stat(uploadPath);
@@ -2013,6 +2425,7 @@ async function registerRoutes(app: FastifyInstance) {
             savedAsset = updatedAsset;
             savedProject = nextProject;
           }, previousPath);
+          await Promise.all(staleDerivedPaths.map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
           try { return { asset: savedAsset!, project: savedProject!, job: await queueDerivedMediaJob(current.id, savedAsset!) }; }
           catch (jobError) { return { asset: savedAsset!, project: savedProject!, jobError }; }
         } catch (error) {
@@ -2034,6 +2447,9 @@ async function registerRoutes(app: FastifyInstance) {
         const current = await readProject(request.params.projectId);
         const asset = current.assets.find((item) => item.id === request.params.assetId);
         if (!asset) throw Object.assign(new Error(message('mediaNotFound')), { statusCode: 404 });
+        if (current.tracks.some((track) => track.locked && track.clips.some((clip) => clip.assetId === asset.id))) {
+          throw Object.assign(new Error(message('lockedTrackConflict')), { statusCode: 409 });
+        }
         const rawNext = { ...current, assets: current.assets.filter((item) => item.id !== asset.id), tracks: current.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => clip.assetId !== asset.id) })), revision: current.revision + 1, updatedAt: new Date().toISOString() };
         const next = ProjectSchema.parse({ ...rawNext, duration: projectDuration(rawNext as Project) });
         const removalPaths = [asset.path, asset.proxyPath, asset.thumbnailPath, asset.waveformPath]
@@ -2046,7 +2462,7 @@ async function registerRoutes(app: FastifyInstance) {
       return reply.send(project);
     } catch (error) {
       const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 400;
-      return reply.code(statusCode === 404 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : 'projectSaveFailed') });
+      return reply.code(statusCode === 404 || statusCode === 409 || statusCode === 423 ? statusCode : 400).send({ error: localizedError(error, statusCode === 404 ? 'mediaNotFound' : statusCode === 409 ? 'lockedTrackConflict' : 'projectSaveFailed') });
     }
   });
 
@@ -2054,12 +2470,39 @@ async function registerRoutes(app: FastifyInstance) {
     const project = await readProject(request.params.projectId);
     const asset = project.assets.find((item) => item.id === request.params.assetId);
     if (!asset) return reply.code(404).send({ error: message('mediaNotFound') });
-    let file = assetFile(project.id, asset);
-    if (request.query.proxy === '1' && asset.proxyPath) file = safeManagedAssetPath(project.id, asset.proxyPath);
-    if (request.query.waveform === '1' && asset.waveformPath) file = safeManagedAssetPath(project.id, asset.waveformPath);
-    if (request.query.thumbnail === '1' && asset.thumbnailPath) file = safeManagedAssetPath(project.id, asset.thumbnailPath);
-    if (!fs.existsSync(file)) return reply.code(404).send({ error: message('mediaFileNotFound') });
-    const stat = await fsp.stat(file);
+    const sourceFile = assetFile(project.id, asset);
+    let file = sourceFile;
+    let derivedKind: 'proxy' | 'waveform' | 'thumbnail' | undefined;
+    if (request.query.proxy === '1' && asset.proxyPath) {
+      file = safeManagedAssetPath(project.id, asset.proxyPath);
+      derivedKind = 'proxy';
+    }
+    if (request.query.waveform === '1' && asset.waveformPath) {
+      file = safeManagedAssetPath(project.id, asset.waveformPath);
+      derivedKind = 'waveform';
+    }
+    if (request.query.thumbnail === '1' && asset.thumbnailPath) {
+      file = safeManagedAssetPath(project.id, asset.thumbnailPath);
+      derivedKind = 'thumbnail';
+    }
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(file);
+    } catch (error) {
+      // Replacing a derived file is transactional, but Windows cannot rename over an
+      // existing destination. During that tiny swap window an image thumbnail can
+      // safely fall back to the immutable source instead of leaking a transient 500.
+      if (derivedKind === 'thumbnail' && asset.type === 'image') {
+        file = sourceFile;
+        try {
+          stat = await fsp.stat(file);
+        } catch {
+          return reply.code(404).send({ error: message('mediaFileNotFound') });
+        }
+      } else {
+        return reply.code(404).send({ error: message('mediaFileNotFound') });
+      }
+    }
     const range = request.headers.range;
     const extension = path.extname(file).toLowerCase();
     const contentType = request.query.proxy === '1'
@@ -2114,27 +2557,36 @@ async function registerRoutes(app: FastifyInstance) {
         const fileName = safeExportName(project, options.fileName, extension);
         const output = uniqueOutputPath(exportDir, fileName);
         const reservedFileName = path.basename(output);
+        const temporaryOutput = path.join(exportDir, `.${reservedFileName}.${crypto.randomUUID()}.tmp.${extension}`);
         reservedExportPaths.add(output);
         try {
           const audioOnly = options.format === 'mp3' || options.format === 'wav';
-          const render = buildExportArgs(project, options, output);
-          if (activeJobCount() >= maxConcurrentJobs) throw Object.assign(new Error(message('tooManyJobs')), { statusCode: 429 });
+          const render = audioOnly ? compileComposition(project, options, temporaryOutput) : null;
           const job = await makeJob(project.id, 'export', async (jobInfo) => {
             try {
               assertProjectActive(project.id);
               if (jobs.get(jobInfo.id)?.status === 'cancelled') return;
               updateJob(jobInfo.id, { status: 'running', phase: 'rendering', message: message(audioOnly ? 'exportAudioRunning' : 'exportVideoRunning') });
-              jobProgressDuration.set(jobInfo.id, render.duration);
-              await runFfmpeg(render.args, jobInfo, output);
+              if (render) {
+                jobProgressDuration.set(jobInfo.id, render.duration);
+                await runFfmpeg(render.args, jobInfo, temporaryOutput);
+              } else {
+                await browserRenderedExport(project, options, temporaryOutput, jobInfo);
+              }
               assertProjectActive(project.id);
+              await publishGeneratedFile(temporaryOutput, output);
               jobProgressDuration.delete(jobInfo.id);
               updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName: reservedFileName, format: options.format, phase: 'complete' });
               updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
-            } finally { reservedExportPaths.delete(output); }
+            } finally {
+              await fsp.rm(temporaryOutput, { force: true }).catch(() => undefined);
+              reservedExportPaths.delete(output);
+            }
           });
           updateJob(job.id, { fileName: reservedFileName, format: options.format, outputPath: path.relative(rootDir, output), absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), phase: 'queued' });
           return { preflight, job };
         } catch (error) {
+          await fsp.rm(temporaryOutput, { force: true }).catch(() => undefined);
           reservedExportPaths.delete(output);
           throw error;
         }
@@ -2189,36 +2641,61 @@ async function registerRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get<{ Params: { projectId: string }; Querystring: { time?: string } }>('/api/projects/:projectId/preview-frame', {
+  app.get<{ Params: { projectId: string }; Querystring: { time?: string; resolution?: string; fps?: string } }>('/api/projects/:projectId/preview-frame', {
     config: { rateLimit: { max: previewRequestsPerMinute, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    let previewVideo = '';
-    let previewImage = '';
     let previewSlotAcquired = false;
+    let previewAbortController: AbortController | null = null;
+    let abortPreviewRequest: (() => void) | null = null;
     try {
       const project = await readProject(request.params.projectId);
       const time = Number(request.query.time ?? 0);
       if (!Number.isFinite(time) || time < 0 || time >= Math.max(project.duration, 0.001)) return reply.code(400).send({ error: message('exportSettingsInvalid') });
+      const resolution = ExportResolutionSchema.parse(request.query.resolution ?? '720p');
+      const fps = ExportFpsSchema.parse(Number(request.query.fps ?? nearestExportFps(project.canvas.fps, 30)));
+      const frameTime = clamp(Math.round(time * fps) / fps, 0, Math.max(0, project.duration - 1 / fps));
+      const cacheKey = `${project.id}:${project.revision}:${ffmpegNumber(frameTime)}:${resolution}:${fps}`;
+      const cached = previewFrameCache.get(cacheKey);
+      if (cached) {
+        previewFrameCache.delete(cacheKey);
+        previewFrameCache.set(cacheKey, cached);
+        return reply
+          .header('Content-Type', 'image/png')
+          .header('Content-Length', cached.length)
+          .header('Cache-Control', 'private, no-store')
+          .header('X-CutLoc-Preview-Cache', 'HIT')
+          .send(cached);
+      }
       if (activePreviewRenders >= maxConcurrentPreviews) return reply.code(429).send({ error: message('tooManyJobs') });
       activePreviewRenders += 1;
       previewSlotAcquired = true;
+      previewAbortController = new AbortController();
+      abortPreviewRequest = () => previewAbortController?.abort();
+      request.raw.once('aborted', abortPreviewRequest);
       await serverTestHooks.beforePreviewRender?.(project.id);
-      const previewDir = path.join(projectPath(project.id), 'exports', '.preview');
-      await ensureDir(previewDir);
-      const previewId = crypto.randomBytes(10).toString('hex');
-      previewVideo = path.join(previewDir, `${previewId}.mp4`);
-      previewImage = path.join(previewDir, `${previewId}.png`);
-      const end = Math.min(project.duration, time + Math.max(0.12, 1 / project.canvas.fps));
-      const render = buildExportArgs(project, { format: 'mp4', aspect: project.canvas.aspect, resolution: '720p', fps: nearestExportFps(project.canvas.fps, 30), quality: 'draft', audioBitrateKbps: 128, range: { start: time, end } }, previewVideo);
-      await runFfmpegStandalone(render.args, previewVideo);
-      await runFfmpegStandalone(['-i', previewVideo, '-frames:v', '1', previewImage], previewImage);
-      const bytes = await fsp.readFile(previewImage);
-      return reply.header('Content-Type', 'image/png').header('Content-Length', bytes.length).send(bytes);
+      const { width, height } = outputDimensions(project, project.canvas.aspect, resolution);
+      const bytes = await browserRenderedFrame(project.id, width, height, frameTime, previewAbortController.signal);
+      const replaced = previewFrameCache.get(cacheKey);
+      if (replaced) previewFrameCacheBytes -= replaced.length;
+      previewFrameCache.set(cacheKey, bytes);
+      previewFrameCacheBytes += bytes.length;
+      while (previewFrameCache.size > maxPreviewFrameCacheEntries || previewFrameCacheBytes > maxPreviewFrameCacheBytes) {
+        const oldest = previewFrameCache.keys().next().value as string | undefined;
+        if (!oldest) break;
+        previewFrameCacheBytes -= previewFrameCache.get(oldest)?.length ?? 0;
+        previewFrameCache.delete(oldest);
+      }
+      return reply
+        .header('Content-Type', 'image/png')
+        .header('Content-Length', bytes.length)
+        .header('Cache-Control', 'private, no-store')
+        .header('X-CutLoc-Preview-Cache', 'MISS')
+        .send(bytes);
     } catch (error) {
       return reply.code(400).send({ error: localizedError(error, 'exportPrepareFailed') });
     } finally {
+      if (abortPreviewRequest) request.raw.off('aborted', abortPreviewRequest);
       if (previewSlotAcquired) activePreviewRenders = Math.max(0, activePreviewRenders - 1);
-      await Promise.all([previewVideo, previewImage].filter(Boolean).map((file) => fsp.rm(file, { force: true }).catch(() => undefined)));
     }
   });
 
@@ -2257,7 +2734,9 @@ export async function createServer() {
   await ensureDir(dataDir);
   await ensureDir(projectsDir);
   await loadSettings();
+  await loadJobs();
   const app = Fastify({ logger: false, bodyLimit: maxUploadBytes });
+  app.addHook('onClose', async () => { await flushJobsPersist(); });
   await app.register(rateLimit, {
     global: true,
     max: globalRequestsPerMinute,

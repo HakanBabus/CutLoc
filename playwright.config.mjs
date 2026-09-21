@@ -22,11 +22,20 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: 'npm run dev',
-    url: baseURL,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort), WEB_PORT: String(webPort), DATA_DIR: testDataDir, CUTLOC_HOME: path.join(testDataDir, 'home'), NO_OPEN: '1' },
-  },
+  webServer: [
+    {
+      command: 'npm run dev:server',
+      url: `http://127.0.0.1:${apiPort}/api/health`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort), WEB_PORT: String(webPort), DATA_DIR: testDataDir, CUTLOC_HOME: path.join(testDataDir, 'home'), NO_OPEN: '1' },
+    },
+    {
+      command: 'npm run dev:web',
+      url: baseURL,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort), WEB_PORT: String(webPort), DATA_DIR: testDataDir, CUTLOC_HOME: path.join(testDataDir, 'home'), NO_OPEN: '1' },
+    },
+  ],
 });

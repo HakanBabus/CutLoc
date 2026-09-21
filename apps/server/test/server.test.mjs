@@ -14,9 +14,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-server-test-'));
 process.env.DATA_DIR = dataDir;
-const { createServer, serverTestHooks } = await import('../dist/index.js');
+const { createServer, serverTestHooks, setRuntimePort } = await import('../dist/index.js');
 const { serverT } = await import('../dist/i18n.js');
 const app = await createServer();
+await app.listen({ host: '127.0.0.1', port: 0 });
+const testAddress = app.server.address();
+if (typeof testAddress === 'object' && testAddress) setRuntimePort(testAddress.port);
 
 after(async () => {
   serverTestHooks.beforeSave = undefined;
@@ -97,6 +100,16 @@ function sampleVideoPixel(filePath, time) {
   return (result.stdout[0] + result.stdout[1] + result.stdout[2]) / 3;
 }
 
+function wavPeak(bytes) {
+  const dataOffset = bytes.indexOf(Buffer.from('data'));
+  assert.notEqual(dataOffset, -1);
+  const sampleStart = dataOffset + 8;
+  const sampleEnd = Math.min(bytes.length, sampleStart + bytes.readUInt32LE(dataOffset + 4));
+  let peak = 0;
+  for (let offset = sampleStart; offset + 1 < sampleEnd; offset += 2) peak = Math.max(peak, Math.abs(bytes.readInt16LE(offset)));
+  return peak;
+}
+
 function brightPixelBounds(filePath, time, width, height) {
   const result = spawnSync(ffmpegPath, ['-v', 'error', '-ss', String(time), '-i', filePath, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], { maxBuffer: 8 * 1024 * 1024 });
   assert.equal(result.status, 0, result.stderr?.toString() || 'frame extraction failed');
@@ -174,6 +187,9 @@ test('project CRUD and revision conflicts work in an isolated data directory', a
   const conflictResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'Eski sürüm', revision: 0 });
   assert.equal(conflictResponse.statusCode, 409);
   assert.equal(conflictResponse.json().project.revision, 1);
+  const missingRevisionResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, { name: 'Blind overwrite' });
+  assert.equal(missingRevisionResponse.statusCode, 409);
+  assert.equal(missingRevisionResponse.json().project.revision, 1);
   const stalePreflightResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export/preflight', { projectRevision: 0 });
   assert.equal(stalePreflightResponse.statusCode, 409);
   const staleExportResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { projectRevision: 0, format: 'mp4' });
@@ -248,6 +264,26 @@ test('unknown projects return a safe not-found response', async () => {
   assert.equal(response.json().error, serverT('en', 'projectNotFound'));
 });
 
+test('server rejects locked-track mutations until the track is explicitly unlocked', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Locked server boundary' })).json();
+  const locked = structuredClone(created);
+  locked.tracks[0].locked = true;
+  const lockResponse = await jsonRequest('PATCH', `/api/projects/${created.id}`, locked);
+  assert.equal(lockResponse.statusCode, 200);
+  const current = lockResponse.json();
+  const changed = structuredClone(current);
+  changed.tracks[0].name = 'Must not change';
+  const rejected = await jsonRequest('PATCH', `/api/projects/${created.id}`, changed);
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.json().project.tracks[0].name, current.tracks[0].name);
+  const unlocked = structuredClone(current);
+  unlocked.tracks[0].locked = false;
+  unlocked.tracks[0].name = 'Unlocked change';
+  const accepted = await jsonRequest('PATCH', `/api/projects/${created.id}`, unlocked);
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(accepted.json().tracks[0].name, 'Unlocked change');
+});
+
 test('project updates reject managed asset paths that could target project metadata', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Asset boundary' })).json();
   const addedResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/stock', { stockId: 'white' });
@@ -295,7 +331,7 @@ test('managed media symlinks cannot expose or delete project metadata', async (c
 
 test('preview rendering has a route-specific request budget', async () => {
   const remoteAddress = '127.0.0.42';
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const response = await app.inject({ method: 'GET', url: '/api/projects/missing/preview-frame?time=0', remoteAddress });
     assert.equal(response.statusCode, 400);
   }
@@ -304,7 +340,7 @@ test('preview rendering has a route-specific request budget', async () => {
   assert.match(limitedResponse.json().message, /Too many requests/);
 });
 
-test('preview rendering caps concurrent FFmpeg work', async () => {
+test('preview rendering caps concurrent browser compositor work', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Preview concurrency' })).json();
   const addedResponse = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
   const project = addedResponse.json().project;
@@ -631,7 +667,16 @@ test('stock media is enumerated, copied into a project, and served without path 
   const preflightResponse = await jsonRequest('POST', `/api/projects/${created.id}/export/preflight`, { format: 'mp4', fileName: unicodeFileName });
   assert.equal(preflightResponse.statusCode, 200);
   assert.equal(preflightResponse.json().ok, true);
-  const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', fileName: unicodeFileName });
+  const fractionalFpsPreflight = await jsonRequest('POST', `/api/projects/${created.id}/export/preflight`, { format: 'mp4', fps: 29.97, range: { start: 0, end: 0.12 } });
+  assert.equal(fractionalFpsPreflight.statusCode, 200);
+  assert.equal(fractionalFpsPreflight.json().ok, true);
+  const invalidRangePreflight = await jsonRequest('POST', `/api/projects/${created.id}/export/preflight`, { format: 'mp4', range: { start: 0, end: project.duration + 1 } });
+  assert.equal(invalidRangePreflight.statusCode, 200);
+  assert.equal(invalidRangePreflight.json().ok, false);
+  assert.equal(invalidRangePreflight.json().errors.some((error) => error.code === 'INVALID_TIMELINE'), true);
+  const invalidRangeExport = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', range: { start: project.duration, end: project.duration + 1 } });
+  assert.equal(invalidRangeExport.statusCode, 400);
+  const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', fileName: unicodeFileName, quality: 'draft', resolution: '720p', range: { start: 0, end: 0.2 } });
   assert.equal(exportResponse.statusCode, 202);
   assert.equal('absoluteOutputPath' in exportResponse.json().job, false);
   assert.equal('outputPath' in exportResponse.json().job, false);
@@ -676,6 +721,42 @@ test('stock media is enumerated, copied into a project, and served without path 
   const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   const purgedResponse = await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
   assert.equal(purgedResponse.statusCode, 200);
+});
+
+test('export stack order follows track.order rather than persisted array order', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Track order fixture' })).json();
+  const white = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json().asset;
+  const black = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'black' })).json().asset;
+  const project = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  const imageClip = (id, asset) => ({
+    id,
+    assetId: asset.id,
+    type: 'image',
+    name: asset.name,
+    start: 0,
+    duration: 0.2,
+    sourceStart: 0,
+    sourceDuration: 0.2,
+    speed: 1,
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'cover', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 },
+    transitionOut: { type: 'none', duration: 0 },
+    volume: 1,
+    keyframes: [],
+  });
+  project.tracks[0].clips.push(imageClip('order-white', white));
+  project.tracks[1].clips.push(imageClip('order-black', black));
+  project.tracks = [project.tracks[1], project.tracks[0], ...project.tracks.slice(2)];
+  project.duration = 0.2;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+  const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', resolution: '720p', range: { start: 0, end: 0.12 }, fileName: 'track-order.mp4' });
+  assert.equal(response.statusCode, 202);
+  const job = await waitForJob(response.json().job.id, 30000);
+  assert.equal(job.status, 'completed', job.error ?? 'track-order export failed');
+  assert.equal(sampleVideoPixel(exportFilePath(created.id, job.fileName), 0.05) < 10, true);
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
 });
 
 test('media relink restores the original source when metadata commit fails', async () => {
@@ -736,6 +817,30 @@ test('media relink restores the original source when metadata commit fails', asy
   assert.equal((await app.inject({ method: 'DELETE', url: '/api/trash/' + deleted.json().trashId })).statusCode, 200);
 });
 
+test('media relink removes superseded derived files', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Relink derived cleanup fixture' })).json();
+  const added = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json();
+  const project = added.project;
+  const staleRelative = ['proxies/stale.mp4', 'thumbnails/stale.jpg', 'waveforms/stale.png'];
+  for (const relative of staleRelative) {
+    const file = path.join(dataDir, 'projects', created.id, ...relative.split('/'));
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, Buffer.from('stale'));
+  }
+  project.assets[0].proxyPath = staleRelative[0];
+  project.assets[0].thumbnailPath = staleRelative[1];
+  project.assets[0].waveformPath = staleRelative[2];
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+  const black = Buffer.from((await app.inject({ method: 'GET', url: '/api/stock/black' })).rawPayload);
+  const multipart = multipartFile('file', 'replacement.png', 'image/png', black);
+  const response = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/media/${added.asset.id}/relink`, headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}` }, payload: multipart.payload });
+  assert.equal(response.statusCode, 202);
+  if (response.json().job?.id) await waitForJob(response.json().job.id);
+  for (const relative of staleRelative) {
+    await assert.rejects(fsp.stat(path.join(dataDir, 'projects', created.id, ...relative.split('/'))), { code: 'ENOENT' });
+  }
+});
+
 test('removing an asset through project autosave also cleans its source and derived files', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Asset cleanup fixture' })).json();
   const added = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json();
@@ -759,11 +864,18 @@ test('media library changes do not extend duration and explicit delete validates
   const project = second.project;
   const clip = (asset, id, start, duration) => ({ id, assetId: asset.id, type: 'image', name: asset.name, start, duration, sourceStart: 0, sourceDuration: duration, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false }, filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 }, transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, keyframes: [] });
   project.tracks[0].clips.push(clip(first.asset, 'delete-a', 0, 1));
+  project.tracks[0].locked = true;
   project.tracks[1].clips.push(clip(second.asset, 'keep-b', 2, 3));
   project.duration = 5;
   assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
   const sourceA = path.join(dataDir, 'projects', created.id, first.asset.path);
   const sourceB = path.join(dataDir, 'projects', created.id, second.asset.path);
+  const lockedDelete = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/media/${first.asset.id}` });
+  assert.equal(lockedDelete.statusCode, 409);
+  assert.equal((await fsp.stat(sourceA)).isFile(), true);
+  const unlocked = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  unlocked.tracks.find((track) => track.id === project.tracks[0].id).locked = false;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, unlocked)).statusCode, 200);
   assert.equal((await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}/media/${first.asset.id}` })).statusCode, 200);
   const after = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
   assert.equal(after.duration, 5);
@@ -786,6 +898,28 @@ test('derived generation failure does not roll back a committed media import', a
     assert.equal(response.json().project.assets.length, 1);
     assert.equal((await waitForJob(response.json().job.id)).status, 'failed');
     assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json().assets.length, 1);
+  } finally {
+    serverTestHooks.beforeDerivedWrite = undefined;
+  }
+});
+
+test('derived rebuild rejects a source changed in place during the job', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Derived source generation fixture' })).json();
+  const added = (await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' })).json();
+  const sourcePath = path.join(dataDir, 'projects', created.id, added.asset.path);
+  serverTestHooks.beforeDerivedWrite = async (projectId) => {
+    if (projectId !== created.id) return;
+    const stat = await fsp.stat(sourcePath);
+    await fsp.utimes(sourcePath, stat.atime, new Date(stat.mtimeMs + 2000));
+  };
+  try {
+    const response = await jsonRequest('POST', `/api/projects/${created.id}/media/${added.asset.id}/rebuild-derived`, {});
+    assert.equal(response.statusCode, 202);
+    const job = await waitForJob(response.json().job.id);
+    assert.equal(job.status, 'failed');
+    const current = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+    assert.equal(current.assets[0].path.replaceAll('\\', '/'), added.asset.path.replaceAll('\\', '/'));
+    assert.equal((await fsp.stat(sourcePath)).size, added.asset.size);
   } finally {
     serverTestHooks.beforeDerivedWrite = undefined;
   }
@@ -889,7 +1023,7 @@ test('image upload creates a real JPEG thumbnail and serves it with the correct 
   assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
 });
 
-test('advanced motion, crop, mask, speed curve and adjustment controls render through FFmpeg', async () => {
+test('advanced motion, crop, mask, speed curve and adjustment controls render through the shared browser compositor', async () => {
   const createdResponse = await jsonRequest('POST', '/api/projects', { name: 'Advanced render fixture' });
   assert.equal(createdResponse.statusCode, 201);
   const created = createdResponse.json();
@@ -972,14 +1106,16 @@ test('advanced motion, crop, mask, speed curve and adjustment controls render th
   assert.equal(preflightResponse.statusCode, 200);
   assert.equal(preflightResponse.json().ok, true);
   assert.equal(preflightResponse.json().warnings.some((warning) => /FALLBACK/.test(warning.code)), false);
-  const textWarning = preflightResponse.json().warnings.find((warning) => warning.code === 'TEXT_RENDER_APPROXIMATION');
-  assert.deepEqual(textWarning.clipIds, ['advanced-text-clip']);
-  assert.deepEqual(textWarning.properties.sort(), ['letterSpacing', 'rotation', 'textDecoration'].sort());
-  assert.equal(textWarning.severity, 'warning');
+  assert.equal(preflightResponse.json().warnings.some((warning) => warning.code === 'TEXT_RENDER_APPROXIMATION'), false);
   const previewResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0.5` });
   assert.equal(previewResponse.statusCode, 200);
   assert.match(previewResponse.headers['content-type'], /image\/png/);
+  assert.equal(previewResponse.headers['x-cutloc-preview-cache'], 'MISS');
   assert.equal(previewResponse.rawPayload.subarray(0, 4).equals(Buffer.from([137, 80, 78, 71])), true);
+  const cachedPreviewResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0.5` });
+  assert.equal(cachedPreviewResponse.statusCode, 200);
+  assert.equal(cachedPreviewResponse.headers['x-cutloc-preview-cache'], 'HIT');
+  assert.equal(cachedPreviewResponse.rawPayload.equals(previewResponse.rawPayload), true);
   const exportResponse = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', fileName: 'advanced-fixture.mp4' });
   assert.equal(exportResponse.statusCode, 202);
   const exportJob = await waitForJob(exportResponse.json().job.id, 60000);
@@ -1022,11 +1158,60 @@ test('export scales canvas-space clip positions with the requested output resolu
   assert.equal(Math.abs(bounds.width - 320) <= 3, true, `unexpected width: ${JSON.stringify(bounds)}`);
   assert.equal(Math.abs(bounds.height - 180) <= 3, true, `unexpected height: ${JSON.stringify(bounds)}`);
 
+  const previewResponse = await app.inject({ method: 'GET', url: `/api/projects/${created.id}/preview-frame?time=0.1&resolution=720p&fps=30` });
+  assert.equal(previewResponse.statusCode, 200);
+  const previewPath = path.join(dataDir, 'transform-parity-preview.png');
+  await fsp.writeFile(previewPath, previewResponse.rawPayload);
+  const previewBounds = brightPixelBounds(previewPath, 0, dimensions.width, dimensions.height);
+  assert.equal(Math.abs(previewBounds.x - bounds.x) <= 3, true, `preview/export x mismatch: ${JSON.stringify({ previewBounds, bounds })}`);
+  assert.equal(Math.abs(previewBounds.y - bounds.y) <= 3, true, `preview/export y mismatch: ${JSON.stringify({ previewBounds, bounds })}`);
+  assert.equal(Math.abs(previewBounds.width - bounds.width) <= 3, true, `preview/export width mismatch: ${JSON.stringify({ previewBounds, bounds })}`);
+  assert.equal(Math.abs(previewBounds.height - bounds.height) <= 3, true, `preview/export height mismatch: ${JSON.stringify({ previewBounds, bounds })}`);
+
   const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
 });
 
-test('multiline text shorthands render as separate lines in FFmpeg exports', async () => {
+test('exported scale keyframes keep changing after the first frame', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Animated scale fixture' })).json();
+  const stock = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(stock.statusCode, 201);
+  const asset = stock.json().asset;
+  const project = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  project.canvas.background = '#000000';
+  project.tracks[0].clips.push({
+    id: 'animated-scale-clip', assetId: asset.id, type: 'image', name: asset.name, start: 0, duration: 0.8,
+    sourceStart: 0, sourceDuration: 0.8, speed: 1,
+    transform: { x: 0, y: 0, scale: 0.25, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+    filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+    transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1,
+    mask: { type: 'ellipse', x: 0.1, y: 0.1, width: 0.8, height: 0.8, feather: 0.1, invert: false },
+    keyframes: [
+      { id: 'scale-small', property: 'scale', time: 0, value: 0.25, easing: 'linear' },
+      { id: 'scale-large', property: 'scale', time: 0.8, value: 0.5, easing: 'linear' },
+    ],
+  });
+  project.duration = 0.8;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+
+  const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', aspect: '16:9', resolution: '720p', quality: 'draft', fileName: 'animated-scale.mp4' });
+  assert.equal(response.statusCode, 202);
+  const job = await waitForJob(response.json().job.id, 30000);
+  assert.equal(job.status, 'completed', job.error ?? 'animated scale export failed');
+  const output = exportFilePath(created.id, job.fileName);
+  const dimensions = probeVideoDimensions(output);
+  const early = brightPixelBounds(output, 0.1, dimensions.width, dimensions.height);
+  const late = brightPixelBounds(output, 0.7, dimensions.width, dimensions.height);
+  assert.equal(early.width >= 284 && early.width <= 294, true, `unexpected feathered mask width: ${JSON.stringify(early)}`);
+  assert.equal(early.height >= 160 && early.height <= 168, true, `unexpected feathered mask height: ${JSON.stringify(early)}`);
+  assert.equal(late.width > early.width * 1.5, true, `expected animated width growth: ${JSON.stringify({ early, late })}`);
+  assert.equal(late.height > early.height * 1.5, true, `expected animated height growth: ${JSON.stringify({ early, late })}`);
+
+  const deleted = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/trash/${deleted.json().trashId}` })).statusCode, 200);
+});
+
+test('multiline text shorthands render as separate lines in browser-composited exports', async () => {
   const created = (await jsonRequest('POST', '/api/projects', { name: 'Multiline text fixture' })).json();
   const project = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
   project.tracks[0].clips.push({
@@ -1176,19 +1361,55 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(wavExportJob.status, 'completed');
   const wavHeader = await fsp.readFile(exportFilePath(created.id, wavExportJob.fileName));
   assert.equal(wavHeader.subarray(0, 4).toString('ascii'), 'RIFF');
+  assert.equal(wavHeader.readUInt16LE(22), 2);
+  assert.equal(wavHeader.readUInt32LE(24), 48000);
+  assert.equal(wavHeader.readUInt16LE(34), 16);
+  assert.equal(wavPeak(wavHeader) > 0, true);
+  assert.equal(wavPeak(wavHeader) <= Math.ceil(32767 * 0.95), true);
   const latest = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
-  latest.tracks[0].muted = true;
+  latest.tracks[0].hidden = true;
   assert.equal((await jsonRequest('PATCH', '/api/projects/' + created.id, latest)).statusCode, 200);
+  const hiddenResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'hidden.wav' });
+  assert.equal(hiddenResponse.statusCode, 202);
+  const hiddenJob = await waitForJob(hiddenResponse.json().job.id);
+  assert.equal(hiddenJob.status, 'completed');
+  assert.equal(wavPeak(await fsp.readFile(exportFilePath(created.id, hiddenJob.fileName))) > 0, true);
+  const hiddenProject = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
+  hiddenProject.tracks[0].hidden = false;
+  hiddenProject.tracks[0].muted = true;
+  assert.equal((await jsonRequest('PATCH', '/api/projects/' + created.id, hiddenProject)).statusCode, 200);
   const mutedResponse = await jsonRequest('POST', '/api/projects/' + created.id + '/export', { format: 'wav', fileName: 'muted.wav' });
   assert.equal(mutedResponse.statusCode, 202);
   const mutedJob = await waitForJob(mutedResponse.json().job.id);
   assert.equal(mutedJob.status, 'completed');
   const mutedBytes = await fsp.readFile(exportFilePath(created.id, mutedJob.fileName));
-  const dataOffset = mutedBytes.indexOf(Buffer.from('data'));
-  assert.notEqual(dataOffset, -1);
-  const sampleStart = dataOffset + 8;
-  const sampleEnd = Math.min(mutedBytes.length, sampleStart + mutedBytes.readUInt32LE(dataOffset + 4));
-  let peak = 0;
-  for (let offset = sampleStart; offset + 1 < sampleEnd; offset += 2) peak = Math.max(peak, Math.abs(mutedBytes.readInt16LE(offset)));
-  assert.equal(peak, 0);
+  assert.equal(wavPeak(mutedBytes), 0);
+});
+
+test('job history survives restart and marks interrupted work as failed', async () => {
+  const now = new Date().toISOString();
+  await fsp.writeFile(path.join(dataDir, 'jobs.json'), JSON.stringify([{
+    id: 'job_restart_fixture',
+    projectId: 'restart-project',
+    kind: 'export',
+    status: 'running',
+    progress: 0.4,
+    fileName: 'restart.mp4',
+    format: 'mp4',
+    relativeOutputPath: 'exports/restart.mp4',
+    createdAt: now,
+    updatedAt: now,
+  }]), 'utf8');
+  const restarted = await createServer();
+  try {
+    const response = await restarted.inject({ method: 'GET', url: '/api/jobs/job_restart_fixture' });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().status, 'failed');
+    assert.match(response.json().error, /server restarted|sunucu yeniden başladığı/i);
+    const persisted = JSON.parse(await fsp.readFile(path.join(dataDir, 'jobs.json'), 'utf8'));
+    assert.equal(persisted[0].status, 'failed');
+    assert.equal('absoluteOutputPath' in persisted[0], false);
+  } finally {
+    await restarted.close();
+  }
 });

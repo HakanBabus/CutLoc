@@ -45,6 +45,7 @@ flowchart LR
 
 - Create, open, duplicate, import, bundle, delete, and restore projects.
 - Autosave editor changes with optimistic revision checks.
+- Keep an unsaved local draft until the server acknowledges the edit, and offer recovery after a reload or offline interruption.
 - Preserve recoverable project backups and a local trash area. Trash entries are removed automatically after the configured retention window.
 - Prevent silent overwrites when two browser tabs or a CLI client edit the same project.
 
@@ -59,11 +60,13 @@ flowchart LR
 
 ### Preview and Inspector
 
+- See [Preview and export architecture](PREVIEW_ARCHITECTURE.md) for the single-compositor contract.
 - Use `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, and `21:9` canvases.
+- Playback, scrubbing, pause, single-frame rendering, and MP4 export all use the same Chromium composition tree; the editor never swaps in a second proof-image renderer.
 - Select clips from the canvas or timeline.
-- Edit position, scale, rotation, opacity, framing, crop, speed, speed curves, and keyframes.
+- Edit position, scale, rotation, opacity, framing, crop, speed, and speed curves. After a motion property is enabled, changing it at another playhead position automatically creates or updates its keyframe.
 - Edit audio level, fades, filters, masks, transitions, and text styling.
-- Use physical line breaks, `\\n`, or `/n` in text; preview and FFmpeg export normalize them to the same multiline layout.
+- Use physical line breaks, `\\n`, or `/n` in text; preview and MP4 export normalize them to the same multiline layout.
 - Apply entrance and exit animation presets with duration, direction, easing, and intensity controls.
 
 ## Project integrity
@@ -174,6 +177,8 @@ CutLoc checks the extension, declared MIME type, and probed content. Relinking a
 ## Export behavior
 
 CutLoc performs a creative render and re-encodes output; it is not a lossless remux cutter.
+
+Preview-frame capture, export preflight, and final export share one composition compiler. Preview-frame responses are quantized to the requested FPS and cached by project revision, frame, resolution, and FPS; changing the project revision cannot reuse a stale output frame.
 
 | Format | Video | Audio | Notes |
 | --- | --- | --- | --- |

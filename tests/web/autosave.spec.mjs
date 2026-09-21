@@ -116,3 +116,36 @@ test('server metadata refresh keeps a dirty local timeline edit until autosave',
     }
   }
 });
+
+test('an unsaved local draft survives reload and is recovered on open', async ({ page, request }) => {
+  const originalName = 'Local recovery ' + Date.now();
+  const recoveredName = originalName + ' recovered';
+  const createdResponse = await request.post('/api/projects', { data: { name: originalName } });
+  expect(createdResponse.ok()).toBeTruthy();
+  const serverProject = await createdResponse.json();
+  try {
+    await page.goto('/');
+    await page.evaluate(({ project, name }) => {
+      const draftProject = { ...project, name, updatedAt: new Date().toISOString() };
+      window.localStorage.setItem(`cutloc-project-draft:${project.id}`, JSON.stringify({
+        version: 1,
+        project: draftProject,
+        baseProject: project,
+        savedRevision: project.revision,
+        updatedAt: new Date().toISOString(),
+      }));
+    }, { project: serverProject, name: recoveredName });
+    await page.reload();
+    await page.locator('article').filter({ hasText: originalName }).getByRole('button').first().click();
+    await expect(page.locator('.project-name-input')).toHaveValue(recoveredName);
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 15_000 });
+    await expect.poll(async () => (await (await request.get(`/api/projects/${serverProject.id}`)).json()).name).toBe(recoveredName);
+    await expect.poll(() => page.evaluate((projectId) => window.localStorage.getItem(`cutloc-project-draft:${projectId}`), serverProject.id)).toBeNull();
+  } finally {
+    const deleted = await request.delete(`/api/projects/${serverProject.id}`);
+    if (deleted.ok()) {
+      const trashId = (await deleted.json()).trashId;
+      if (trashId) await request.delete(`/api/trash/${trashId}`);
+    }
+  }
+});

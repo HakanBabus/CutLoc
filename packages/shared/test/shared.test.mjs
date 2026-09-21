@@ -4,7 +4,12 @@ import {
   formatTime,
   parseTimelineTimecode,
   defaultProject,
+  effectiveVisualFit,
+  evaluateClipFrame,
+  evaluateFrameRenderPlan,
   enforceLockedTrackInvariants,
+  cloneClipWithFreshIds,
+  cloneKeyframesWithFreshIds,
   exportDimensions,
   ExportOptionsSchema,
   ExportRangeSchema,
@@ -35,6 +40,14 @@ import {
   visualLayerPlan,
 } from '../dist/index.js';
 
+test('resolves one framing contract for preview and export', () => {
+  assert.equal(effectiveVisualFit('fit', 'cover'), 'contain');
+  assert.equal(effectiveVisualFit('fill', 'contain'), 'cover');
+  assert.equal(effectiveVisualFit('smart', 'stretch'), 'cover');
+  assert.equal(effectiveVisualFit('keep', 'stretch'), 'stretch');
+  assert.equal(effectiveVisualFit(undefined, 'cover'), 'cover');
+});
+
 test('normalizes physical and encoded text line breaks for preview/export parity', () => {
   assert.equal(normalizeTextLineBreaks('Bir/niki\\nüç\r\ndört\rbeş'), 'Bir\niki\nüç\ndört\nbeş');
 });
@@ -47,6 +60,57 @@ test('mounts upcoming preview media before a hard-cut boundary', () => {
   assert.equal(shouldMountPreviewMedia(clip, 6.99), true);
   assert.equal(shouldMountPreviewMedia(clip, 7), false);
   assert.equal(shouldMountPreviewMedia({ ...clip, type: 'text' }, 5), false);
+});
+
+test('evaluates one frame contract for browser preview and export semantics', () => {
+  const project = defaultProject('frame-plan');
+  project.assets.push({
+    id: 'asset-1', name: 'Frame.png', type: 'image', mimeType: 'image/png', path: 'media/frame.png', size: 1,
+    duration: 0, width: 1600, height: 900, hasAudio: false, createdAt: new Date(0).toISOString(),
+  });
+  project.tracks[0].clips.push(ClipSchema.parse({
+    id: 'clip-1', assetId: 'asset-1', type: 'image', name: 'Frame', start: 1, duration: 2,
+    sourceStart: 0, sourceDuration: 2, speed: 1,
+    transform: { x: 10, y: 20, scale: 1, rotation: 0, opacity: 1, fit: 'contain' },
+    transitionIn: { type: 'slide', duration: 1, direction: 'left', easing: 'linear', intensity: 1 },
+    transitionOut: { type: 'none', duration: 0 },
+    keyframes: [
+      { id: 'x-1', property: 'x', time: 0, value: 10, easing: 'linear' },
+      { id: 'x-2', property: 'x', time: 2, value: 110, easing: 'linear' },
+    ],
+  }));
+  project.tracks[1].clips.push(ClipSchema.parse({
+    id: 'adjustment-1', type: 'image', name: 'Adjustment', start: 0, duration: 3, sourceStart: 0, sourceDuration: 3,
+    adjustment: true, filters: { brightness: 0.2, contrast: 0.1, saturation: 0, blur: 0, grayscale: 0 },
+  }));
+  project.duration = 3;
+  const plan = evaluateFrameRenderPlan(ProjectSchema.parse(project), 1.5);
+  assert.equal(plan.frameIndex, 45);
+  assert.equal(plan.time, 1.5);
+  assert.equal(plan.visual.length, 1);
+  const layer = plan.visual[0];
+  assert.equal(layer.clip.id, 'clip-1');
+  assert.equal(layer.values.localTime, 0.5);
+  assert.equal(layer.values.sourceTime, 0.5);
+  assert.equal(layer.values.x, -25);
+  assert.equal(layer.filters.brightness, 0.2);
+  assert.deepEqual(layer.mediaGeometry.frame, { width: 1920, height: 1080 });
+});
+
+test('frame evaluator keeps fade, zoom and audio values on clip-local time', () => {
+  const clip = ClipSchema.parse({
+    id: 'motion-clip', type: 'audio', name: 'Motion', start: 10, duration: 4, sourceStart: 3, sourceDuration: 4,
+    speed: 2, volume: 0.8, fadeIn: 1,
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain' },
+    transitionIn: { type: 'zoom', duration: 1, easing: 'linear', intensity: 1 },
+    transitionOut: { type: 'none', duration: 0 },
+  });
+  const values = evaluateClipFrame(clip, 10.5);
+  assert.equal(values.localTime, 0.5);
+  assert.equal(values.sourceTime, 4);
+  assert.equal(values.speed, 2);
+  assert.equal(values.volume, 0.4);
+  assert.equal(Math.abs(values.scale - 0.91) < 0.000001, true);
 });
 
 test('formats timeline time with frames', () => {
@@ -109,6 +173,29 @@ test('interpolates keyframes with easing', () => {
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 0, 0), 0);
   assert.equal(interpolateKeyframes(keyframes, 'opacity', 2, 0), 1);
   assert.ok(interpolateKeyframes(keyframes, 'opacity', 1, 0) < 0.5);
+});
+
+test('validates property-specific keyframe values and regenerates IDs when cloning', () => {
+  assert.equal(ClipSchema.safeParse({ id: 'bad-opacity', type: 'text', name: 'Bad', start: 0, duration: 1, sourceDuration: 1, keyframes: [{ id: 'bad-key', property: 'opacity', time: 0, value: 2 }] }).success, false);
+  assert.equal(ClipSchema.safeParse({ id: 'bad-volume', type: 'audio', name: 'Bad', start: 0, duration: 1, sourceDuration: 1, keyframes: [{ id: 'bad-key', property: 'volume', time: 0, value: -1 }] }).success, false);
+  assert.equal(ClipSchema.safeParse({ id: 'bad-scale', type: 'text', name: 'Bad', start: 0, duration: 1, sourceDuration: 1, keyframes: [{ id: 'bad-key', property: 'scale', time: 0, value: 0 }] }).success, false);
+  const clip = ClipSchema.parse({ id: 'source-clip', type: 'text', name: 'Motion', start: 0, duration: 1, sourceDuration: 1, keyframes: [{ id: 'source-key', property: 'opacity', time: 0, value: 0.5 }] });
+  let sequence = 0;
+  const copy = cloneClipWithFreshIds(clip, (kind) => `${kind}-${++sequence}`);
+  assert.notEqual(copy.id, clip.id);
+  assert.notEqual(copy.keyframes[0].id, clip.keyframes[0].id);
+  assert.equal(clip.keyframes[0].id, 'source-key');
+  const pasted = cloneKeyframesWithFreshIds(clip.keyframes, () => `paste-${++sequence}`);
+  assert.notEqual(pasted[0].id, clip.keyframes[0].id);
+});
+
+test('rejects ambiguous or negative track ordering', () => {
+  const duplicateOrder = defaultProject('duplicate-order');
+  duplicateOrder.tracks[1].order = duplicateOrder.tracks[0].order;
+  assert.equal(ProjectSchema.safeParse(duplicateOrder).success, false);
+  const negativeOrder = defaultProject('negative-order');
+  negativeOrder.tracks[0].order = -1;
+  assert.equal(ProjectSchema.safeParse(negativeOrder).success, false);
 });
 
 test('project access leases expose only the public CLI ownership contract', () => {
@@ -257,7 +344,9 @@ test('locked tracks reject deletion, rename, reorder and cross-track clip moves 
   assert.deepEqual(next.tracks.find((track) => track.id === previous.tracks[0].id), previous.tracks[0]);
   assert.equal(next.tracks.filter((track) => track.clips.some((clip) => clip.id === 'clip-a')).length, 1);
   const unlocked = structuredClone(previous); unlocked.tracks[0].locked = false;
-  assert.equal(enforceLockedTrackInvariants(previous, unlocked).tracks[0].locked, false);
+  const acceptedUnlock = enforceLockedTrackInvariants(previous, unlocked);
+  assert.equal(acceptedUnlock.tracks[0].locked, false);
+  assert.deepEqual(acceptedUnlock.tracks[0].clips, previous.tracks[0].clips);
 });
 
 test('integrates speed curves into source time instead of using instantaneous speed', () => {

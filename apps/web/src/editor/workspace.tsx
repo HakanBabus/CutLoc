@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, exportDimensions, formatTime, projectDuration, splitClipAt, type Asset, type ExportOptions, type ExportPreflight, type Job, type Project, type Settings, type WorkspaceLayout } from '@cutloc/shared';
+import { clamp, cloneClipWithFreshIds, exportDimensions, formatTime, projectDuration, splitClipAt, type Asset, type ExportOptions, type ExportPreflight, type Job, type Project, type Settings, type WorkspaceLayout } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { CommandPalette, type CommandAction } from '../components/command-palette';
 import { ThemeSwitcher } from '../components/theme-switcher';
@@ -137,12 +137,12 @@ export function Editor({ onBack }: { onBack: () => void }) {
             if (track.locked) continue;
             const copies = track.clips
               .filter((clip) => duplicateMap.has(clip.id))
-              .map((clip) => ({
-                ...clip,
-                id: duplicateMap.get(clip.id)!,
-                name: t('editor.copySuffix', { name: clip.name }),
-                start: clip.start + 0.25,
-              }));
+              .map((clip) => {
+                const copy = cloneClipWithFreshIds(clip, (kind) => kind === 'clip' ? duplicateMap.get(clip.id)! : `keyframe_${crypto.randomUUID().slice(0, 8)}`);
+                copy.name = t('editor.copySuffix', { name: clip.name });
+                copy.start = clip.start + 0.25;
+                return copy;
+              });
             track.clips.push(...copies);
           }
           draft.duration = projectDuration(draft);
@@ -475,6 +475,18 @@ export function Editor({ onBack }: { onBack: () => void }) {
       throw error;
     }
   };
+  const cancelExport = async () => {
+    const jobId = exportStatus.jobId;
+    if (!jobId || !['queued', 'running', 'reconnecting'].includes(exportStatus.status ?? '')) return;
+    try {
+      const job = await api<Job>(`/api/jobs/${jobId}`, { method: 'DELETE' });
+      exportWatchCleanupRef.current?.();
+      setExportStatus({ jobId, status: job.status, progress: job.progress ?? 0, message: job.message, error: job.error });
+      setExporting(false);
+    } catch (error) {
+      setEditorNotice(error instanceof Error ? error.message : t('export.failedToStart'));
+    }
+  };
 
   const startExport = async (options: ExportOptions): Promise<ExportPreflight> => {
     return startExportResilient(options);
@@ -584,13 +596,14 @@ export function Editor({ onBack }: { onBack: () => void }) {
       )}
       {showCommandPalette && <CommandPalette actions={commandActions} onClose={() => setShowCommandPalette(false)} />}
       {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} />}
-      {showExport && <ExportModal project={project} settings={settings} rangeStart={rangeStart} rangeEnd={rangeEnd} exporting={exporting} status={exportStatus} onStart={startExport} onAddFirstAsset={addFirstAssetToTimeline} onClose={() => setShowExport(false)} />}
+      {showExport && <ExportModal project={project} settings={settings} rangeStart={rangeStart} rangeEnd={rangeEnd} exporting={exporting} status={exportStatus} onStart={startExport} onCancel={cancelExport} onAddFirstAsset={addFirstAssetToTimeline} onClose={() => setShowExport(false)} />}
     </div>
   );
 }
 
-function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: ExportStatus; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onAddFirstAsset: () => boolean; onClose: () => void }) {
+function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onCancel, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: ExportStatus; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onCancel: () => Promise<void>; onAddFirstAsset: () => boolean; onClose: () => void }) {
   const { t } = useI18n();
+  const mutateProject = useEditor((state) => state.mutateProject);
   const dialogRef = useRef<HTMLElement>(null);
   const defaults = settings?.defaultExport;
   // Export always follows the project canvas.  Aspect changes belong to the
@@ -599,7 +612,9 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const aspect: ExportOptions['aspect'] = project.canvas.aspect ?? '16:9';
   const [format, setFormat] = useState<ExportOptions['format']>(defaults?.format ?? 'mp4');
   const [resolution, setResolution] = useState<ExportOptions['resolution']>(defaults?.resolution ?? '1080p');
-  const [fps, setFps] = useState<ExportOptions['fps']>(defaults?.fps === 24 || defaults?.fps === 25 || defaults?.fps === 30 || defaults?.fps === 50 || defaults?.fps === 60 ? defaults.fps : 30);
+  const supportedFps: ExportOptions['fps'][] = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
+  const projectFps = supportedFps.includes(project.canvas.fps as ExportOptions['fps']) ? project.canvas.fps as ExportOptions['fps'] : 30;
+  const [fps, setFps] = useState<ExportOptions['fps']>(projectFps);
   const [quality, setQuality] = useState<ExportOptions['quality']>(defaults?.quality ?? 'standard');
   const [rateMode, setRateMode] = useState<ExportOptions['rateMode']>('crf');
   const [crf, setCrf] = useState(23);
@@ -744,13 +759,13 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
             <div className="export-grid-row">
               {isVideo && (
                 <label>
-                  <span>{t('export.frameRate')}</span>
-                  <select value={fps} onChange={(event) => setFps(Number(event.target.value) as ExportOptions['fps'])} disabled={exporting}>
-                    <option value={24}>24 FPS</option>
-                    <option value={25}>25 FPS</option>
-                    <option value={30}>30 FPS</option>
-                    <option value={50}>50 FPS</option>
-                    <option value={60}>60 FPS</option>
+                  <span>{t('export.projectFrameRate')}</span>
+                  <select value={fps} onChange={(event) => {
+                    const next = Number(event.target.value) as ExportOptions['fps'];
+                    setFps(next);
+                    mutateProject((draft) => { draft.canvas.fps = next; });
+                  }} disabled={exporting}>
+                    {supportedFps.map((value) => <option key={value} value={value}>{value} FPS</option>)}
                   </select>
                 </label>
               )}
@@ -890,6 +905,9 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
           <button className="secondary-button" onClick={onClose} disabled={exporting}>
             {t('common.close')}
           </button>
+          {exporting && status.jobId && ['queued', 'running', 'reconnecting'].includes(status.status ?? '') && (
+            <button className="secondary-button" onClick={() => void onCancel()}>{t('common.cancel')}</button>
+          )}
           <button className="primary-button export-start-button" onClick={() => void submit()} disabled={exporting}>
             {exporting ? t('common.exporting') : done ? t('export.reExport') : t('common.export')}
           </button>
@@ -1103,7 +1121,7 @@ export function SettingsModal({ settings, onClose }: { settings: Settings | null
                 })
               }
             >
-              {[24, 25, 30, 50, 60].map((fps) => (
+              {[23.976, 24, 25, 29.97, 30, 50, 59.94, 60].map((fps) => (
                 <option key={fps} value={fps}>
                   {fps} FPS
                 </option>

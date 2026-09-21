@@ -1,85 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { adjustmentLayersForVisual, clamp, formatTime, interpolateKeyframes, normalizeTextLineBreaks, parseTimelineTimecode, playbackTime, projectDuration, shouldMountPreviewMedia, sourceTimeAt, speedAt, timelineDurationForSourceDuration, visualLayerPlan, type Asset, type CanvasAspect, type Clip, type Project, type Settings } from '@cutloc/shared';
+import { clamp, effectiveVisualFit, evaluateClipFrame, evaluateFrameRenderPlan, formatTime, normalizeTextLineBreaks, parseTimelineTimecode, playbackTime, projectDuration, quantizeFrameTime, resolveMediaFrameGeometry, resolveTextFrameGeometry, shouldMountPreviewMedia, visualLayerPlan, type CanvasAspect, type Clip, type FrameWipe, type Project, type Settings } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { UiIcon } from '../components/ui-icon';
 import { DEFAULT_TEXT_STYLE } from './text-model';
 import { useEditor } from './store';
 import { api } from './api';
+import { setMotionValue } from './keyframes';
 
-type TransitionDirection = 'left' | 'right' | 'up' | 'down' | 'center';
-type TransitionEasing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
-
-function timelineClipDuration(clip: Clip) {
-  if (clip.type === 'text' || clip.type === 'subtitle') return clip.duration;
-  return Math.max(0.05, timelineDurationForSourceDuration(clip.sourceDuration, clip.speed, clip.speedCurve));
-}
-
-function clipLocalTime(clip: Clip, projectTime: number) {
-  return clamp(projectTime - clip.start, 0, clip.duration);
-}
-
-function clipSpeedAt(clip: Clip, localTime: number) {
-  return speedAt(clip.speedCurve, clip.speed, localTime);
-}
-
-function clipSourceTime(clip: Clip, localTime: number) {
-  return sourceTimeAt(clip.speedCurve, clip.speed, clamp(localTime, 0, clip.duration));
-}
-
-function clipVisualValues(clip: Clip, projectTime: number) {
-  const localTime = clipLocalTime(clip, projectTime);
-  let transitionOpacity = 1;
-  let transitionX = 0;
-  let transitionY = 0;
-  let transitionScale = 1;
-  let wipe: { progress: number; direction: TransitionDirection } | null = null;
-  const enter = clip.transitionIn?.duration ?? 0;
-  const leave = clip.transitionOut?.duration ?? 0;
-  const applyMotion = (transition: NonNullable<Clip['transitionIn']>, progress: number, entering: boolean) => {
-    const eased = motionProgress(progress, transition.easing as TransitionEasing | undefined);
-    const intensity = clamp(transition.intensity ?? 1, 0.1, 2);
-    const direction = transition.direction ?? 'left';
-    if (transition.type === 'fade' || transition.type === 'dissolve') transitionOpacity *= eased;
-    if (transition.type === 'wipe') wipe = !wipe || eased < wipe.progress ? { progress: eased, direction } : wipe;
-    if (transition.type === 'slide') {
-      const vector = transitionVector(direction);
-      const distance = (1 - eased) * 120 * intensity;
-      if (entering) {
-        transitionX += vector.x * distance;
-        transitionY += vector.y * distance;
-      } else {
-        transitionX += vector.x * distance;
-        transitionY += vector.y * distance;
-      }
-    }
-    if (transition.type === 'zoom') {
-      const amount = 0.18 * intensity;
-      transitionScale *= entering ? Math.max(0.12, 1 - (1 - eased) * amount) : 1 + (1 - eased) * amount;
-    }
-  };
-  if (clip.transitionIn?.type !== 'none' && enter > 0 && localTime < enter) applyMotion(clip.transitionIn, clamp(localTime / enter, 0, 1), true);
-  const remaining = clip.duration - localTime;
-  if (clip.transitionOut?.type !== 'none' && leave > 0 && remaining < leave) {
-    applyMotion(clip.transitionOut, clamp(remaining / leave, 0, 1), false);
+declare global {
+  interface Window {
+    __cutlocRenderer?: {
+      seek: (time: number) => Promise<{ frameIndex: number; time: number }>;
+      projectId: string;
+    };
   }
-  const usesTransitionFadeIn = clip.transitionIn?.type === 'fade' || clip.transitionIn?.type === 'dissolve';
-  const usesTransitionFadeOut = clip.transitionOut?.type === 'fade' || clip.transitionOut?.type === 'dissolve';
-  const visualFadeIn = !usesTransitionFadeIn && (clip.fadeIn ?? 0) > 0 ? clamp(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1) : 1;
-  const visualFadeOut = !usesTransitionFadeOut && (clip.fadeOut ?? 0) > 0 ? clamp(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1) : 1;
-  const audioFadeIn = (clip.fadeIn ?? 0) > 0 ? clamp(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1) : 1;
-  const audioFadeOut = (clip.fadeOut ?? 0) > 0 ? clamp(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1) : 1;
-  return {
-    localTime,
-    x: interpolateKeyframes(clip.keyframes, 'x', localTime, clip.transform.x) + transitionX,
-    y: interpolateKeyframes(clip.keyframes, 'y', localTime, clip.transform.y) + transitionY,
-    scale: interpolateKeyframes(clip.keyframes, 'scale', localTime, clip.transform.scale) * transitionScale,
-    rotation: interpolateKeyframes(clip.keyframes, 'rotation', localTime, clip.transform.rotation),
-    opacity: clamp(interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity) * transitionOpacity * visualFadeIn * visualFadeOut, 0, 1),
-    volume: clamp(interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume) * audioFadeIn * audioFadeOut, 0, 2),
-    speed: clipSpeedAt(clip, localTime),
-    wipe,
-  };
 }
 
 function previewChromaMatrix(color: string, similarity: number) {
@@ -92,23 +27,7 @@ function previewChromaMatrix(color: string, similarity: number) {
   return `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  ${alpha[0]} ${alpha[1]} ${alpha[2]} 0 ${bias}`;
 }
 
-function motionProgress(value: number, easing: TransitionEasing = 'ease-in-out') {
-  const t = clamp(value, 0, 1);
-  if (easing === 'ease-in') return t * t;
-  if (easing === 'ease-out') return 1 - (1 - t) ** 2;
-  if (easing === 'ease-in-out') return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-  return t;
-}
-
-function transitionVector(direction: TransitionDirection) {
-  if (direction === 'right') return { x: 1, y: 0 };
-  if (direction === 'up') return { x: 0, y: -1 };
-  if (direction === 'down') return { x: 0, y: 1 };
-  if (direction === 'center') return { x: 0, y: 0 };
-  return { x: -1, y: 0 };
-}
-
-function transitionClipPath(wipe: { progress: number; direction: TransitionDirection } | null) {
+function transitionClipPath(wipe: FrameWipe | null) {
   if (!wipe) return undefined;
   const hidden = `${Math.round((1 - clamp(wipe.progress, 0, 1)) * 10000) / 100}%`;
   if (wipe.direction === 'right') return `inset(0 0 0 ${hidden})`;
@@ -126,52 +45,17 @@ function previewMaskImage(mask: NonNullable<Clip['mask']>) {
   const y = clamp(mask.y, 0, 0.99) * 100;
   const width = clamp(Math.min(mask.width, 1 - mask.x), 0.01, 1) * 100;
   const height = clamp(Math.min(mask.height, 1 - mask.y), 0.01, 1) * 100;
-  const background = mask.invert ? '#ffffff' : '#000000';
-  const foreground = mask.invert ? '#000000' : '#ffffff';
   const feather = clamp(mask.feather ?? 0, 0, 1);
-  const filter = feather > 0.001 ? `<defs><filter id="soft" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="${Math.max(0.2, feather * 6)}"/></filter></defs>` : '';
+  const background = mask.invert ? 'white' : 'black';
+  const foreground = mask.invert ? 'black' : 'white';
+  const filter = feather > 0.001 ? `<filter id="soft" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="${Math.max(0.2, feather * 6)}"/></filter>` : '';
   const shape = mask.type === 'ellipse' ? `<ellipse cx="${x + width / 2}" cy="${y + height / 2}" rx="${width / 2}" ry="${height / 2}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>` : `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${foreground}"${filter ? ' filter="url(#soft)"' : ''}/>`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>${filter ? filter.slice(6, -7) : ''}</defs><rect width="100" height="100" fill="${background}"/>${shape}</svg>`;
+  // CSS image masks read the SVG alpha channel. First resolve the luminance
+  // shape into real transparency so the area outside the mask is not opaque.
+  const svg = mask.invert
+    ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><defs>${filter}<mask id="cutloc-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"><rect width="100" height="100" fill="${background}"/>${shape}</mask></defs><rect width="100" height="100" fill="white" mask="url(#cutloc-mask)"/></svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><defs>${filter}</defs>${shape}</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-}
-
-function previewMediaBounds(asset: Asset, canvasWidth: number, canvasHeight: number, fit: 'contain' | 'cover' | 'stretch') {
-  const sourceWidth = Math.max(1, asset.width ?? canvasWidth);
-  const sourceHeight = Math.max(1, asset.height ?? canvasHeight);
-  if (fit === 'stretch') return { width: canvasWidth, height: canvasHeight };
-  const ratio = fit === 'cover' ? Math.max(canvasWidth / sourceWidth, canvasHeight / sourceHeight) : Math.min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
-  return { width: sourceWidth * ratio, height: sourceHeight * ratio };
-}
-
-function previewMediaRenderBounds(asset: Asset, crop: Clip['crop'], canvasWidth: number, canvasHeight: number, fit: 'contain' | 'cover' | 'stretch') {
-  if (!crop) return previewMediaBounds(asset, canvasWidth, canvasHeight, fit);
-  const sourceWidth = Math.max(1, asset.width ?? canvasWidth);
-  const sourceHeight = Math.max(1, asset.height ?? canvasHeight);
-  const cropX = clamp(crop.x, 0, 0.99);
-  const cropY = clamp(crop.y, 0, 0.99);
-  const cropWidth = clamp(Math.min(crop.width, 1 - cropX), 0.01, 1);
-  const cropHeight = clamp(Math.min(crop.height, 1 - cropY), 0.01, 1);
-  return previewMediaBounds(
-    {
-      ...asset,
-      width: Math.max(1, sourceWidth * cropWidth),
-      height: Math.max(1, sourceHeight * cropHeight),
-    },
-    canvasWidth,
-    canvasHeight,
-    fit,
-  );
-}
-
-function previewTextBounds(style: NonNullable<Clip['textStyle']>, canvasWidth: number, canvasHeight: number, renderScale = 1) {
-  const effectiveFontSize = Math.max(style.fontSize, 12 / Math.max(0.001, renderScale));
-  const normalizedText = normalizeTextLineBreaks(style.text);
-  const longestLine = Math.max(1, ...normalizedText.split('\n').map((line) => line.length));
-  const estimatedWidth = longestLine * effectiveFontSize * 0.58 + style.padding * 2;
-  const width = Math.min(canvasWidth * 0.9, Math.max(64, estimatedWidth));
-  const lineCount = Math.max(1, normalizedText.split('\n').length);
-  const height = Math.min(canvasHeight * 0.75, Math.max(effectiveFontSize, lineCount * effectiveFontSize * style.lineHeight + style.padding * 2));
-  return { width, height };
 }
 
 export function normalizeProjectDurations(project: Project): Project {
@@ -186,13 +70,10 @@ export function normalizeProjectDurations(project: Project): Project {
     if (track.type !== 'layer' || normalizedTrack.name !== track.name) changed = true;
     return {
       ...normalizedTrack,
-      clips: track.clips.map((clip) => {
-        if (clip.type === 'text' || clip.type === 'subtitle') return clip;
-        const duration = timelineClipDuration(clip);
-        if (Math.abs(duration - clip.duration) <= 1 / project.canvas.fps) return clip;
-        changed = true;
-        return { ...clip, duration };
-      }),
+      // `duration` is an authored timeline value. Recomputing it from the
+      // source range while opening a project made the browser silently shorten
+      // still images and disagree with the exporter whenever autosave failed.
+      clips: track.clips,
     };
   });
   const next = { ...project, tracks };
@@ -263,6 +144,7 @@ function EditableTimecode({ value, duration, fps, onChange }: { value: number; d
 
 export function PreviewArea({ project, settings }: { project: Project; settings: Settings | null }) {
   const { t } = useI18n();
+  const renderMode = useMemo(() => new URLSearchParams(window.location.search).has('renderProject'), []);
   const currentTime = useEditor((state) => state.currentTime);
   const playing = useEditor((state) => state.playing);
   const setPlaying = useEditor((state) => state.setPlaying);
@@ -281,7 +163,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'fit' : (project.canvas.fitMode ?? 'fit'));
+  const [previewFraming, setPreviewFraming] = useState<'clip' | 'fit' | 'fill' | 'smart'>(project.canvas.fitMode === 'keep' ? 'clip' : (project.canvas.fitMode ?? 'fit'));
   const [previewZoom, setPreviewZoom] = useState(100);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -300,6 +182,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     wallTime: number;
   } | null>(null);
   const setSettings = useEditor((state) => state.setSettings);
+
   useEffect(() => {
     const element = viewportRef.current ?? stageRef.current;
     if (!element) return;
@@ -327,25 +210,73 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     updateFullscreenState();
     return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
   }, []);
-  const visualPlan = visualLayerPlan(project);
-  const activeClips = visualPlan.filter(({ clip }) => currentTime >= clip.start && currentTime < clip.start + clip.duration);
-  const activeMedia = activeClips.filter(({ clip }) => !clip.adjustment && (clip.type === 'video' || clip.type === 'image'));
+  const visualPlan = useMemo(() => visualLayerPlan(project), [project]);
+  const fastPreviewTime = quantizeFrameTime(currentTime, project.canvas.fps, project.duration);
+  const framePlan = useMemo(() => evaluateFrameRenderPlan(project, fastPreviewTime), [fastPreviewTime, project]);
+  const frameLayerByClipId = useMemo(() => new Map(framePlan.visual.map((layer) => [layer.clip.id, layer])), [framePlan]);
+  const frameValues = (clip: Clip) => frameLayerByClipId.get(clip.id)?.values ?? evaluateClipFrame(clip, framePlan.time);
+  const activeClips = visualPlan.filter(({ clip }) => framePlan.time >= clip.start && framePlan.time < clip.start + clip.duration);
+  const activeMedia = useMemo(() => framePlan.visual.filter(({ clip, asset }) => Boolean(asset) && (clip.type === 'video' || clip.type === 'image')), [framePlan]);
   const mountedMedia = visualPlan.filter(({ clip }) => !clip.adjustment && shouldMountPreviewMedia(clip, currentTime));
-  const activeAudio = activeClips.filter(({ clip, track }) => {
-    if (track.muted || (clip.type !== 'audio' && clip.type !== 'video')) return false;
-    const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
-    return Boolean(asset?.hasAudio);
-  });
-  const texts = activeClips
-    .filter(({ clip }) => !clip.adjustment && clip.textStyle)
-    .map(({ clip, trackIndex }) => ({
+  const activeAudio = framePlan.audio;
+  const texts = useMemo(() => framePlan.visual
+    .filter(({ clip }) => clip.textStyle)
+    .map(({ clip, trackIndex, values, textGeometry }) => ({
       clip,
       style: clip.textStyle!,
       trackIndex,
-    }));
+      values,
+      textGeometry,
+    })), [framePlan]);
   const activeSelected = selectedClipId ? activeClips.find(({ clip }) => clip.id === selectedClipId && (clip.adjustment || clip.type === 'video' || clip.type === 'image' || clip.type === 'text')) : undefined;
-  const activeSelectedVisual = activeSelected ? clipVisualValues(activeSelected.clip, currentTime) : null;
+  const activeSelectedVisual = activeSelected ? frameValues(activeSelected.clip) : null;
   const activeSelectedAsset = activeSelected?.clip.assetId ? project.assets.find((item) => item.id === activeSelected.clip.assetId) : undefined;
+
+  useEffect(() => {
+    if (!renderMode) return;
+    const nextPaint = () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    const waitForMedia = async (element: HTMLMediaElement, target: number) => {
+      element.pause();
+      if (Math.abs(element.currentTime - target) <= 0.5 / framePlan.fps && element.readyState >= 2) return;
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          element.removeEventListener('seeked', finish);
+          element.removeEventListener('loadeddata', finish);
+          resolve();
+        };
+        const timer = window.setTimeout(finish, 8_000);
+        element.addEventListener('seeked', finish, { once: true });
+        element.addEventListener('loadeddata', finish, { once: true });
+        element.currentTime = target;
+      });
+    };
+    window.__cutlocRenderer = {
+      projectId: project.id,
+      seek: async (requestedTime) => {
+        const time = quantizeFrameTime(requestedTime, project.canvas.fps, Math.max(0, project.duration - 1 / project.canvas.fps));
+        setPlaying(false);
+        setCurrentTime(time);
+        await nextPaint();
+        await nextPaint();
+        await document.fonts.ready;
+        const clips = project.tracks.flatMap((track) => track.clips).filter((clip) => time >= clip.start && time < clip.start + clip.duration);
+        await Promise.all(clips.map(async (clip) => {
+          const media = mediaRefs.current[clip.id] ?? audioRefs.current[clip.id];
+          if (!media || (clip.type !== 'video' && clip.type !== 'audio')) return;
+          await waitForMedia(media, evaluateClipFrame(clip, time).sourceTime);
+        }));
+        const images = Array.from(canvasRef.current?.querySelectorAll<HTMLImageElement>('img.preview-media') ?? []);
+        await Promise.all(images.map((image) => image.decode?.().catch(() => undefined)));
+        await nextPaint();
+        return { frameIndex: Math.round(time * project.canvas.fps), time };
+      },
+    };
+    return () => { delete window.__cutlocRenderer; };
+  }, [framePlan.fps, project, renderMode, setCurrentTime, setPlaying]);
 
   const beginPreviewTransform = (event: React.PointerEvent<HTMLElement>, clip: Clip, mode: 'move' | 'scale') => {
     if (event.button !== 0) return;
@@ -353,14 +284,15 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     event.preventDefault();
     event.stopPropagation();
     setSelected(clip.id, project.tracks.find((track) => track.clips.some((item) => item.id === clip.id))?.id ?? null);
+    const values = frameValues(clip);
     setPreviewDrag({
       clipId: clip.id,
       mode,
       startX: event.clientX,
       startY: event.clientY,
-      originX: clip.transform.x,
-      originY: clip.transform.y,
-      originScale: clip.transform.scale,
+      originX: values.x,
+      originY: values.y,
+      originScale: values.scale,
       historyGroup: crypto.randomUUID(),
     });
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -377,11 +309,12 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
       (draft) => {
         const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === previewDrag.clipId);
         if (!clip) return;
+        const localTime = clamp(currentTime - clip.start, 0, clip.duration);
         if (previewDrag.mode === 'move') {
-          clip.transform.x = Math.round(previewDrag.originX + deltaX);
-          clip.transform.y = Math.round(previewDrag.originY + deltaY);
+          setMotionValue(clip, 'x', localTime, Math.round(previewDrag.originX + deltaX), project.canvas.fps);
+          setMotionValue(clip, 'y', localTime, Math.round(previewDrag.originY + deltaY), project.canvas.fps);
         } else {
-          clip.transform.scale = clamp(previewDrag.originScale + deltaX / Math.max(120, project.canvas.width * 0.12), 0.05, 8);
+          setMotionValue(clip, 'scale', localTime, clamp(previewDrag.originScale + deltaX / Math.max(120, project.canvas.width * 0.12), 0.05, 8), project.canvas.fps);
         }
       },
       { historyGroup: previewDrag.historyGroup },
@@ -391,10 +324,11 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   const finishPreviewTransform = () => setPreviewDrag(null);
 
   const syncVideo = (clip: Clip, video: HTMLVideoElement) => {
-    const values = clipVisualValues(clip, currentTime);
-    const target = Math.max(0, clipSourceTime(clip, currentTime - clip.start) + clip.sourceStart);
+    const values = frameValues(clip);
+    const target = Math.max(0, values.sourceTime);
     video.playbackRate = clamp(values.speed, 0.25, 4);
-    if (Math.abs(video.currentTime - target) > 0.18 || video.readyState < 2) video.currentTime = target;
+    const driftTolerance = playing ? Math.max(0.04, 2 / framePlan.fps) : 0.5 / framePlan.fps;
+    if (Math.abs(video.currentTime - target) > driftTolerance) video.currentTime = target;
     if (playing) void video.play().catch(() => undefined);
     else video.pause();
   };
@@ -406,8 +340,8 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   };
 
   const syncAudio = (clip: Clip, audio: HTMLAudioElement, trackVolume = 1) => {
-    const values = clipVisualValues(clip, currentTime);
-    const target = Math.max(0, clipSourceTime(clip, currentTime - clip.start) + clip.sourceStart);
+    const values = frameValues(clip);
+    const target = Math.max(0, values.sourceTime);
     audio.playbackRate = clamp(values.speed, 0.25, 4);
     const requestedGain = clamp(values.volume * trackVolume, 0, 4);
     try {
@@ -428,7 +362,8 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     } catch {
       audio.volume = clamp(requestedGain, 0, 1);
     }
-    if (Math.abs(audio.currentTime - target) > 0.18 || audio.readyState < 2) audio.currentTime = target;
+    const driftTolerance = playing ? Math.max(0.04, 2 / framePlan.fps) : 0.5 / framePlan.fps;
+    if (Math.abs(audio.currentTime - target) > driftTolerance) audio.currentTime = target;
     if (playing) void audio.play().catch(() => undefined);
     else audio.pause();
   };
@@ -507,7 +442,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   };
   const canvasRatio = project.canvas.width / Math.max(1, project.canvas.height);
   const fitScale = Math.min(stageSize.width / Math.max(1, project.canvas.width), stageSize.height / Math.max(1, project.canvas.height));
-  const baseScale = isFullscreen ? fitScale : Math.min(1, fitScale);
+  const baseScale = isFullscreen || renderMode ? fitScale : Math.min(1, fitScale);
   const displayScale = baseScale * clamp(previewZoom / 100, 0.5, 2.5);
   // Every overlay, hit target and selection box must use the same scale as the
   // canvas itself; otherwise zoom changes the frame but leaves controls behind.
@@ -524,9 +459,12 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
     width: Math.max(stageSize.width, canvasDisplaySize.width + canvasPadding * 2),
     height: Math.max(stageSize.height, canvasDisplaySize.height + canvasPadding * 2),
   };
+  const selectedMediaGeometry = activeSelectedAsset && activeSelected
+    ? resolveMediaFrameGeometry(activeSelectedAsset, activeSelected.clip.crop, project.canvas.width, project.canvas.height, frameLayerByClipId.get(activeSelected.clip.id)?.fit ?? activeSelected.clip.transform.fit)
+    : null;
   const selectedBounds =
     activeSelected?.clip.type === 'text' && !activeSelected.clip.adjustment
-      ? previewTextBounds(
+      ? resolveTextFrameGeometry(
           activeSelected.clip.textStyle ?? {
             ...DEFAULT_TEXT_STYLE,
             text: activeSelected.clip.name,
@@ -536,7 +474,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
           canvasScale,
         )
       : activeSelectedAsset
-        ? previewMediaRenderBounds(activeSelectedAsset, activeSelected?.clip.crop, project.canvas.width, project.canvas.height, previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : (activeSelected?.clip.transform.fit ?? 'contain'))
+        ? selectedMediaGeometry!.frame
         : {
             width: project.canvas.width * 0.72,
             height: project.canvas.height * 0.72,
@@ -544,7 +482,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
   const changePreviewFraming = (next: 'clip' | 'fit' | 'fill' | 'smart') => {
     setPreviewFraming(next);
     mutateProject((draft) => {
-      draft.canvas.fitMode = next === 'clip' ? 'fit' : next;
+      draft.canvas.fitMode = next === 'clip' ? 'keep' : next;
     });
   };
 
@@ -572,42 +510,20 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
         setCurrentTime(0);
         return;
       }
-      setCurrentTime(next);
-      lastPlaybackTime = next;
+      // The composition is frame based. Publishing the same frame to Zustand
+      // multiple times only rerenders the editor without changing pixels.
+      const frameTime = quantizeFrameTime(next, project.canvas.fps, project.duration);
+      if (frameTime !== lastPlaybackTime) {
+        setCurrentTime(frameTime);
+        lastPlaybackTime = frameTime;
+      }
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [playing, project.duration, setCurrentTime, setPlaying]);
+  }, [playing, project.canvas.fps, project.duration, setCurrentTime, setPlaying]);
 
-  const useProxy = settings?.proxyQuality !== 'high';
-  const adjustmentFilter = (clip: Clip) =>
-    adjustmentLayersForVisual(
-      visualPlan,
-      visualPlan.find((item) => item.clip.id === clip.id)!,
-      currentTime,
-    ).reduce(
-      (filter, item) => ({
-        brightness: filter.brightness + item.clip.filters.brightness,
-        contrast: filter.contrast + item.clip.filters.contrast,
-        saturation: filter.saturation + item.clip.filters.saturation,
-        blur: filter.blur + item.clip.filters.blur,
-        grayscale: clamp(filter.grayscale + item.clip.filters.grayscale, 0, 1),
-        hue: filter.hue + (item.clip.filters.hue ?? 0),
-        temperature: filter.temperature + (item.clip.filters.temperature ?? 0),
-        vignette: clamp(filter.vignette + (item.clip.filters.vignette ?? 0), 0, 1),
-      }),
-      {
-        brightness: clip.filters.brightness,
-        contrast: clip.filters.contrast,
-        saturation: clip.filters.saturation,
-        blur: clip.filters.blur,
-        grayscale: clip.filters.grayscale,
-        hue: clip.filters.hue ?? 0,
-        temperature: clip.filters.temperature ?? 0,
-        vignette: clip.filters.vignette ?? 0,
-      },
-    );
+  const useProxy = !renderMode && settings?.proxyQuality !== 'high';
   return (
     <main ref={fullscreenRef} className="preview-area">
       <div className="preview-toolbar">
@@ -626,6 +542,18 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
             <option value="fit">{t('preview.fitMedia')}</option>
             <option value="fill">{t('preview.fillMedia')}</option>
             <option value="smart">{t('preview.smartFraming')}</option>
+          </select>
+          <select
+            className="preview-fps-select"
+            aria-label={t('preview.frameRate')}
+            title={t('preview.frameRateHint')}
+            value={project.canvas.fps}
+            onChange={(event) => {
+              const fps = Number(event.target.value);
+              mutateProject((draft) => { draft.canvas.fps = fps; });
+            }}
+          >
+            {[23.976, 24, 25, 29.97, 30, 50, 59.94, 60].map((fps) => <option key={fps} value={fps}>{fps} FPS</option>)}
           </select>
         </div>
       </div>
@@ -659,13 +587,13 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
               >
                 <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
                   <defs>
-                    {activeMedia.flatMap(({ clip }) =>
-                      clip.filters.chromaKey
+                    {activeMedia.flatMap(({ clip, filters }) =>
+                      filters.chromaKey
                         ? [
                             <filter key={clip.id} id={`preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`} colorInterpolationFilters="sRGB">
-                              <feColorMatrix type="matrix" values={previewChromaMatrix(clip.filters.chromaKey.color, clip.filters.chromaKey.similarity)} />
+                              <feColorMatrix type="matrix" values={previewChromaMatrix(filters.chromaKey.color, filters.chromaKey.similarity)} />
                               <feComponentTransfer>
-                                <feFuncA type="gamma" amplitude="1" exponent={Math.max(0.2, 1 - clip.filters.chromaKey.blend)} offset="0" />
+                                <feFuncA type="gamma" amplitude="1" exponent={Math.max(0.2, 1 - filters.chromaKey.blend)} offset="0" />
                               </feComponentTransfer>
                             </filter>,
                           ]
@@ -673,27 +601,27 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     )}
                   </defs>
                 </svg>
-                {mountedMedia.map(({ clip, trackIndex }) => {
+                {mountedMedia.map(({ clip, stackOrder }) => {
                   const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
                   if (!asset) return null;
-                  const isActive = currentTime >= clip.start && currentTime < clip.start + clip.duration;
-                  const visual = clipVisualValues(clip, currentTime);
+                  const layer = frameLayerByClipId.get(clip.id);
+                  const isActive = Boolean(layer);
+                  const visual = frameValues(clip);
                   const mediaUrl = `/api/projects/${project.id}/media/${asset.id}${useProxy && asset.proxyPath ? '?proxy=1' : ''}`;
-                  const filter = adjustmentFilter(clip);
+                  const filter = layer?.filters ?? clip.filters;
                   const crop = clip.crop;
                   const mask = clip.mask;
-                  const fit = previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
-                  const fullBounds = previewMediaBounds(asset, project.canvas.width, project.canvas.height, fit);
-                  const frameBounds = previewMediaRenderBounds(asset, crop, project.canvas.width, project.canvas.height, fit);
-                  const cropX = crop ? clamp(crop.x, 0, 0.99) : 0;
-                  const cropY = crop ? clamp(crop.y, 0, 0.99) : 0;
-                  const cropWidth = crop ? clamp(Math.min(crop.width, 1 - cropX), 0.01, 1) : 1;
-                  const cropHeight = crop ? clamp(Math.min(crop.height, 1 - cropY), 0.01, 1) : 1;
-                  const innerWidth = crop ? frameBounds.width / cropWidth : fullBounds.width;
-                  const innerHeight = crop ? frameBounds.height / cropHeight : fullBounds.height;
-                  const temperatureFilter = Math.abs(filter.temperature) > 0.001 ? ` sepia(${Math.abs(filter.temperature) * 0.35}) saturate(${1 + Math.abs(filter.temperature) * 0.4}) hue-rotate(${filter.temperature > 0 ? -12 : 180}deg)` : '';
-                  const chromaFilter = clip.filters.chromaKey ? ` url(#preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')})` : '';
-                  const mediaFilter = `${chromaFilter} brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${filter.hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${temperatureFilter}`;
+                  const fit = layer?.fit ?? effectiveVisualFit(project.canvas.fitMode, clip.transform.fit);
+                  const geometry = layer?.mediaGeometry ?? resolveMediaFrameGeometry(asset, crop, project.canvas.width, project.canvas.height, fit);
+                  const frameBounds = geometry.frame;
+                  const temperature = filter.temperature ?? 0;
+                  const hue = filter.hue ?? 0;
+                  const vignette = filter.vignette ?? 0;
+                  const temperatureFilter = Math.abs(temperature) > 0.001
+                    ? ` sepia(${Math.max(0, temperature) * 0.18}) saturate(${1 + Math.abs(temperature) * 0.12}) hue-rotate(${-temperature * 12}deg)`
+                    : '';
+                  const chromaFilter = filter.chromaKey ? ` url(#preview-chroma-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')})` : '';
+                  const mediaFilter = `${chromaFilter} brightness(${1 + filter.brightness}) contrast(${1 + filter.contrast}) saturate(${1 + filter.saturation}) hue-rotate(${hue}deg) blur(${filter.blur}px) grayscale(${filter.grayscale})${temperatureFilter}`;
                   const mediaFrameStyle: React.CSSProperties = {
                     position: 'absolute',
                     left: '50%',
@@ -705,7 +633,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     opacity: isActive ? visual.opacity : 0,
                     pointerEvents: 'none',
                     overflow: 'hidden',
-                    zIndex: trackIndex + 1,
+                    zIndex: stackOrder + 1,
                     transform: `translate(-50%, -50%) translate(${visual.x * canvasScale}px, ${visual.y * canvasScale}px) rotate(${visual.rotation}deg) scale(${visual.scale}) scaleX(${clip.transform.flipX ? -1 : 1}) scaleY(${clip.transform.flipY ? -1 : 1})`,
                     clipPath: visual.wipe ? transitionClipPath(visual.wipe) : undefined,
                   };
@@ -720,13 +648,13 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     maskRepeat: 'no-repeat',
                     WebkitMaskRepeat: 'no-repeat',
                   };
-                  const mediaStyle: React.CSSProperties = crop
+                  const mediaStyle: React.CSSProperties = crop || fit === 'cover'
                     ? {
                         position: 'absolute',
-                        left: -cropX * innerWidth * canvasScale,
-                        top: -cropY * innerHeight * canvasScale,
-                        width: innerWidth * canvasScale,
-                        height: innerHeight * canvasScale,
+                        left: geometry.source.left * canvasScale,
+                        top: geometry.source.top * canvasScale,
+                        width: geometry.source.width * canvasScale,
+                        height: geometry.source.height * canvasScale,
                         display: 'block',
                         objectFit: 'fill',
                         filter: mediaFilter,
@@ -763,18 +691,15 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     <div key={clip.id} className="preview-media-frame preview-layer" style={mediaFrameStyle}>
                       <div className="preview-media-mask" style={maskStyle}>
                         {mediaElement}
-                        {filter.vignette > 0.001 && <span className="preview-vignette" style={{ opacity: clamp(filter.vignette, 0, 1) }} />}
+                        {vignette > 0.001 && <span className="preview-vignette" style={{ opacity: clamp(vignette, 0, 1) }} />}
                       </div>
                     </div>
                   );
                 })}
                 {!isFullscreen &&
-                  activeMedia.map(({ clip, trackIndex }) => {
-                    const asset = clip.assetId ? project.assets.find((item) => item.id === clip.assetId) : undefined;
-                    if (!asset) return null;
-                    const visual = clipVisualValues(clip, currentTime);
-                    const fit = previewFraming === 'fill' || previewFraming === 'smart' ? 'cover' : previewFraming === 'fit' ? 'contain' : clip.transform.fit;
-                    const bounds = previewMediaRenderBounds(asset, clip.crop, project.canvas.width, project.canvas.height, fit);
+                  activeMedia.map(({ clip, trackIndex, values: visual, mediaGeometry }) => {
+                    if (!mediaGeometry) return null;
+                    const bounds = mediaGeometry.frame;
                     const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
                     return (
                       <button
@@ -819,9 +744,8 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                     />
                   );
                 })}
-                {texts.map(({ clip, style, trackIndex }) => {
-                  const visual = clipVisualValues(clip, currentTime);
-                  const bounds = previewTextBounds(style, project.canvas.width, project.canvas.height, canvasScale);
+                {texts.map(({ clip, style, trackIndex, values: visual }) => {
+                  const bounds = resolveTextFrameGeometry(style, project.canvas.width, project.canvas.height, canvasScale);
                   const track = project.tracks.find((item) => item.clips.some((candidate) => candidate.id === clip.id));
                   return (
                     <div
@@ -862,6 +786,7 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                         WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`,
                         textShadow: style.shadow ? '0 2px 8px #000' : 'none',
                         textAlign: style.align,
+                        whiteSpace: 'pre',
                       }}
                     >
                       {normalizeTextLineBreaks(style.text)}

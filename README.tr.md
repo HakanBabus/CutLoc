@@ -53,7 +53,7 @@ CutLoc, net bir yerel öncelikli sınır üzerine kuruludur:
 - Medya analizi, türetilmiş dosyalar, önizlemeler ve çıktılar proje bağımlılıklarıyla sağlanan FFmpeg/ffprobe ikililerini kullanır.
 - Yerel CLI, web editörüyle aynı API ve doğrulama sınırını kullanır; bu da onu sağlayıcıdan bağımsız yapay zekâ aracı otomasyonuna uygun hâle getirir.
 
-CutLoc; barındırılan video platformu, iş birliği servisi, herkese açık yükleme uç noktası, uzaktan render servisi veya yerleşik transkripsiyon ürünü değildir. CutLoc, her codec ve efekt birleşiminde tarayıcı ile FFmpeg çıktısının aynı olacağını garanti etmez.
+CutLoc; barındırılan video platformu, iş birliği servisi, herkese açık yükleme uç noktası, uzaktan render servisi veya yerleşik transkripsiyon ürünü değildir. Video çözme desteği yerel tarayıcı codec desteğine bağlı olabilir; ancak önizleme ve MP4 çıktısı aynı Chromium görsel kompozitörünü kullanır.
 
 ## Kendiniz veya yapay zekâ ajanıyla kurgu
 
@@ -84,8 +84,8 @@ Yukarıdaki her başarılı komut `stdout` üzerinde tek ve kompakt bir JSON de�
 | **Kontrol paneli ve projeler** | Tutarlı 16:9 proje kartlarında süreyi, medya sayısını, en-boy oranını ve diskte kaplanan alanı görme; projeyi doğrudan açma veya çöp kutusuna taşıma. |
 | **Medya kitaplığı** | Video, ses ve görsel içe aktarma; arama, filtreleme, önizleme, liste/kart görünümü, medya sağlığını inceleme, türetilmiş dosyaları yeniden oluşturma ve varlıkları zaman çizelgesine sürükleme. |
 | **Zaman çizelgesi** | Kare duyarlı oynatma kafası, işaretçiler, hizalama, kırpma, bölme, taşıma, çoğaltma, boşluğu kapatarak silme, geri al/yinele ve kanal kilitleme/gizleme/sessize alma kontrolleriyle video, kaplama, ses, metin ve altyazı kanalları. |
-| **Tuval ve Denetçi** | Tuvalde görünen nesneleri seçme, en-boy ve sığdırma modları, önizleme yakınlaştırma/kaydırma; ardından yerleşim, kırpma, hız, ses, filtre, maske, fade, geçiş, anahtar kare ve metin biçimlendirme. |
-| **Hareket ve yapı taşları** | Metin hazır ayarları ile Öğeler panelinden yerleşik arka plan ve şekiller. Seçili klibin Animasyon sekmesi giriş/çıkış hazır ayarlarını, süreyi, yönü, easing'i, yoğunluğu ve anahtar kareleri yönetir. |
+| **Tuval ve Denetçi** | Tuvalde görünen nesneleri seçme, en-boy ve sığdırma modları ve önizleme yakınlaştırma/kaydırma; aynı kompozitör dışa aktarılan video karelerini de üretir. Ardından yerleşim, kırpma, hız, ses, filtre, maske, fade, geçiş, anahtar kare ve metin biçimlendirme. |
+| **Hareket ve yapı taşları** | Metin hazır ayarları ile Öğeler panelinden yerleşik arka plan ve şekiller. Animasyon sekmesinde bir özelliği bir kez etkinleştirin, oynatma kafasını taşıyıp değeri değiştirin; CutLoc sonraki anahtar kareleri otomatik oluşturur. |
 | **Dışa aktarma** | Yerel ön kontrol; seçilebilir en-boy, çözünürlük, FPS, kalite, ses bit hızı ve zaman aralığıyla MP4 video veya MP3/WAV ses render'ı. Mevcut çıktı yaratıcı yeniden kodlamadır; kayıpsız/remux kesme değildir. |
 | **Kurtarma ve güvenlik** | Otomatik kayıt, revizyon kontrolleri, yedekler, 30 gün kurtarılabilir çöp, proje erişim kilitleri, dışa aktarma ön kontrolü ve kısmi çıktı temizliği. |
 
@@ -105,7 +105,7 @@ Bir klibin iki kenarını kırpmak, oynatma kafasında bölmek, kare hassasiyeti
 
 ### 4. Görüntü ve sesi şekillendirin
 
-**Tuval** ve **Denetçi** birlikte çalışır. `16:9`, `9:16`, `1:1`, `4:5`, `3:2` veya `21:9` seçin; sığdırma, doldurma ya da akıllı kadraj modunu belirleyin; ardından konum, ölçek, dönüş, çevirme, opaklık, hız, kırpma, ses, filtre, maske, fade, giriş/çıkış animasyonu, anahtar kare ve metin stillerini ayarlayın. Animasyon kontrolleri yalnızca seçili klip için görünür.
+**Tuval** ve **Denetçi** birlikte çalışır. `16:9`, `9:16`, `1:1`, `4:5`, `3:2` veya `21:9` seçin; sığdırma, doldurma ya da akıllı kadraj modunu belirleyin; ardından konum, ölçek, dönüş, çevirme, opaklık, hız, kırpma, ses, filtre, maske, fade, giriş/çıkış animasyonu, anahtar kare ve metin stillerini ayarlayın. Bir değeri hareketlendirmek için oynatma kafasını yerleştirip elmasına bir kez basın; başka bir ana gidip değeri değiştirince CutLoc yeni noktayı otomatik ekler. Animasyon kontrolleri yalnızca seçili klip için görünür.
 
 ### 5. Önizleyin, kaydedin ve dışa aktarın
 
@@ -137,7 +137,7 @@ Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili müh
 
 CutLoc v1.1.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
 
-- Çıktı çözünürlüğü değiştiğinde önizleme ve FFmpeg dışa aktarma aynı tuval koordinatlarını kullanır.
+- Önizleme ve MP4 dışa aktarma; kaynak zamanı, dönüşümler, geçişler, kırpma/sığdırma geometrisi, katman sırası, ayar filtreleri ve metin için kareye sabitlenmiş tek Chromium kompozitörünü kullanır. FFmpeg sesi işler ve bu kareleri kodlayıp paketler.
 - Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
 - Tam ekran önizlemede timecode, toplam süre, oynatma kontrolleri ve kadraj araçları görünür kalır.
 - Tek seferlik `setup:user`, `cutloc` komutunu kullanıcı PATH'ine kaydeder; `cutloc open` ortak sunucuyu başlatır veya yeniden kullanır ve tarayıcı editörünü açar.
@@ -264,6 +264,16 @@ cutloc projects edit <project-id> --file edit-plan.json --dry-run
 cutloc projects edit <project-id> --file edit-plan.json
 ```
 
+Ajanlar proje belgesinin tamamını değiştirmeden hareket oluşturabilir:
+
+```powershell
+cutloc keyframes list <project-id> <clip-id>
+cutloc keyframes set <project-id> <clip-id> x --time 0 --value -600 --easing ease-out
+cutloc keyframes set <project-id> <clip-id> x --time 0.6 --value 0 --easing ease-out
+```
+
+Anahtar kare zamanları klibin başlangıcına göredir. Aynı özellik ve video karesi için `set` tekrarlandığında yeni kopya oluşturmak yerine mevcut nokta güncellenir.
+
 Kısa video projelerini doğru tuvalle doğrudan başlatabilirsiniz:
 
 ```powershell
@@ -292,6 +302,7 @@ Projeyi değiştiren komutlar kısa ömürlü ve özel bir proje kilidi alır. P
 | Runtime | `open`, `status --json`, `doctor --json`, `stop` ve `restart` |
 | Ajan keşfi | `agent guide` ve kompakt/sayfalanmış `agent inspect [project-id]` |
 | Projeler | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
+| Anahtar kare | `keyframes list/set/remove/clear` |
 | Medya | `media add/add-many/remove/relink/rebuild/health/stock` |
 | Kurtarma | `backups list/restore` ve `trash list/restore/delete` |
 | Dışa aktarma | `export preflight/start` ve `jobs list/get/wait/watch/cancel/download` |

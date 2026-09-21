@@ -27,9 +27,9 @@ function DialogShell({ labelledBy, children, onClose }: { labelledBy: string; ch
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby={labelledBy} onKeyDown={onKeyDown}>{children}</section></div>;
 }
 
-export function ConfirmDialog({ title, message, confirmLabel, danger = true, onConfirm, onClose }: { title: string; message: string; confirmLabel: string; danger?: boolean; onConfirm: () => void; onClose: () => void }) {
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, danger = true, onConfirm, onCancel, onClose }: { title: string; message: string; confirmLabel: string; cancelLabel?: string; danger?: boolean; onConfirm: () => void; onCancel?: () => void; onClose: () => void }) {
   const { t } = useI18n();
-  return <DialogShell labelledBy="confirm-dialog-title" onClose={onClose}><div className="modal-head"><div><p className="eyebrow">{t('confirm.eyebrow')}</p><h2 id="confirm-dialog-title">{title}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><p>{message}</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className={`primary-button ${danger ? 'danger-button' : ''}`} onClick={onConfirm}>{confirmLabel}</button></div></DialogShell>;
+  return <DialogShell labelledBy="confirm-dialog-title" onClose={onClose}><div className="modal-head"><div><p className="eyebrow">{t('confirm.eyebrow')}</p><h2 id="confirm-dialog-title">{title}</h2></div><button onClick={onClose} aria-label={t('common.close')}>×</button></div><p>{message}</p><div className="modal-actions"><button className="secondary-button" onClick={onCancel ?? onClose}>{cancelLabel ?? t('common.cancel')}</button><button className={`primary-button ${danger ? 'danger-button' : ''}`} onClick={onConfirm}>{confirmLabel}</button></div></DialogShell>;
 }
 
 export function MessageDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {

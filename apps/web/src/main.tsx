@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   projectDuration,
   formatTime,
+  mergeProjectThreeWay,
   type Asset,
   type Project,
   type Settings,
@@ -18,11 +19,12 @@ import { Editor, SettingsModal } from './editor/workspace';
 import { createLayerTrack, createMediaClip, findEmptyPlacement } from './editor/media-model';
 import { normalizeProjectDurations } from './editor/preview';
 import { api } from './editor/api';
-import { useEditor, type TrashEntry } from './editor/store';
+import { clearLocalProjectDraft, readLocalProjectDraft, useEditor, type LocalProjectDraft, type TrashEntry } from './editor/store';
 
 function Glyph({ children }: { children: string }) { return <span className="glyph" aria-hidden="true">{children}</span>; }
 
 type DashboardProject = Project & { sizeBytes?: number };
+type RecoveryCandidate = { serverProject: Project; draft: LocalProjectDraft; recoveredProject: Project; conflicts: string[] };
 
 function formatBytes(bytes: number | undefined, language: 'tr' | 'en') {
   if (bytes === undefined) return '—';
@@ -39,7 +41,9 @@ function formatBytes(bytes: number | undefined, language: 'tr' | 'en') {
 
 function App() {
   const { t } = useI18n();
-  const [screen, setScreen] = useState<'dashboard' | 'editor'>('dashboard');
+  const renderProjectId = useMemo(() => new URLSearchParams(window.location.search).get('renderProject'), []);
+  const renderMode = Boolean(renderProjectId);
+  const [screen, setScreen] = useState<'dashboard' | 'editor'>(renderMode ? 'editor' : 'dashboard');
   const [screenTransition, setScreenTransition] = useState<'idle' | 'exit' | 'enter'>('idle');
   const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [trash, setTrash] = useState<TrashEntry[]>([]);
@@ -48,10 +52,18 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<Project | null>(null);
   const [trashAction, setTrashAction] = useState<{ kind: 'restore' | 'purge'; entry: TrashEntry } | null>(null);
+  const [recoveryCandidate, setRecoveryCandidate] = useState<RecoveryCandidate | null>(null);
   const project = useEditor((state) => state.project);
   const setProject = useEditor((state) => state.setProject);
+  const restoreLocalDraft = useEditor((state) => state.restoreLocalDraft);
   const setSettings = useEditor((state) => state.setSettings);
   const theme = useEditor((state) => state.theme);
+
+  useEffect(() => {
+    if (!renderMode) return;
+    document.documentElement.dataset.cutlocRender = 'true';
+    return () => { delete document.documentElement.dataset.cutlocRender; };
+  }, [renderMode]);
 
   const transitionTo = (nextScreen: 'dashboard' | 'editor') => {
     if (nextScreen === screen) return;
@@ -64,6 +76,16 @@ function App() {
   };
 
   useEffect(() => {
+    if (renderProjectId) {
+      void Promise.all([
+        api<Project>(`/api/projects/${encodeURIComponent(renderProjectId)}`),
+        api<Settings>('/api/settings'),
+      ]).then(([loadedProject, loadedSettings]) => {
+        setSettings({ ...loadedSettings, proxyQuality: 'high' });
+        setProject(normalizeProjectDurations(loadedProject));
+      }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : t('dashboard.serverUnavailable'))).finally(() => setLoading(false));
+      return;
+    }
     void Promise.all([
       api<DashboardProject[]>('/api/projects'),
       api<Settings>('/api/settings'),
@@ -73,13 +95,26 @@ function App() {
       setSettings(settings);
       setTrash(trashList);
     }).catch((error: unknown) => setNotice(error instanceof Error ? error.message : t('dashboard.serverUnavailable'))).finally(() => setLoading(false));
-  }, [setSettings]);
+  }, [renderProjectId, setProject, setSettings]);
 
   const openProject = async (id: string) => {
     try {
       const loaded = await api<Project>(`/api/projects/${id}`);
       const normalized = normalizeProjectDurations(loaded);
-      const ready = normalized === loaded ? loaded : await api<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(normalized) }).catch(() => normalized);
+      const ready = normalized === loaded ? loaded : await api<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ ...normalized, revision: loaded.revision }) });
+      const draft = readLocalProjectDraft(id);
+      if (draft) {
+        const merged = mergeProjectThreeWay(draft.baseProject, draft.project, ready);
+        const recoveredProject = { ...merged.project, revision: ready.revision };
+        if (merged.conflicts.length) {
+          setRecoveryCandidate({ serverProject: ready, draft, recoveredProject, conflicts: merged.conflicts });
+          return;
+        }
+        restoreLocalDraft(recoveredProject, ready);
+        setNotice(t('recovery.restoredDraft'));
+        transitionTo('editor');
+        return;
+      }
       setProject(ready);
       transitionTo('editor');
     } catch (error) { setNotice(error instanceof Error ? error.message : t('dashboard.openFailed')); }
@@ -114,14 +149,16 @@ function App() {
 
   const requestDeleteProject = (id: string) => { const candidate = projects.find((item) => item.id === id); if (candidate) setDeleteCandidate(candidate); };
   const startWithMedia = async (file: File) => {
+    let createdProjectId: string | null = null;
     try {
-      const created = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, '') || 'Yeni proje' }) });
+      const created = await api<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, '') || t('project.defaultName') }) });
+      createdProjectId = created.id;
       const form = new FormData();
       form.append('file', file);
       const response = await fetch('/api/projects/' + created.id + '/media', { method: 'POST', body: form });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error || 'Medya import edilemedi');
+        throw new Error(body.error || t('editor.mediaImportFailed'));
       }
       const result = await response.json() as { asset: Asset; project: Project };
       setProjects((items) => [result.project, ...items.filter((item) => item.id !== result.project.id)]);
@@ -138,10 +175,16 @@ function App() {
       });
       useEditor.getState().setSelected(clip.id, targetId);
       useEditor.getState().setPanel('media');
-      useEditor.getState().setNotice('Medya haz\u0131r: ' + result.asset.name + ' timeline\x27a eklendi.');
+      useEditor.getState().setNotice(t('editor.assetAddedToTimeline', { name: result.asset.name }));
       transitionTo('editor');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Medya ba\u015flat\u0131lamad\u0131');
+      if (createdProjectId) {
+        try {
+          const removed = await api<{ trashId: string }>(`/api/projects/${createdProjectId}`, { method: 'DELETE' });
+          await api(`/api/trash/${removed.trashId}`, { method: 'DELETE' });
+        } catch { /* best-effort cleanup for the project created by this failed workflow */ }
+      }
+      setNotice(error instanceof Error ? error.message : t('editor.mediaImportFailed'));
     }
   };
 
@@ -206,6 +249,28 @@ function App() {
     {screen === 'dashboard' && showSettings && <SettingsModal settings={useEditor.getState().settings} onClose={() => setShowSettings(false)} />}
     {screen === 'dashboard' && deleteCandidate && <ConfirmDialog title={t('dashboard.confirmTitle')} message={t('dashboard.confirmMessage', { name: deleteCandidate.name })} confirmLabel={t('dashboard.moveToTrash')} onConfirm={() => void deleteProject()} onClose={() => setDeleteCandidate(null)} />}
     {screen === 'dashboard' && trashAction && <ConfirmDialog title={t(trashAction.kind === 'restore' ? 'common.restore' : 'common.deletePermanently')} message={t(trashAction.kind === 'restore' ? 'dashboard.restoreConfirm' : 'dashboard.purgeConfirm', { name: trashAction.entry.name })} confirmLabel={t(trashAction.kind === 'restore' ? 'common.restore' : 'common.deletePermanently')} danger={trashAction.kind === 'purge'} onConfirm={() => { const action = trashAction; setTrashAction(null); void (action.kind === 'restore' ? restoreTrash(action.entry.trashId) : purgeTrash(action.entry.trashId)); }} onClose={() => setTrashAction(null)} />}
+    {screen === 'dashboard' && recoveryCandidate && <ConfirmDialog
+      title={t('recovery.title')}
+      message={t('recovery.conflictMessage', { count: recoveryCandidate.conflicts.length })}
+      confirmLabel={t('recovery.useDraft')}
+      cancelLabel={t('recovery.useServer')}
+      danger={false}
+      onConfirm={() => {
+        const candidate = recoveryCandidate;
+        setRecoveryCandidate(null);
+        restoreLocalDraft(candidate.recoveredProject, candidate.serverProject);
+        setNotice(t('recovery.restoredDraft'));
+        transitionTo('editor');
+      }}
+      onCancel={() => {
+        const candidate = recoveryCandidate;
+        setRecoveryCandidate(null);
+        clearLocalProjectDraft(candidate.serverProject.id);
+        setProject(candidate.serverProject);
+        transitionTo('editor');
+      }}
+      onClose={() => setRecoveryCandidate(null)}
+    />}
     {notice && <div className="toast toast-error"><Glyph>!</Glyph>{notice}<button onClick={() => setNotice('')}>×</button></div>}
   </div>;
 }
@@ -260,7 +325,7 @@ function Dashboard({ projects, trash, loading, onCreate, onStartWithMedia, onOpe
       <div className="dashboard-insights"><span><b>{projects.reduce((total, item) => total + item.assets.length, 0)}</b> {t('dashboard.mediaAssets', { count: projects.reduce((total, item) => total + item.assets.length, 0) }).replace(/^\d+\s*/, '')}</span><span><b>{projects.filter((item) => item.duration > 0).length}</b> {t('dashboard.activeTimelines', { count: projects.filter((item) => item.duration > 0).length }).replace(/^\d+\s*/, '')}</span><span><b>{formatBytes(projects.reduce((total, item) => total + (item.sizeBytes ?? 0), 0), language)}</b> {t('dashboard.storageUsed')}</span></div>
       {loading ? <div className="empty-state"><div className="spinner" /> {t('dashboard.loading')}</div> : projects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">✦</div><h3>{t('dashboard.emptyTitle')}</h3><p>{t('dashboard.emptyCopy')}</p><button className="secondary-button" onClick={onCreate}>{t('dashboard.command.new')}</button></div> : visibleProjects.length === 0 ? <div className="empty-state empty-dashed"><div className="empty-icon">⌕</div><h3>{t('dashboard.noSearchTitle')}</h3><p>{t('dashboard.noSearchCopy')}</p></div> : <div className="project-grid">{visibleProjects.map((item) => <ProjectCard key={item.id} project={item} onOpen={() => onOpen(item.id)} onDelete={() => onDelete(item.id)} />)}</div>}
     </section>
-    <footer className="dashboard-footer"><span>CutLoc Studio</span><span><b>v1.0.0</b></span></footer>
+    <footer className="dashboard-footer"><span>CutLoc Studio</span><span><b>v1.1.0</b></span></footer>
     {bundleError && <MessageDialog title={t('dashboard.importFailed')} message={t('dashboard.bundleError')} onClose={() => setBundleError(false)} />}
   </main>;
 }

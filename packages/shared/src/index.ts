@@ -44,6 +44,17 @@ export type CanvasAspect = z.infer<typeof CanvasAspectSchema>;
 export const CanvasFitModeSchema = z.enum(['fit', 'fill', 'smart', 'keep']).default('fit');
 export type CanvasFitMode = z.infer<typeof CanvasFitModeSchema>;
 
+/**
+ * Resolve the authored canvas framing to the media fit understood by both the
+ * browser compositor and FFmpeg. `keep` preserves the clip-level choice while
+ * `smart` currently uses the deterministic fill/cover contract.
+ */
+export function effectiveVisualFit(canvasFitMode: CanvasFitMode | undefined, clipFit: Transform['fit']): Transform['fit'] {
+  if (canvasFitMode === 'fill' || canvasFitMode === 'smart') return 'cover';
+  if (canvasFitMode === 'fit') return 'contain';
+  return clipFit;
+}
+
 export const KeyframeProperty = z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume']);
 export type KeyframeProperty = z.infer<typeof KeyframeProperty>;
 
@@ -53,6 +64,15 @@ export const KeyframeSchema = z.object({
   time: z.number().nonnegative(),
   value: z.number(),
   easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']).default('linear'),
+}).superRefine((keyframe, context) => {
+  const valid = keyframe.property === 'opacity'
+    ? keyframe.value >= 0 && keyframe.value <= 1
+    : keyframe.property === 'volume'
+      ? keyframe.value >= 0 && keyframe.value <= 2
+      : keyframe.property === 'scale'
+        ? keyframe.value > 0
+        : true;
+  if (!valid) context.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: `Invalid ${keyframe.property} keyframe value` });
 });
 export type Keyframe = z.infer<typeof KeyframeSchema>;
 
@@ -351,6 +371,19 @@ export const ClipSchema = z.object({
 });
 export type Clip = z.infer<typeof ClipSchema>;
 
+/** Clone a clip for insertion while preserving globally unique entity IDs. */
+export function cloneClipWithFreshIds(clip: Clip, createId: (kind: 'clip' | 'keyframe') => string): Clip {
+  const copy = structuredClone(clip);
+  copy.id = createId('clip');
+  copy.keyframes = copy.keyframes.map((keyframe) => ({ ...keyframe, id: createId('keyframe') }));
+  return copy;
+}
+
+/** Style/keyframe paste must never reuse IDs already present in the project. */
+export function cloneKeyframesWithFreshIds(keyframes: readonly Keyframe[], createId: () => string): Keyframe[] {
+  return keyframes.map((keyframe) => ({ ...structuredClone(keyframe), id: createId() }));
+}
+
 /** Keep imminent media mounted so hard cuts do not wait on load/seek at the boundary. */
 export function shouldMountPreviewMedia(clip: Pick<Clip, 'type' | 'start' | 'duration'>, currentTime: number, lookAheadSeconds = 3) {
   if (clip.type !== 'video' && clip.type !== 'image') return false;
@@ -390,7 +423,7 @@ export const TrackSchema = z.object({
   id: EntityIdSchema,
   type: TrackType,
   name: z.string(),
-  order: z.number().int(),
+  order: z.number().int().nonnegative(),
   locked: z.boolean().default(false),
   hidden: z.boolean().default(false),
   muted: z.boolean().default(false),
@@ -440,9 +473,13 @@ export const ProjectSchema = ProjectBaseSchema.superRefine((project, context) =>
   });
 
   const assets = new Map(project.assets.map((asset) => [asset.id, asset]));
+  const trackOrders = new Map<number, number>();
   let requiredDuration = 0;
   project.tracks.forEach((track, trackIndex) => {
     register(track.id, ['tracks', trackIndex, 'id'], 'track');
+    const previousTrackIndex = trackOrders.get(track.order);
+    if (previousTrackIndex !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks', trackIndex, 'order'], message: `Duplicate track order ${track.order}` });
+    else trackOrders.set(track.order, trackIndex);
     track.clips.forEach((clip, clipIndex) => {
       const clipPath: Array<string | number> = ['tracks', trackIndex, 'clips', clipIndex];
       register(clip.id, [...clipPath, 'id'], 'clip');
@@ -498,6 +535,233 @@ export function adjustmentLayersForVisual(plan: readonly VisualLayerPlanItem[], 
     && stackOrder > visual.stackOrder
     && time >= clip.start
     && time < clip.start + clip.duration);
+}
+
+export type FrameWipe = { progress: number; direction: 'left' | 'right' | 'up' | 'down' | 'center' };
+export type FrameVisualValues = {
+  localTime: number;
+  sourceTime: number;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  opacity: number;
+  volume: number;
+  speed: number;
+  wipe: FrameWipe | null;
+};
+
+export type MediaFrameGeometry = {
+  full: { width: number; height: number };
+  render: { width: number; height: number };
+  frame: { width: number; height: number };
+  source: { width: number; height: number; left: number; top: number };
+};
+
+export type TextFrameGeometry = { width: number; height: number };
+
+export type FrameVisualLayer = VisualLayerPlanItem & {
+  asset?: Asset;
+  values: FrameVisualValues;
+  filters: Filter;
+  fit: Transform['fit'];
+  mediaGeometry?: MediaFrameGeometry;
+  textGeometry?: TextFrameGeometry;
+};
+
+export type FrameAudioLayer = {
+  clip: Clip;
+  track: Track;
+  asset: Asset;
+  values: FrameVisualValues;
+  gain: number;
+};
+
+export type FrameRenderPlan = {
+  frameIndex: number;
+  time: number;
+  fps: number;
+  canvas: Project['canvas'];
+  visual: FrameVisualLayer[];
+  audio: FrameAudioLayer[];
+};
+
+function transitionProgress(value: number, easing: Transition['easing'] = 'ease-in-out') {
+  const time = clampNumber(value, 0, 1, 0);
+  if (easing === 'ease-in') return time * time;
+  if (easing === 'ease-out') return 1 - (1 - time) ** 2;
+  if (easing === 'ease-in-out') return time < 0.5 ? 2 * time * time : 1 - (-2 * time + 2) ** 2 / 2;
+  return time;
+}
+
+function transitionVector(direction: Transition['direction']) {
+  if (direction === 'right') return { x: 1, y: 0 };
+  if (direction === 'up') return { x: 0, y: -1 };
+  if (direction === 'down') return { x: 0, y: 1 };
+  if (direction === 'center') return { x: 0, y: 0 };
+  return { x: -1, y: 0 };
+}
+
+/**
+ * Evaluate every time-dependent clip property once for both render backends.
+ * The browser consumes these numbers directly; the FFmpeg compiler mirrors the
+ * same expressions for continuous rendering and is regression-tested against
+ * this frame contract at boundaries and keyframes.
+ */
+export function evaluateClipFrame(clip: Clip, projectTime: number): FrameVisualValues {
+  const localTime = clampNumber(projectTime - clip.start, 0, clip.duration, 0);
+  const remaining = clip.duration - localTime;
+  let transitionOpacity = 1;
+  let transitionX = 0;
+  let transitionY = 0;
+  let transitionScale = 1;
+  let wipe: FrameWipe | null = null;
+  const applyTransition = (transition: Transition, progress: number, entering: boolean) => {
+    if (transition.type === 'none') return;
+    const eased = transitionProgress(progress, transition.easing);
+    const intensity = clampNumber(transition.intensity ?? 1, 0.1, 2, 1);
+    const direction = transition.direction ?? 'left';
+    if (transition.type === 'fade' || transition.type === 'dissolve') transitionOpacity *= eased;
+    if (transition.type === 'wipe') wipe = !wipe || eased < wipe.progress ? { progress: eased, direction } : wipe;
+    if (transition.type === 'slide') {
+      const vector = transitionVector(direction);
+      const distance = (1 - eased) * 120 * intensity;
+      transitionX += vector.x * distance;
+      transitionY += vector.y * distance;
+    }
+    if (transition.type === 'zoom') {
+      const amount = 0.18 * intensity;
+      transitionScale *= entering ? Math.max(0.12, 1 - (1 - eased) * amount) : 1 + (1 - eased) * amount;
+    }
+  };
+  const enter = clampNumber(clip.transitionIn?.duration ?? 0, 0, clip.duration, 0);
+  const leave = clampNumber(clip.transitionOut?.duration ?? 0, 0, clip.duration, 0);
+  if (enter > 0 && localTime < enter) applyTransition(clip.transitionIn, localTime / enter, true);
+  if (leave > 0 && remaining < leave) applyTransition(clip.transitionOut, remaining / leave, false);
+  const usesTransitionFadeIn = clip.transitionIn.type === 'fade' || clip.transitionIn.type === 'dissolve';
+  const usesTransitionFadeOut = clip.transitionOut.type === 'fade' || clip.transitionOut.type === 'dissolve';
+  const visualFadeIn = !usesTransitionFadeIn && (clip.fadeIn ?? 0) > 0 ? clampNumber(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1, 1) : 1;
+  const visualFadeOut = !usesTransitionFadeOut && (clip.fadeOut ?? 0) > 0 ? clampNumber(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1, 1) : 1;
+  const audioFadeIn = (clip.fadeIn ?? 0) > 0 ? clampNumber(localTime / Math.max(0.000001, clip.fadeIn!), 0, 1, 1) : 1;
+  const audioFadeOut = (clip.fadeOut ?? 0) > 0 ? clampNumber(remaining / Math.max(0.000001, clip.fadeOut!), 0, 1, 1) : 1;
+  return {
+    localTime,
+    sourceTime: clip.sourceStart + sourceTimeAt(clip.speedCurve, clip.speed, localTime),
+    x: interpolateKeyframes(clip.keyframes, 'x', localTime, clip.transform.x) + transitionX,
+    y: interpolateKeyframes(clip.keyframes, 'y', localTime, clip.transform.y) + transitionY,
+    scale: interpolateKeyframes(clip.keyframes, 'scale', localTime, clip.transform.scale) * transitionScale,
+    rotation: interpolateKeyframes(clip.keyframes, 'rotation', localTime, clip.transform.rotation),
+    opacity: clampNumber(interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity) * transitionOpacity * visualFadeIn * visualFadeOut, 0, 1, 1),
+    volume: clampNumber(interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume) * audioFadeIn * audioFadeOut, 0, 2, 1),
+    speed: speedAt(clip.speedCurve, clip.speed, localTime),
+    wipe,
+  };
+}
+
+/** Combine clip and active higher adjustment-layer filters deterministically. */
+export function mergeVisualFilters(base: Filter, layers: readonly Filter[]): Filter {
+  const stack = [base, ...layers];
+  return {
+    ...base,
+    brightness: clampNumber(stack.reduce((sum, filter) => sum + (filter.brightness ?? 0), 0), -1, 1, 0),
+    contrast: clampNumber(stack.reduce((sum, filter) => sum + (filter.contrast ?? 0), 0), -1, 1, 0),
+    saturation: clampNumber(stack.reduce((sum, filter) => sum + (filter.saturation ?? 0), 0), -1, 1, 0),
+    temperature: clampNumber(stack.reduce((sum, filter) => sum + (filter.temperature ?? 0), 0), -1, 1, 0),
+    hue: clampNumber(stack.reduce((sum, filter) => sum + (filter.hue ?? 0), 0), -180, 180, 0),
+    vignette: clampNumber(stack.reduce((sum, filter) => sum + (filter.vignette ?? 0), 0), 0, 1, 0),
+    blur: clampNumber(stack.reduce((sum, filter) => sum + (filter.blur ?? 0), 0), 0, 24, 0),
+    grayscale: clampNumber(stack.reduce((sum, filter) => sum + (filter.grayscale ?? 0), 0), 0, 1, 0),
+    chromaKey: [...stack].reverse().find((filter) => filter.chromaKey)?.chromaKey,
+  };
+}
+
+function fittedBounds(sourceWidth: number, sourceHeight: number, canvasWidth: number, canvasHeight: number, fit: Transform['fit']) {
+  if (fit === 'stretch') return { width: canvasWidth, height: canvasHeight };
+  const ratio = fit === 'cover'
+    ? Math.max(canvasWidth / sourceWidth, canvasHeight / sourceHeight)
+    : Math.min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
+  return { width: sourceWidth * ratio, height: sourceHeight * ratio };
+}
+
+/** Canvas-space media geometry shared by selection UI and the fast compositor. */
+export function resolveMediaFrameGeometry(asset: Asset, crop: Clip['crop'], canvasWidth: number, canvasHeight: number, fit: Transform['fit']): MediaFrameGeometry {
+  const sourceWidth = Math.max(1, asset.width ?? canvasWidth);
+  const sourceHeight = Math.max(1, asset.height ?? canvasHeight);
+  const full = fittedBounds(sourceWidth, sourceHeight, canvasWidth, canvasHeight, fit);
+  const cropX = crop ? clampNumber(crop.x, 0, 0.99, 0) : 0;
+  const cropY = crop ? clampNumber(crop.y, 0, 0.99, 0) : 0;
+  const cropWidth = crop ? clampNumber(Math.min(crop.width, 1 - cropX), 0.01, 1, 1) : 1;
+  const cropHeight = crop ? clampNumber(Math.min(crop.height, 1 - cropY), 0.01, 1, 1) : 1;
+  const render = crop
+    ? fittedBounds(Math.max(1, sourceWidth * cropWidth), Math.max(1, sourceHeight * cropHeight), canvasWidth, canvasHeight, fit)
+    : full;
+  const frame = fit === 'cover' || fit === 'stretch' ? { width: canvasWidth, height: canvasHeight } : render;
+  const innerWidth = crop ? render.width / cropWidth : full.width;
+  const innerHeight = crop ? render.height / cropHeight : full.height;
+  return {
+    full,
+    render,
+    frame,
+    source: {
+      width: innerWidth,
+      height: innerHeight,
+      left: (frame.width - render.width) / 2 - cropX * innerWidth,
+      top: (frame.height - render.height) / 2 - cropY * innerHeight,
+    },
+  };
+}
+
+/** Stable text box estimate used by both canvas drawing and export planning. */
+export function resolveTextFrameGeometry(style: TextStyle, canvasWidth: number, canvasHeight: number, _renderScale = 1): TextFrameGeometry {
+  // Geometry is always expressed in authored canvas pixels. Display zoom must
+  // never change layout or the preview will disagree with an exported frame.
+  const effectiveFontSize = style.fontSize;
+  const lines = normalizeTextLineBreaks(style.text).split('\n');
+  const longestLine = Math.max(1, ...lines.map((line) => line.length));
+  const estimatedWidth = longestLine * effectiveFontSize * 0.58 + Math.max(0, longestLine - 1) * style.letterSpacing + style.padding * 2;
+  return {
+    width: Math.min(canvasWidth * 0.9, Math.max(64, estimatedWidth)),
+    height: Math.min(canvasHeight * 0.75, Math.max(effectiveFontSize, lines.length * effectiveFontSize * style.lineHeight + style.padding * 2)),
+  };
+}
+
+/** Build the canonical, frame-quantized preview/export semantics for one frame. */
+export function evaluateFrameRenderPlan(project: Project, requestedTime: number): FrameRenderPlan {
+  const fps = Number.isFinite(project.canvas.fps) && project.canvas.fps > 0 ? project.canvas.fps : 30;
+  const frameIndex = Math.max(0, Math.round(clampNumber(requestedTime, 0, project.duration, 0) * fps));
+  const time = Math.min(project.duration, frameIndex / fps);
+  const plan = visualLayerPlan(project);
+  const assets = new Map(project.assets.map((asset) => [asset.id, asset]));
+  const visual = plan.flatMap((item): FrameVisualLayer[] => {
+    const { clip } = item;
+    if (clip.adjustment || time < clip.start || time >= clip.start + clip.duration) return [];
+    const asset = clip.assetId ? assets.get(clip.assetId) : undefined;
+    const fit = effectiveVisualFit(project.canvas.fitMode, clip.transform.fit);
+    const filters = mergeVisualFilters(clip.filters, adjustmentLayersForVisual(plan, item, time).map((layer) => layer.clip.filters));
+    const values = evaluateClipFrame(clip, time);
+    const textStyle = clip.textStyle;
+    return [{
+      ...item,
+      asset,
+      values,
+      filters,
+      fit,
+      mediaGeometry: asset && (clip.type === 'video' || clip.type === 'image')
+        ? resolveMediaFrameGeometry(asset, clip.crop, project.canvas.width, project.canvas.height, fit)
+        : undefined,
+      textGeometry: textStyle ? resolveTextFrameGeometry(textStyle, project.canvas.width, project.canvas.height) : undefined,
+    }];
+  });
+  const audio = [...project.tracks]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((track): FrameAudioLayer[] => track.muted ? [] : track.clips.flatMap((clip): FrameAudioLayer[] => {
+      if (time < clip.start || time >= clip.start + clip.duration || (clip.type !== 'audio' && clip.type !== 'video') || !clip.assetId) return [];
+      const asset = assets.get(clip.assetId);
+      if (!asset?.hasAudio) return [];
+      const values = evaluateClipFrame(clip, time);
+      return [{ clip, track, asset, values, gain: clampNumber(values.volume * track.volume, 0, 4, 1) }];
+    }));
+  return { frameIndex, time, fps, canvas: project.canvas, visual, audio };
 }
 
 export type ProjectMergeResult = { project: Project; conflicts: string[] };
@@ -663,7 +927,7 @@ export function exportDimensions(
   return { width: even(rawWidth), height: even(rawHeight) };
 }
 
-export const ExportFpsSchema = z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]);
+export const ExportFpsSchema = z.union([z.literal(23.976), z.literal(24), z.literal(25), z.literal(29.97), z.literal(30), z.literal(50), z.literal(59.94), z.literal(60)]);
 export type ExportFps = z.infer<typeof ExportFpsSchema>;
 
 export const ExportQualitySchema = z.enum(['draft', 'standard', 'high', 'custom']);
@@ -784,13 +1048,18 @@ export function enforceLockedTrackInvariants(previous: Project, candidate: Proje
   const lockedTracks = previous.tracks.filter((track) => track.locked);
   if (!lockedTracks.length) return candidate;
   const next = structuredClone(candidate);
-  const lockedClipIds = new Set(lockedTracks.flatMap((track) => track.clips.map((clip) => clip.id)));
+  const explicitlyUnlockedTrackIds = new Set(lockedTracks
+    .filter((original) => next.tracks.some((track) => track.id === original.id && !track.locked))
+    .map((track) => track.id));
+  const lockedClipIds = new Set(lockedTracks
+    .filter((track) => !explicitlyUnlockedTrackIds.has(track.id))
+    .flatMap((track) => track.clips.map((clip) => clip.id)));
   for (const track of next.tracks) track.clips = track.clips.filter((clip) => !lockedClipIds.has(clip.id));
   for (const original of lockedTracks) {
     const previousIndex = previous.tracks.findIndex((track) => track.id === original.id);
     const nextIndex = next.tracks.findIndex((track) => track.id === original.id);
     const target = nextIndex >= 0 ? next.tracks[nextIndex] : undefined;
-    if (target && !target.locked) continue;
+    if (explicitlyUnlockedTrackIds.has(original.id)) continue;
     if (nextIndex >= 0) next.tracks.splice(nextIndex, 1);
     next.tracks.splice(Math.min(previousIndex, next.tracks.length), 0, structuredClone(original));
   }

@@ -5469,6 +5469,31 @@ body {
   gap: 4px;
 }
 
+.app-shell[data-theme] .keyframe-quick-guide {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 4px 7px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 26%, var(--theme-line));
+  border-radius: 8px;
+  color: var(--theme-muted);
+  background: color-mix(in srgb, var(--theme-accent) 5%, var(--theme-panel));
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.app-shell[data-theme] .keyframe-quick-guide b {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  font: 9px 'DM Mono';
+}
+
 .app-shell[data-theme] .keyframe-property-row {
   min-height: 38px;
   display: grid;
@@ -5548,6 +5573,27 @@ body {
   background: var(--theme-accent);
   font: 9px 'DM Mono';
   font-style: normal;
+}
+
+.app-shell[data-theme] .keyframe-live-editor {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--theme-line);
+  border-radius: 8px;
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .keyframe-live-editor > small {
+  color: var(--theme-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.app-shell[data-theme] .keyframe-live-editor > strong {
+  color: var(--theme-accent);
+  font: 9px 'DM Mono';
 }
 
 .app-shell[data-theme] #inspector-mask .field-grid {
@@ -5741,11 +5787,11 @@ body {
 .app-shell[data-theme] .inspector-tool-tabs {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(58px, 1fr);
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
   margin: 8px 0;
   padding: 4px;
-  overflow-x: auto;
+  overflow-x: hidden;
   border: 1px solid var(--theme-line);
   border-radius: 11px;
   background: var(--theme-panel-soft);
@@ -6216,7 +6262,7 @@ body {
 
 @container (max-width: 300px) {
   .app-shell[data-theme] .inspector-tool-tabs {
-    grid-auto-columns: 62px;
+    grid-auto-columns: minmax(0, 1fr);
   }
 
   .app-shell[data-theme] .field-grid,

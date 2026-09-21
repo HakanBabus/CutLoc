@@ -27,8 +27,9 @@ This checklist defines the v1.1.0 source-release gate. Publishing remains a sepa
 5. Confirm the smoke uses the bundled FFmpeg binaries on Windows; Linux may select a full system build when the bundled binary lacks required filters.
 6. Verify `cutloc status --json`, `doctor --json`, `restart`, and `stop` against an isolated `CUTLOC_HOME`; confirm status/doctor report a custom `DATA_DIR`, the runtime log is created, shutdown refuses an active session until explicitly forced, and an open browser event stream does not leave forced shutdown hanging.
 7. Verify setup migration with both empty runtime scaffolding and a destination containing a conflicting project; no existing target or legacy source may be overwritten.
-8. Confirm GitHub CI passes from the exact candidate commit.
-9. Run `git diff --check` and confirm no generated media, runtime data, credentials, or `AGENTS.md` file is staged.
+8. Verify editor keyframes by enabling one property, moving the playhead, and changing its value; confirm the second point is created automatically. Verify the equivalent `keyframes list/set/remove/clear` CLI flow.
+9. Confirm GitHub CI passes from the exact candidate commit.
+10. Run `git diff --check` and confirm no generated media, runtime data, credentials, or `AGENTS.md` file is staged.
 
 ## Version and documentation
 

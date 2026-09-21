@@ -158,6 +158,25 @@ projects import <file>
 
 `projects create` accepts `--preset shorts`, or explicit `--aspect`, `--fps`, and `--background` values. `projects edit` applies revision-aware atomic operations including `setName`, `setCanvas`, `addTrack`, `removeTrack`, `addClip`, `updateClip`, `removeClip`, `addMarker`, and `removeMarker`. Use `--dry-run` before mutation. `projects apply` remains available for complete-document replacement. `projects delete` is recoverable through trash until that trash entry is permanently deleted.
 
+### Keyframes
+
+```text
+keyframes list <project-id> <clip-id> [--property <name>]
+keyframes set <project-id> <clip-id> <property> --time <seconds> --value <number> [--easing <name>]
+keyframes remove <project-id> <clip-id> <keyframe-id>
+keyframes clear <project-id> <clip-id> [--property <name>]
+```
+
+Supported properties are `x`, `y`, `scale`, `rotation`, `opacity`, and `volume`. Time is always measured in seconds from the start of the clip, not from the start of the project. `set` creates a point or updates the point already on the same video frame, so agents can safely repeat it. Use `list` to discover generated point IDs before `remove`; use `clear --property x` to remove one motion channel without touching the others.
+
+```powershell
+cutloc keyframes set <project-id> <clip-id> x --time 0 --value -600 --easing ease-out
+cutloc keyframes set <project-id> <clip-id> x --time 0.6 --value 0 --easing ease-out
+cutloc keyframes list <project-id> <clip-id> --property x
+```
+
+Values use canvas pixels for `x`/`y`, degrees for `rotation`, a multiplier for `scale`, `0..1` for `opacity`, and `0..2` for `volume`. Easing may be `linear`, `ease-in`, `ease-out`, or `ease-in-out`.
+
 ### Media
 
 ```text

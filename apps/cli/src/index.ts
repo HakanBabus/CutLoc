@@ -23,7 +23,7 @@ import {
   runtimePaths,
   type RuntimeInstance,
 } from '@cutloc/runtime';
-import { ProjectSchema, type Clip, type Project, type ProjectAccessLease, type Track } from '@cutloc/shared';
+import { ProjectSchema, type Clip, type Keyframe, type KeyframeProperty, type Project, type ProjectAccessLease, type Track } from '@cutloc/shared';
 
 type JsonObject = Record<string, unknown>;
 type LeaseHandle = { lease: ProjectAccessLease; token: string };
@@ -51,6 +51,12 @@ Projects:
   projects edit <id> (--file <plan.json> | --data <json> | --stdin) [--dry-run] [--include-project]
   projects duplicate <id> | delete <id> | bundle <id> --out <file>
   projects import <file>
+
+Keyframes:
+  keyframes list <project-id> <clip-id> [--property <name>]
+  keyframes set <project-id> <clip-id> <property> --time <seconds> --value <number> [--easing <name>]
+  keyframes remove <project-id> <clip-id> <keyframe-id>
+  keyframes clear <project-id> <clip-id> [--property <name>]
 
 Media and recovery:
   media add <project-id> <file> [--wait] [--include-project]
@@ -107,7 +113,7 @@ const agentGuide = {
     'Use media commands for binary uploads and relinks.',
     'Treat projects delete, media remove, backup restore, and trash delete as destructive.',
     'A mutating project command temporarily makes that project read-only in the web editor.',
-    'Stop and restart refuse active media jobs; finish or cancel those jobs first. Use --force only to close known active editor sessions.',
+    'Stop and restart refuse active media and preview work; finish or cancel that work first. Use --force only to close known active editor sessions.',
     'Do not retry a revision conflict by discarding the newer server project.',
     'Generic api and session commands do not stream /api/events.',
   ],
@@ -118,10 +124,29 @@ const agentGuide = {
     managedAreas: ['id', 'revision', 'updatedAt', 'asset file paths', 'derived media paths'],
     invariants: ['unique IDs', 'valid asset references', 'source ranges within media duration', 'keyframe and speed-point times within clip duration', 'timeline duration derived from clips'],
   },
+  keyframeEditing: {
+    commands: {
+      inspect: 'keyframes list <project-id> <clip-id> [--property <name>]',
+      createOrUpdate: 'keyframes set <project-id> <clip-id> <property> --time <clip-local-seconds> --value <number> [--easing <name>]',
+      remove: 'keyframes remove <project-id> <clip-id> <keyframe-id>',
+      clear: 'keyframes clear <project-id> <clip-id> [--property <name>]',
+    },
+    properties: {
+      x: 'horizontal canvas pixels',
+      y: 'vertical canvas pixels',
+      scale: 'size multiplier; 1 is original size',
+      rotation: 'degrees',
+      opacity: '0 to 1',
+      volume: '0 to 2',
+    },
+    easing: ['linear', 'ease-in', 'ease-out', 'ease-in-out'],
+    rules: ['time is relative to the start of the clip, not the project timeline', 'set is idempotent within the same video frame', 'use list before remove to obtain the generated keyframe ID'],
+  },
   commands: {
     runtime: ['open', 'status --json', 'doctor --json', 'stop [--force]', 'restart [--force]'],
     discovery: ['agent guide', 'agent inspect [project-id] [--full] [--limit <n>] [--cursor <n>] [--no-guide]', 'projects list', 'projects get <id>', 'media health <project-id>', 'backups list <project-id>', 'jobs list', 'settings get'],
     projects: ['projects create [name] [--preset shorts]', 'projects edit <id> (--file <plan> | --stdin | --data <json>) [--dry-run]', 'projects apply <id> (--file <json> | --stdin | --data <json>)', 'projects duplicate <id>', 'projects bundle <id> --out <file>', 'projects import <file>', 'projects delete <id>'],
+    keyframes: ['keyframes list <project-id> <clip-id> [--property <name>]', 'keyframes set <project-id> <clip-id> <property> --time <seconds> --value <number> [--easing <name>]', 'keyframes remove <project-id> <clip-id> <keyframe-id>', 'keyframes clear <project-id> <clip-id> [--property <name>]'],
     media: ['media add <project-id> <file> [--wait]', 'media add-many <project-id> <files...> [--wait]', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
     recovery: ['backups restore <project-id> <file-name>', 'trash list', 'trash restore <trash-id>', 'trash delete <trash-id>'],
     export: ['export preflight <project-id> [--file <options.json>]', 'export start <project-id> [--file <options.json>]', 'jobs wait <job-id>', 'jobs watch <job-id>', 'jobs cancel <job-id>', 'jobs download <job-id> --out <file>'],
@@ -133,6 +158,8 @@ const agentGuide = {
     'agent inspect',
     'projects get <project-id> --out project.json',
     'projects apply <project-id> --file project.json',
+    'keyframes set <project-id> <clip-id> x --time 0 --value -600 --easing ease-out',
+    'keyframes set <project-id> <clip-id> x --time 0.6 --value 0 --easing ease-out',
     'export preflight <project-id> --data {"format":"mp4","resolution":"1080p","fps":30,"quality":"standard"}',
   ],
 } as const;
@@ -185,6 +212,12 @@ function nonNegativeNumber(value: string | undefined, name: string, fallback: nu
   if (value === undefined) return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative number.`);
+  return parsed;
+}
+
+function finiteNumber(value: string | undefined, name: string) {
+  const parsed = Number(value);
+  if (value === undefined || !Number.isFinite(parsed)) throw new Error(`${name} must be a finite number.`);
   return parsed;
 }
 
@@ -337,7 +370,9 @@ async function inspectRuntimeActivity(health: Health) {
       if (!response.ok) throw new Error('access state unavailable');
       return await response.json() as { lease?: unknown };
     }));
-    return { known: true, activeJobs, activeLeases: leases.filter((entry) => entry.lease).length, activePreviews: 0 };
+    // Older servers expose neither preview activity nor a fallback endpoint
+    // for it, so jobs and leases alone cannot prove shutdown is safe.
+    return { known: false, activeJobs, activeLeases: leases.filter((entry) => entry.lease).length, activePreviews: 0 };
   } catch {
     return { known: false, activeJobs: 0, activeLeases: 0, activePreviews: 0 };
   }
@@ -818,6 +853,48 @@ function projectSummary(project: Project) {
   };
 }
 
+const keyframeProperties = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume'] as const;
+const keyframeEasings = ['linear', 'ease-in', 'ease-out', 'ease-in-out'] as const;
+
+function keyframeProperty(value: string | undefined): KeyframeProperty {
+  const property = requireArg(value, 'keyframe property');
+  if (!keyframeProperties.includes(property as KeyframeProperty)) throw new Error(`Keyframe property must be one of: ${keyframeProperties.join(', ')}.`);
+  return property as KeyframeProperty;
+}
+
+function keyframeEasing(value: string | undefined): Keyframe['easing'] {
+  const easing = value ?? 'linear';
+  if (!keyframeEasings.includes(easing as Keyframe['easing'])) throw new Error(`Keyframe easing must be one of: ${keyframeEasings.join(', ')}.`);
+  return easing as Keyframe['easing'];
+}
+
+function findProjectClip(project: Project, clipId: string) {
+  for (const track of project.tracks) {
+    const clip = track.clips.find((item) => item.id === clipId);
+    if (clip) return { track, clip };
+  }
+  throw new Error(`Clip not found: ${clipId}`);
+}
+
+function sortedKeyframes(clip: Clip, property?: KeyframeProperty) {
+  return clip.keyframes
+    .filter((keyframe) => !property || keyframe.property === property)
+    .slice()
+    .sort((left, right) => left.time - right.time || left.property.localeCompare(right.property));
+}
+
+async function mutateClipKeyframes(projectId: string, clipId: string, mutation: (project: Project, clip: Clip) => Record<string, unknown>) {
+  return withProjectAccess(projectId, async (token) => {
+    const current = await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`) as Project;
+    const { clip } = findProjectClip(current, clipId);
+    const detail = mutation(current, clip);
+    const validated = ProjectSchema.parse(current);
+    const saved = await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`, 'PATCH', { ...validated, revision: current.revision }, token) as Project;
+    const savedClip = findProjectClip(saved, clipId).clip;
+    return { ok: true, projectId, clipId, revision: saved.revision, ...detail, keyframes: sortedKeyframes(savedClip) };
+  });
+}
+
 async function runSession(projectId: string) {
   const handle = await acquire(projectId);
   const heartbeat = setInterval(() => {
@@ -1029,6 +1106,7 @@ async function main() {
       const projectId = requireArg(args.shift(), 'project ID');
       const body = await readJsonInput(args);
       ensureNoArgs(args);
+      if (typeof body !== 'object' || body === null || !('revision' in body) || !Number.isInteger((body as { revision?: unknown }).revision)) throw new Error('projects apply requires the revision from projects get.');
       return print(await withProjectAccess(projectId, (token) => jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`, 'PATCH', body, token)));
     }
     if (action === 'edit') {
@@ -1073,6 +1151,72 @@ async function main() {
       });
       return print(await response.json());
     }
+  }
+
+  if (group === 'keyframes') {
+    const projectId = requireArg(args.shift(), 'project ID');
+    const clipId = requireArg(args.shift(), 'clip ID');
+    const propertyFlag = takeFlag(args, '--property');
+    const propertyFilter = propertyFlag ? keyframeProperty(propertyFlag) : undefined;
+
+    if (action === 'list') {
+      ensureNoArgs(args);
+      const project = await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`) as Project;
+      const { track, clip } = findProjectClip(project, clipId);
+      const keyframes = sortedKeyframes(clip, propertyFilter);
+      return print({ ok: true, projectId, trackId: track.id, clipId, clipStart: clip.start, clipDuration: clip.duration, timeMode: 'clip-local-seconds', property: propertyFilter ?? null, count: keyframes.length, keyframes });
+    }
+
+    if (action === 'set') {
+      if (propertyFilter) throw new Error('Pass the keyframe property as the third positional argument, not --property.');
+      const property = keyframeProperty(args.shift());
+      const timeRaw = takeFlag(args, '--time');
+      const valueRaw = takeFlag(args, '--value');
+      const easingRaw = takeFlag(args, '--easing');
+      ensureNoArgs(args);
+      const time = finiteNumber(timeRaw, '--time');
+      const value = finiteNumber(valueRaw, '--value');
+      if (time < 0) throw new Error('--time must be a non-negative clip-local time.');
+      if (property === 'scale' && value <= 0) throw new Error('scale keyframes must be greater than 0.');
+      if (property === 'opacity' && (value < 0 || value > 1)) throw new Error('opacity keyframes must be between 0 and 1.');
+      if (property === 'volume' && (value < 0 || value > 2)) throw new Error('volume keyframes must be between 0 and 2.');
+      const easing = easingRaw ? keyframeEasing(easingRaw) : undefined;
+      return print(await mutateClipKeyframes(projectId, clipId, (project, clip) => {
+        if (time > clip.duration) throw new Error(`Keyframe time ${time} exceeds clip duration ${clip.duration}.`);
+        const tolerance = 0.5 / Math.max(1, project.canvas.fps);
+        const existing = clip.keyframes.find((keyframe) => keyframe.property === property && Math.abs(keyframe.time - time) <= tolerance);
+        const created = !existing;
+        const keyframe: Keyframe = existing ?? { id: `key_${crypto.randomUUID().slice(0, 8)}`, property, time, value, easing: easing ?? 'linear' };
+        keyframe.time = time;
+        keyframe.value = value;
+        if (easing) keyframe.easing = easing;
+        if (created) clip.keyframes.push(keyframe);
+        return { created, keyframeId: keyframe.id, property, time, value, easing: keyframe.easing };
+      }));
+    }
+
+    if (action === 'remove') {
+      if (propertyFilter) throw new Error('--property is not used by keyframes remove; pass a keyframe ID.');
+      const keyframeId = requireArg(args.shift(), 'keyframe ID');
+      ensureNoArgs(args);
+      return print(await mutateClipKeyframes(projectId, clipId, (_project, clip) => {
+        const index = clip.keyframes.findIndex((keyframe) => keyframe.id === keyframeId);
+        if (index < 0) throw new Error(`Keyframe not found: ${keyframeId}`);
+        const [removed] = clip.keyframes.splice(index, 1);
+        return { removed };
+      }));
+    }
+
+    if (action === 'clear') {
+      ensureNoArgs(args);
+      return print(await mutateClipKeyframes(projectId, clipId, (_project, clip) => {
+        const before = clip.keyframes.length;
+        clip.keyframes = clip.keyframes.filter((keyframe) => propertyFilter && keyframe.property !== propertyFilter);
+        return { property: propertyFilter ?? null, removedCount: before - clip.keyframes.length };
+      }));
+    }
+
+    throw new Error('keyframes action must be list, set, remove, or clear.');
   }
 
   if (group === 'media') {

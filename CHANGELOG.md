@@ -10,15 +10,28 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - `cutloc open`, `cutloc status --json`, `cutloc doctor --json`, `cutloc stop`, and `cutloc restart` runtime workflows.
 - Automatic shared-server startup on an available loopback port for live CLI commands.
 - A single runtime contract for installation metadata, instance discovery, user storage, logs, and temporary files.
+- Dedicated `keyframes list/set/remove/clear` CLI commands and a machine-readable keyframe contract for AI agents.
 
 ### Changed
 
 - Windows projects, settings, proxies, backups, and exports now default to `%LOCALAPPDATA%\CutLoc\data` instead of the source checkout.
+- Live preview now consumes the shared frame-quantized render plan used by the export contract for layer order, source time, transforms, transitions, crop/fit geometry, adjustment filters, and audio gain. Duplicate animation math was removed from the React compositor, fractional FPS is available in the canvas, and playback publishes at most one UI update per authored frame.
 - `agent guide` documents repo-independent discovery and automatic startup.
 - Existing checkout-local data is copied after empty runtime scaffolding and safely merged when both locations contain data; destination conflicts and the legacy source remain intact.
+- The editor's Animation tab now uses a compact three-step motion workflow. Once a property is enabled, changing it at another playhead position automatically creates or updates the keyframe.
 
 ### Fixed
 
+- Project writes now require an explicit revision, locked-track media deletion is rejected, and explicit unlocks retain their clips.
+- Clip, track, and style duplication regenerate nested keyframe IDs; invalid keyframe values and ambiguous track ordering are rejected by the shared schema.
+- Export ranges outside the timeline are rejected instead of truncated, fractional broadcast frame rates are supported, and export jobs can be cancelled from the browser.
+- FFmpeg export publication is atomic, layer order follows `track.order`, hidden video tracks retain their audio unless muted, and the final mix is normalized to 48 kHz stereo with peak limiting.
+- Derived media rebuilds use unique temporary files, detect in-place source changes, publish as one rollback-safe transaction, and relink removes superseded derivatives.
+- Export preflight now compiles and probes the actual FFmpeg graph, while corrupt project reads return a server error instead of being reported as missing.
+- Media removal uses the server lifecycle instead of deleting only local UI state; modal focus containment and timeline keyboard access have also been completed.
+- Legacy runtime activity responses fail closed when preview work cannot be observed, preventing an unverified non-forced shutdown.
+- Dirty browser edits are mirrored to a validated per-project local draft and recovered after reload; conflicting server changes require an explicit recovery choice.
+- Job history is stored atomically across server restarts, and work interrupted by a restart is surfaced as failed instead of disappearing.
 - Managed startup now honors checkout `.env` storage overrides instead of forcing the default `DATA_DIR`.
 - Runtime status and doctor use the effective project directory, and doctor verifies FFmpeg text rendering.
 - Health discovery rejects loopback services that do not identify the CutLoc product and API protocol.
@@ -45,7 +58,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 
 - JSON-first CLI project editing, agent discovery, exclusive sessions, streaming uploads/downloads, and preview-frame capture.
 - Linux and Windows browser regression jobs with retained failure evidence.
-- API request budgets, including a tighter limit for FFmpeg-backed preview rendering.
+- API request budgets, including a tighter limit for browser-composited single-frame rendering.
 - Light, Gray, and Dark editor themes with compact Speed and Animation workflows.
 
 ### Changed
@@ -69,7 +82,7 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 ### Known limitations
 
 - CutLoc is local-only software and does not sandbox FFmpeg from untrusted media.
-- Browser preview and final FFmpeg output share canvas geometry but may differ for some codecs, typography details, filters, and effect combinations.
+- Preview and MP4 export now use the same Chromium visual compositor; FFmpeg is limited to audio processing and final encoding/muxing for this path.
 - Hardware encoding, collaboration, automatic transcription, installer packaging, and lossless cutting are not included.
 
 [1.0.0]: https://github.com/HakanBabus/CutLoc/releases/tag/v1.0.0

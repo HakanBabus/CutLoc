@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, formatTime, projectDuration, quantizeFrameTime, rippleDeleteAcrossTimeline, snapTime as snapProjectTime, snapTimeCandidate, splitClipAt, trimClip, trimClipToPlayhead, type Clip, type Project, type Track } from '@cutloc/shared';
+import { clamp, cloneClipWithFreshIds, cloneKeyframesWithFreshIds, formatTime, projectDuration, quantizeFrameTime, rippleDeleteAcrossTimeline, snapTime as snapProjectTime, snapTimeCandidate, splitClipAt, trimClip, trimClipToPlayhead, type Clip, type Project, type Track } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { ContextMenu, type ContextMenuItem } from '../components/context-menu';
 import { PromptDialog } from '../components/dialogs';
@@ -436,10 +436,7 @@ export function TimelinePro({ project }: { project: Project }) {
         id: `track-${crypto.randomUUID().slice(0, 8)}`,
         name: t('timeline.copySuffix', { name: source.name }),
         order: index + 1,
-        clips: source.clips.map((clip) => ({
-          ...clip,
-          id: `clip_${crypto.randomUUID().slice(0, 8)}`,
-        })),
+        clips: source.clips.map((clip) => cloneClipWithFreshIds(clip, (kind) => `${kind}_${crypto.randomUUID().slice(0, 8)}`)),
       };
       draft.tracks.splice(index + 1, 0, copy);
       draft.tracks.forEach((track, order) => {
@@ -490,12 +487,11 @@ export function TimelinePro({ project }: { project: Project }) {
     mutateProject((draft) => {
       const track = draft.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
       const clip = track?.clips.find((item) => item.id === clipId);
-      if (track && clip)
-        track.clips.push({
-          ...clip,
-          id: `clip_${crypto.randomUUID().slice(0, 8)}`,
-          start: clip.start + clip.duration,
-        });
+      if (track && clip && !track.locked) {
+        const copy = cloneClipWithFreshIds(clip, (kind) => `${kind}_${crypto.randomUUID().slice(0, 8)}`);
+        copy.start = clip.start + clip.duration;
+        track.clips.push(copy);
+      }
       draft.duration = projectDuration(draft);
     });
     closeMenu();
@@ -618,7 +614,7 @@ export function TimelinePro({ project }: { project: Project }) {
           draftClip.normalize = style.normalize;
           draftClip.mask = style.mask;
           draftClip.crop = style.crop;
-          draftClip.keyframes = style.keyframes;
+          draftClip.keyframes = cloneKeyframesWithFreshIds(style.keyframes, () => `keyframe_${crypto.randomUUID().slice(0, 8)}`);
           if ((draftClip.type === 'text' || draftClip.type === 'subtitle') && style.textStyle) draftClip.textStyle = style.textStyle;
         }
       }
@@ -1020,6 +1016,26 @@ export function TimelinePro({ project }: { project: Project }) {
                   {item.locked && <i className="track-status is-locked" title={t('timeline.menu.lock')} />}
                 </span>
                 <div className="track-actions">
+                  <label className="track-volume-control" title={t('timeline.menu.trackVolume', { value: Math.round(item.volume * 100) })}>
+                    <span aria-hidden="true">♫</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.01"
+                      value={item.volume}
+                      disabled={item.locked}
+                      aria-label={t('timeline.trackVolume')}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onChange={(event) => {
+                        const volume = clamp(Number(event.target.value), 0, 2);
+                        mutateProject((draft) => {
+                          const target = draft.tracks.find((track) => track.id === item.id);
+                          if (target && !target.locked) target.volume = volume;
+                        }, { historyGroup: `track-volume:${item.id}` });
+                      }}
+                    />
+                  </label>
                   <button
                     className="track-menu-button"
                     title={t('timeline.trackOptions')}
@@ -1056,6 +1072,20 @@ export function TimelinePro({ project }: { project: Project }) {
             <div
               className="playhead"
               style={{ left: currentTime * px }}
+              role="slider"
+              tabIndex={0}
+              aria-label={t('timeline.selection')}
+              aria-valuemin={0}
+              aria-valuemax={project.duration}
+              aria-valuenow={currentTime}
+              aria-valuetext={formatTime(currentTime, true, project.canvas.fps)}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+                event.preventDefault();
+                if (event.key === 'Home') setCurrentTime(0);
+                else if (event.key === 'End') setCurrentTime(project.duration);
+                else setCurrentTime(quantizeFrameTime(currentTime + (event.key === 'ArrowRight' ? 1 : -1) / project.canvas.fps, project.canvas.fps, project.duration));
+              }}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 setDrag({ kind: 'playhead' });

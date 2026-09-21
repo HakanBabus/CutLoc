@@ -53,7 +53,7 @@ CutLoc is built around a clear local-first boundary:
 - Media probing, derived files, previews, and exports use the FFmpeg/ffprobe binaries supplied through the project dependencies.
 - The local CLI uses the same API and validation boundary as the web editor, which makes it suitable for provider-neutral AI-tool automation.
 
-CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. CutLoc does not promise identical browser/FFmpeg output for every codec and effect combination.
+CutLoc is not a hosted video platform, collaboration service, public upload endpoint, remote-rendering service, or built-in transcription product. Video decoding can still depend on local browser codec support, but preview and MP4 export use the same Chromium visual compositor.
 
 ## Edit yourself or with an AI agent
 
@@ -84,8 +84,8 @@ Every successful command above is a single compact JSON value on `stdout`; failu
 | **Dashboard and projects** | Browse consistent 16:9 project cards, inspect duration, media count, aspect ratio, and on-disk size, then open or move a project directly to trash. |
 | **Media library** | Import video, audio, and image files; search, filter, preview, switch between list/card views, inspect media health, rebuild derived files, and drag assets to the timeline. |
 | **Timeline** | Arrange video, overlay, audio, text, and subtitle tracks with frame-aware playhead positioning, markers, snapping, trim, split, move, duplicate, ripple-delete, undo/redo, and track lock/hide/mute controls. |
-| **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, zoom and pan the preview, then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
-| **Motion and building blocks** | Use text presets and add built-in backgrounds or shapes from the Elements panel. The selected clip's Animation tab owns entrance/exit presets, timing, direction, easing, intensity, and keyframes. |
+| **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, and zoom or pan the preview; the same compositor supplies exported video frames. Then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
+| **Motion and building blocks** | Use text presets and add built-in backgrounds or shapes from the Elements panel. In the selected clip's Animation tab, enable a motion property once, move the playhead, and change its value; CutLoc creates later keyframes automatically. |
 | **Export** | Run local export preflight and render MP4 video or MP3/WAV audio with selectable aspect, resolution, FPS, quality, audio bitrate, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
 | **Recovery and safety** | Autosave, revision checks, backups, 30-day recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
 
@@ -105,7 +105,7 @@ Use the **Timeline** to trim either edge of a clip, split at the playhead, move 
 
 ### 4. Shape the picture and sound
 
-The **Canvas** and **Inspector** work together. Choose `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; select fit, fill, or smart framing; then adjust position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, entrance/exit animation, keyframes, and text styles. Animation controls appear only for the selected clip.
+The **Canvas** and **Inspector** work together. Choose `16:9`, `9:16`, `1:1`, `4:5`, `3:2`, or `21:9`; select fit, fill, or smart framing; then adjust position, scale, rotation, flip, opacity, speed, crop, audio, filters, masks, fades, entrance/exit animation, keyframes, and text styles. To animate a value, move the playhead, press its diamond once, then move to another moment and change the value. CutLoc adds the next point automatically. Animation controls appear only for the selected clip.
 
 ### 5. Preview, save, and export
 
@@ -137,7 +137,7 @@ The exact import/export boundaries and development contracts are maintained as i
 
 CutLoc v1.1.0 builds on the first stable source release:
 
-- Preview and FFmpeg export use the same canvas-space positioning when output resolution changes.
+- Preview and MP4 export use one frame-quantized Chromium compositor for source time, transforms, transitions, crop/fit geometry, layer order, adjustment filters, and text. FFmpeg processes audio and encodes/muxes those compositor frames.
 - The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
 - Fullscreen preview retains its timecode, duration, transport controls, and framing tools.
 - A one-time `setup:user` command registers `cutloc` on the user PATH; `cutloc open` starts or reuses the shared server and opens the browser editor.
@@ -265,6 +265,16 @@ cutloc projects edit <project-id> --file edit-plan.json --dry-run
 cutloc projects edit <project-id> --file edit-plan.json
 ```
 
+Agents can create motion without replacing a complete project document:
+
+```powershell
+cutloc keyframes list <project-id> <clip-id>
+cutloc keyframes set <project-id> <clip-id> x --time 0 --value -600 --easing ease-out
+cutloc keyframes set <project-id> <clip-id> x --time 0.6 --value 0 --easing ease-out
+```
+
+Keyframe times are relative to the clip start. Repeating `set` for the same property and video frame updates that point instead of creating a duplicate.
+
 Short-form projects can start with the correct canvas immediately:
 
 ```powershell
@@ -293,6 +303,7 @@ Project-changing commands acquire an exclusive, short-lived project lease. If th
 | Runtime | `open`, `status --json`, `doctor --json`, `stop`, and `restart` |
 | Agent discovery | `agent guide` and compact/paginated `agent inspect [project-id]` |
 | Projects | `projects list/create/get/edit/apply/duplicate/delete/import/bundle` |
+| Keyframes | `keyframes list/set/remove/clear` |
 | Media | `media add/add-many/remove/relink/rebuild/health/stock` |
 | Recovery | `backups list/restore` and `trash list/restore/delete` |
 | Export | `export preflight/start` and `jobs list/get/wait/watch/cancel/download` |

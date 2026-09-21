@@ -1,28 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, formatTime, interpolateKeyframes, projectDuration, retimeClipMotion, sourceTimeAt, speedAt, type Clip, type Project } from '@cutloc/shared';
+import { clamp, formatTime, projectDuration, retimeClipMotion, sourceTimeAt, speedAt, type Clip, type KeyframeProperty, type Project } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { UiIcon, type UiIconName } from '../components/ui-icon';
 import { DEFAULT_TEXT_STYLE, TEXT_FONT_OPTIONS, TEXT_PRESETS } from './text-model';
 import { useEditor } from './store';
 import { AnimationStudio } from './library';
+import { keyframeAtTime, motionValue, setMotionValue, toggleMotionKeyframe } from './keyframes';
 
 export function Inspector({ project }: { project: Project }) {
   const { t } = useI18n();
   const selectedClipId = useEditor((state) => state.selectedClipId);
   const selectedClipIds = useEditor((state) => state.selectedClipIds);
   const currentTime = useEditor((state) => state.currentTime);
+  const setCurrentTime = useEditor((state) => state.setCurrentTime);
   const mutateProject = useEditor((state) => state.mutateProject);
   const setSelected = useEditor((state) => state.setSelected);
   const activeInspectorTab = useEditor((state) => state.inspectorTab);
   const setActiveInspectorTab = useEditor((state) => state.setInspectorTab);
-  const [keyframeProperty, setKeyframeProperty] = useState<Clip['keyframes'][number]['property']>('opacity');
+  const [keyframeProperty, setKeyframeProperty] = useState<KeyframeProperty>('x');
   const [speedView, setSpeedView] = useState<'standard' | 'curve'>('standard');
   const selected = project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId);
   const selectedAsset = selected?.assetId ? project.assets.find((asset) => asset.id === selected.assetId) : undefined;
   useEffect(() => {
     setActiveInspectorTab('primary');
-    setKeyframeProperty('opacity');
+    setKeyframeProperty('x');
     setSpeedView('standard');
   }, [selected?.id, setActiveInspectorTab]);
   if (!selected)
@@ -86,17 +88,7 @@ export function Inspector({ project }: { project: Project }) {
     mutateProject((draft) => {
       const clip = draft.tracks.flatMap((track) => track.clips).find((item) => item.id === selected.id);
       if (!clip) return;
-      const value = property === 'x' ? interpolateKeyframes(clip.keyframes, 'x', localTime, clip.transform.x) : property === 'y' ? interpolateKeyframes(clip.keyframes, 'y', localTime, clip.transform.y) : property === 'scale' ? interpolateKeyframes(clip.keyframes, 'scale', localTime, clip.transform.scale) : property === 'rotation' ? interpolateKeyframes(clip.keyframes, 'rotation', localTime, clip.transform.rotation) : property === 'volume' ? interpolateKeyframes(clip.keyframes, 'volume', localTime, clip.volume) : interpolateKeyframes(clip.keyframes, 'opacity', localTime, clip.transform.opacity);
-      const existing = clip.keyframes.find((keyframe) => keyframe.property === property && Math.abs(keyframe.time - localTime) < 1 / project.canvas.fps);
-      if (existing) clip.keyframes = clip.keyframes.filter((keyframe) => keyframe.id !== existing.id);
-      else
-        clip.keyframes.push({
-          id: `key_${crypto.randomUUID().slice(0, 8)}`,
-          property,
-          time: localTime,
-          value,
-          easing: 'linear',
-        });
+      toggleMotionKeyframe(clip, property, localTime, project.canvas.fps);
     });
   };
   const deleteKeyframe = (keyframeId: string) =>
@@ -106,8 +98,15 @@ export function Inspector({ project }: { project: Project }) {
     });
   const keyframeEasing = (easing: Clip['keyframes'][number]['easing']) => (easing === 'linear' ? 'ease-in' : easing === 'ease-in' ? 'ease-out' : easing === 'ease-out' ? 'ease-in-out' : 'linear');
   const activeKeyframes = selected.keyframes.filter((keyframe) => keyframe.property === keyframeProperty).sort((a, b) => a.time - b.time);
+  const selectedLocalTime = clamp(currentTime - selected.start, 0, selected.duration);
+  const selectedMotionValue = motionValue(selected, keyframeProperty, selectedLocalTime);
+  const writeMotionValue = (property: KeyframeProperty, value: number) =>
+    update((clip) => {
+      const localTime = clamp(currentTime - clip.start, 0, clip.duration);
+      setMotionValue(clip, property, localTime, value, project.canvas.fps);
+    });
   const keyframeRange = keyframeProperty === 'opacity' ? { min: 0, max: 1 } : keyframeProperty === 'scale' ? { min: 0, max: 3 } : keyframeProperty === 'volume' ? { min: 0, max: 2 } : { min: -500, max: 500 };
-  const graphPoints = activeKeyframes.map((keyframe, index) => `${activeKeyframes.length === 1 ? 90 : (index / (activeKeyframes.length - 1)) * 180},${58 - clamp((keyframe.value - keyframeRange.min) / Math.max(0.0001, keyframeRange.max - keyframeRange.min), 0, 1) * 48}`).join(' ');
+  const graphPoints = activeKeyframes.map((keyframe) => `${clamp(keyframe.time / Math.max(selected.duration, 0.05), 0, 1) * 180},${58 - clamp((keyframe.value - keyframeRange.min) / Math.max(0.0001, keyframeRange.max - keyframeRange.min), 0, 1) * 48}`).join(' ');
   const typeLabel = t(selected.adjustment ? 'inspector.type.adjustment' : selected.type === 'video' ? 'inspector.type.video' : selected.type === 'audio' ? 'inspector.type.audio' : selected.type === 'image' ? 'inspector.type.image' : selected.type === 'text' ? 'inspector.type.text' : 'inspector.type.clip');
   const textColor = textStyle.color.startsWith('#') ? textStyle.color : '#ffffff';
   const textBackgroundColor = textStyle.background.startsWith('#') ? textStyle.background.slice(0, 7) : '#101116';
@@ -373,53 +372,33 @@ export function Inspector({ project }: { project: Project }) {
           <div className="field-grid">
             <NumberField
               label="X px"
-              value={selected.transform.x}
-              onChange={(value) =>
-                update((clip) => {
-                  clip.transform.x = value;
-                })
-              }
+              value={motionValue(selected, 'x', selectedLocalTime)}
+              onChange={(value) => writeMotionValue('x', value)}
             />
             <NumberField
               label="Y px"
-              value={selected.transform.y}
-              onChange={(value) =>
-                update((clip) => {
-                  clip.transform.y = value;
-                })
-              }
+              value={motionValue(selected, 'y', selectedLocalTime)}
+              onChange={(value) => writeMotionValue('y', value)}
             />
             <NumberField
               label={t('inspector.scale')}
-              value={selected.transform.scale}
+              value={motionValue(selected, 'scale', selectedLocalTime)}
               step={0.05}
-              onChange={(value) =>
-                update((clip) => {
-                  clip.transform.scale = Math.max(0.05, value);
-                })
-              }
+              onChange={(value) => writeMotionValue('scale', Math.max(0.05, value))}
             />
             <NumberField
               label={t('inspector.rotate')}
-              value={selected.transform.rotation}
-              onChange={(value) =>
-                update((clip) => {
-                  clip.transform.rotation = value;
-                })
-              }
+              value={motionValue(selected, 'rotation', selectedLocalTime)}
+              onChange={(value) => writeMotionValue('rotation', value)}
             />
           </div>
           <NumberField
             label={t('inspector.opacity')}
-            value={Math.round(selected.transform.opacity * 100)}
+            value={Math.round(motionValue(selected, 'opacity', selectedLocalTime) * 100)}
             min={0}
             max={100}
             step={1}
-            onChange={(value) =>
-              update((clip) => {
-                clip.transform.opacity = value / 100;
-              })
-            }
+            onChange={(value) => writeMotionValue('opacity', value / 100)}
           />
           {(selected.type === 'video' || selected.type === 'image') && (
             <label className="inspector-wide-field">
@@ -468,19 +447,24 @@ export function Inspector({ project }: { project: Project }) {
       )}
       {resolvedGroup === 'motion' && (
         <>
-          <InspectorSection id="inspector-animation-presets" title={t('inspector.clipAnimation')}>
-            <AnimationStudio compact />
-          </InspectorSection>
-          <InspectorSection id="inspector-motion" title={t('inspector.motionKeyframes')} defaultOpen={false}>
+          <InspectorSection id="inspector-motion" title={t('inspector.motionKeyframes')}>
             <div className="keyframe-section-heading">
               <span>{t('inspector.keyframeProperties')}</span>
               <button type="button" className="keyframe-help" aria-label={t('inspector.keyframeWhat')} title={t('inspector.keyframeWhatCopy')}>
                 ?
               </button>
             </div>
+            <div className="keyframe-quick-guide">
+              <b>1</b><span>{t('inspector.keyframeStepTime')}</span>
+              <b>2</b><span>{t('inspector.keyframeStepDiamond')}</span>
+              <b>3</b><span>{t('inspector.keyframeStepChange')}</span>
+            </div>
             <div className="keyframe-property-list">
-              {([['x', 'X', selected.transform.x], ['y', 'Y', selected.transform.y], ['scale', t('inspector.scale'), selected.transform.scale], ['rotation', t('inspector.rotate'), selected.transform.rotation], ['opacity', t('inspector.opacity'), Math.round(selected.transform.opacity * 100)], ...(selected.type === 'audio' || selected.type === 'video' ? [['volume', t('inspector.volume'), Math.round(selected.volume * 100)]] : [])] as Array<[Clip['keyframes'][number]['property'], string, number]>).map(([property, label, value]) => {
+              {([['x', t('inspector.positionX')], ['y', t('inspector.positionY')], ['scale', t('inspector.scale')], ['rotation', t('inspector.rotate')], ['opacity', t('inspector.opacity')], ...(selected.type === 'audio' || selected.type === 'video' ? [['volume', t('inspector.volume')]] : [])] as Array<[KeyframeProperty, string]>).map(([property, label]) => {
                 const count = selected.keyframes.filter((item) => item.property === property).length;
+                const rawValue = motionValue(selected, property, selectedLocalTime);
+                const value = property === 'opacity' || property === 'volume' ? Math.round(rawValue * 100) : Number(rawValue.toFixed(2));
+                const hasPointHere = Boolean(keyframeAtTime(selected, property, selectedLocalTime, project.canvas.fps));
                 return (
                   <div key={property} className={keyframeProperty === property ? 'keyframe-property-row active' : 'keyframe-property-row'}>
                     <button type="button" className="keyframe-property-select" onClick={() => setKeyframeProperty(property)}>
@@ -502,12 +486,70 @@ export function Inspector({ project }: { project: Project }) {
                         addKeyframe(property);
                       }}
                     >
-                      <b aria-hidden="true">{count ? '◆' : '◇'}</b>
+                      <b aria-hidden="true">{hasPointHere ? '◆' : '◇'}</b>
                     </button>
                   </div>
                 );
               })}
             </div>
+            <div className="keyframe-live-editor">
+              <small>{activeKeyframes.length ? t('inspector.keyframeAutoOn') : t('inspector.keyframeAutoOff')}</small>
+              <NumberField
+                label={keyframeProperty === 'x' ? t('inspector.positionX') : keyframeProperty === 'y' ? t('inspector.positionY') : keyframeProperty === 'scale' ? t('inspector.scale') : keyframeProperty === 'rotation' ? t('inspector.rotate') : keyframeProperty === 'opacity' ? t('inspector.opacity') : t('inspector.volume')}
+                value={keyframeProperty === 'opacity' || keyframeProperty === 'volume' ? Math.round(selectedMotionValue * 100) : Number(selectedMotionValue.toFixed(2))}
+                step={keyframeProperty === 'scale' ? 0.05 : 1}
+                min={keyframeProperty === 'scale' ? 0.05 : keyframeProperty === 'opacity' || keyframeProperty === 'volume' ? 0 : undefined}
+                max={keyframeProperty === 'opacity' ? 100 : keyframeProperty === 'volume' ? 200 : undefined}
+                onChange={(value) => writeMotionValue(keyframeProperty, keyframeProperty === 'opacity' || keyframeProperty === 'volume' ? value / 100 : value)}
+              />
+              <strong>{t('inspector.keyframeCurrentTime', { time: formatTime(selectedLocalTime, true, project.canvas.fps) })}</strong>
+            </div>
+            {activeKeyframes.length > 0 && (
+              <section className="keyframe-graph">
+                <div className="keyframe-graph-head">
+                  <strong>{t('inspector.graph', { property: keyframeProperty })}</strong>
+                  <small>{t('inspector.keyframes', { count: activeKeyframes.length })}</small>
+                </div>
+                <svg viewBox="0 0 180 60" role="img" aria-label={t('inspector.graphAria')}>
+                  <path d="M0 58H180M0 10H180" />
+                  <polyline points={graphPoints} />
+                  <line className="keyframe-playhead" x1={clamp(selectedLocalTime / Math.max(selected.duration, 0.05), 0, 1) * 180} x2={clamp(selectedLocalTime / Math.max(selected.duration, 0.05), 0, 1) * 180} y1="8" y2="58" />
+                  {activeKeyframes.map((keyframe) => (
+                    <circle key={keyframe.id} cx={clamp(keyframe.time / Math.max(selected.duration, 0.05), 0, 1) * 180} cy={58 - clamp((keyframe.value - keyframeRange.min) / Math.max(0.0001, keyframeRange.max - keyframeRange.min), 0, 1) * 48} r="3" />
+                  ))}
+                </svg>
+                <div className="keyframe-easing-list">
+                  {activeKeyframes.map((keyframe) => (
+                    <span key={keyframe.id}>
+                      <button className="keyframe-time" onClick={() => setCurrentTime(selected.start + keyframe.time)}>
+                        {formatTime(keyframe.time, true, project.canvas.fps)}
+                      </button>
+                      <button
+                        className="keyframe-easing"
+                        aria-label={t('inspector.changeKeyframeEasing')}
+                        onClick={() =>
+                          mutateProject((draft) => {
+                            const target = draft.tracks
+                              .flatMap((track) => track.clips)
+                              .find((clip) => clip.id === selected.id)
+                              ?.keyframes.find((item) => item.id === keyframe.id);
+                            if (target) target.easing = keyframeEasing(target.easing);
+                          })
+                        }
+                      >
+                        {keyframe.easing}
+                      </button>
+                      <button className="keyframe-delete" aria-label={t('inspector.deleteKeyframe')} onClick={() => deleteKeyframe(keyframe.id)}>
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+          </InspectorSection>
+          <InspectorSection id="inspector-animation-presets" title={t('inspector.clipAnimation')}>
+            <AnimationStudio compact />
           </InspectorSection>
         </>
       )}
@@ -1140,15 +1182,11 @@ export function Inspector({ project }: { project: Project }) {
         <InspectorSection id="inspector-audio" title={t('inspector.audioTrim')}>
           <NumberField
             label={t('inspector.volumePercent')}
-            value={Math.round(selected.volume * 100)}
+            value={Math.round(motionValue(selected, 'volume', selectedLocalTime) * 100)}
             min={0}
             max={200}
             step={1}
-            onChange={(value) =>
-              update((clip) => {
-                clip.volume = value / 100;
-              })
-            }
+            onChange={(value) => writeMotionValue('volume', value / 100)}
           />
           <div className="field-grid">
             <NumberField
@@ -1397,43 +1435,6 @@ export function Inspector({ project }: { project: Project }) {
         </InspectorSection>
       )}
 
-      {resolvedGroup === 'motion' && activeKeyframes.length > 0 && (
-        <section className="keyframe-graph">
-          <div className="keyframe-graph-head">
-            <strong>{t('inspector.graph', { property: keyframeProperty })}</strong>
-            <small>{t('inspector.keyframes', { count: activeKeyframes.length })}</small>
-          </div>
-          <svg viewBox="0 0 180 60" role="img" aria-label={t('inspector.graphAria')}>
-            <path d="M0 58H180M0 10H180" />
-            <polyline points={graphPoints} />
-            {activeKeyframes.map((keyframe, index) => (
-              <circle key={keyframe.id} cx={activeKeyframes.length === 1 ? 90 : (index / (activeKeyframes.length - 1)) * 180} cy={58 - clamp((keyframe.value - keyframeRange.min) / Math.max(0.0001, keyframeRange.max - keyframeRange.min), 0, 1) * 48} r="3" />
-            ))}
-          </svg>
-          <div className="keyframe-easing-list">
-            {activeKeyframes.map((keyframe) => (
-              <span key={keyframe.id}>
-                <button
-                  onClick={() =>
-                    mutateProject((draft) => {
-                      const target = draft.tracks
-                        .flatMap((track) => track.clips)
-                        .find((clip) => clip.id === selected.id)
-                        ?.keyframes.find((item) => item.id === keyframe.id);
-                      if (target) target.easing = keyframeEasing(target.easing);
-                    })
-                  }
-                >
-                  {formatTime(keyframe.time)} · {keyframe.easing}
-                </button>
-                <button className="keyframe-delete" aria-label={t('inspector.deleteKeyframe')} onClick={() => deleteKeyframe(keyframe.id)}>
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
     </aside>
   );
 }

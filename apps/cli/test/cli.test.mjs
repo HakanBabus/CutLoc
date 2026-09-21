@@ -13,6 +13,7 @@ const requests = [];
 let baseUrl;
 let mockActiveJobs = 0;
 let mockActivePreviews = 0;
+let mockLegacyActivity = false;
 
 const project = {
   schemaVersion: 1,
@@ -26,6 +27,23 @@ const project = {
   assets: [],
   tracks: [],
   markers: [],
+};
+
+const motionProject = {
+  ...project,
+  id: 'motion',
+  name: 'Motion fixture',
+  duration: 4,
+  tracks: [{
+    id: 'track-motion', type: 'text', name: 'Motion', order: 0, locked: false, hidden: false, muted: false, volume: 1,
+    clips: [{
+      id: 'clip-motion', type: 'text', name: 'Moving title', start: 0, duration: 4, sourceStart: 0, sourceDuration: 4, speed: 1,
+      transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, fit: 'contain', flipX: false, flipY: false },
+      filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
+      transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, adjustment: false,
+      keyframes: [{ id: 'key-start', property: 'x', time: 0, value: -400, easing: 'ease-out' }],
+    }],
+  }],
 };
 
 const server = http.createServer(async (request, response) => {
@@ -42,15 +60,17 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
-  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, activePreviews: mockActivePreviews, busy: mockActiveJobs > 0 || mockActivePreviews > 0 });
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, ...(mockLegacyActivity ? {} : { activePreviews: mockActivePreviews }), busy: mockActiveJobs > 0 || mockActivePreviews > 0 });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
   if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
-  if (request.method === 'GET' && request.url === '/api/jobs') return json(200, [{ id: 'j1', projectId: 'p1', status: 'running' }]);
+  if (request.method === 'GET' && request.url === '/api/jobs') return json(200, mockLegacyActivity ? [] : [{ id: 'j1', projectId: 'p1', status: 'running' }]);
   if (request.method === 'GET' && request.url === '/api/projects/p1/media-health') return json(200, []);
   if (request.method === 'GET' && request.url === '/api/projects/p1/backups') return json(200, []);
   if (request.method === 'POST' && request.url === '/api/projects') return json(200, { ...project, id: 'created', name: body?.name ?? 'Untitled' });
   if (request.method === 'GET' && request.url === '/api/projects/p1') return json(200, project);
+  if (request.method === 'GET' && request.url === '/api/projects/motion') return json(200, motionProject);
   if (request.method === 'PATCH' && request.url === '/api/projects/p1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ...project, ...body, revision: 1 });
+  if (request.method === 'PATCH' && request.url === '/api/projects/motion' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ...motionProject, ...body, revision: 1 });
   if (request.method === 'GET' && request.url === '/api/projects/p1/bundle') {
     response.writeHead(200, { 'content-type': 'application/zip' });
     return response.end(Buffer.from([80, 75, 3, 4]));
@@ -83,8 +103,16 @@ const server = http.createServer(async (request, response) => {
       token: 'test-token',
     });
   }
+  if (request.method === 'POST' && request.url === '/api/projects/motion/access') {
+    return json(200, {
+      lease: { projectId: 'motion', ownerId: 'test-cli', ownerLabel: 'Test CLI', client: 'cli', acquiredAt: '2026-08-23T10:00:00.000Z', expiresAt: '2026-08-23T10:00:15.000Z' },
+      token: 'test-token',
+    });
+  }
   if (request.method === 'PATCH' && request.url === '/api/projects/p1/access') return json(200, { lease: null });
   if (request.method === 'DELETE' && request.url === '/api/projects/p1/access') return json(200, { ok: true });
+  if (request.method === 'PATCH' && request.url === '/api/projects/motion/access') return json(200, { lease: null });
+  if (request.method === 'DELETE' && request.url === '/api/projects/motion/access') return json(200, { ok: true });
   return json(404, { error: `Unexpected mock request: ${request.method} ${request.url}` });
 });
 
@@ -327,6 +355,17 @@ test('stop refuses to interrupt active preview rendering even when forced', asyn
   }
 });
 
+test('stop fails closed when a legacy health response cannot report preview activity', async () => {
+  mockLegacyActivity = true;
+  try {
+    const result = await runCli(['stop']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /could not verify that the server is idle/i);
+  } finally {
+    mockLegacyActivity = false;
+  }
+});
+
 test('stopped status and doctor honor the registered checkout DATA_DIR from .env', async () => {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-env-'));
   const home = path.join(base, 'home');
@@ -369,7 +408,7 @@ test('a live command replaces a managed server from an older product version', a
     const http = require('node:http');
     const server = http.createServer((request, response) => {
       response.setHeader('content-type', 'application/json');
-      if (request.method === 'GET' && request.url === '/api/health') return response.end(JSON.stringify({ ok: true, product: 'CutLoc', version: '1.0.0', apiVersion: 1 }));
+      if (request.method === 'GET' && request.url === '/api/health') return response.end(JSON.stringify({ ok: true, product: 'CutLoc', version: '1.0.0', apiVersion: 1, activeJobs: 0, activeLeases: 0, activePreviews: 0 }));
       if (request.method === 'GET' && request.url === '/api/jobs') return response.end('[]');
       if (request.method === 'GET' && request.url === '/api/projects') return response.end('[]');
       if (request.method === 'POST' && request.url === '/api/runtime/shutdown') {
@@ -440,7 +479,51 @@ test('agent guide is machine-readable and documents the safe full-project workfl
   assert.ok(guide.recommendedWorkflow.some((step) => /projects get/i.test(step)));
   assert.ok(guide.recommendedWorkflow.some((step) => /revision conflict/i.test(step)));
   assert.ok(guide.projectEditing.clipCapabilities.includes('keyframes'));
+  assert.match(guide.keyframeEditing.commands.createOrUpdate, /keyframes set/i);
+  assert.equal(guide.keyframeEditing.properties.opacity, '0 to 1');
+  assert.ok(guide.keyframeEditing.rules.some((rule) => /clip/i.test(rule) && /project timeline/i.test(rule)));
   assert.ok(guide.commands.media.some((command) => /media add/i.test(command)));
+});
+
+test('dedicated keyframe commands list, upsert, remove, and validate motion points', async () => {
+  requests.length = 0;
+  const listed = await runCli(['keyframes', 'list', 'motion', 'clip-motion', '--property', 'x']);
+  assert.equal(listed.code, 0, listed.stderr);
+  const listBody = JSON.parse(listed.stdout);
+  assert.equal(listBody.timeMode, 'clip-local-seconds');
+  assert.equal(listBody.count, 1);
+  assert.equal(listBody.keyframes[0].id, 'key-start');
+
+  const created = await runCli(['keyframes', 'set', 'motion', 'clip-motion', 'x', '--time', '2', '--value', '240', '--easing', 'ease-in-out']);
+  assert.equal(created.code, 0, created.stderr);
+  const createdBody = JSON.parse(created.stdout);
+  assert.equal(createdBody.created, true);
+  assert.equal(createdBody.keyframes.length, 2);
+  assert.deepEqual(createdBody.keyframes.map(({ time, value, easing }) => ({ time, value, easing })), [
+    { time: 0, value: -400, easing: 'ease-out' },
+    { time: 2, value: 240, easing: 'ease-in-out' },
+  ]);
+  const saved = requests.filter((entry) => entry.method === 'PATCH' && entry.url === '/api/projects/motion').at(-1)?.body;
+  assert.equal(saved.tracks[0].clips[0].keyframes.length, 2);
+
+  const updated = await runCli(['keyframes', 'set', 'motion', 'clip-motion', 'x', '--time', '0', '--value', '-500']);
+  assert.equal(updated.code, 0, updated.stderr);
+  assert.equal(JSON.parse(updated.stdout).created, false);
+  assert.equal(JSON.parse(updated.stdout).keyframeId, 'key-start');
+
+  const removed = await runCli(['keyframes', 'remove', 'motion', 'clip-motion', 'key-start']);
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.equal(JSON.parse(removed.stdout).removed.id, 'key-start');
+  assert.deepEqual(JSON.parse(removed.stdout).keyframes, []);
+
+  const cleared = await runCli(['keyframes', 'clear', 'motion', 'clip-motion', '--property', 'x']);
+  assert.equal(cleared.code, 0, cleared.stderr);
+  assert.equal(JSON.parse(cleared.stdout).removedCount, 1);
+  assert.deepEqual(JSON.parse(cleared.stdout).keyframes, []);
+
+  const invalid = await runCli(['keyframes', 'set', 'motion', 'clip-motion', 'opacity', '--time', '1', '--value', '2']);
+  assert.equal(invalid.code, 1);
+  assert.match(JSON.parse(invalid.stderr).error, /between 0 and 1/i);
 });
 
 test('agent inspect returns live context and optional project diagnostics', async () => {

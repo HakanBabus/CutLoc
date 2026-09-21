@@ -1,5 +1,48 @@
 import { test, expect } from '@playwright/test';
 
+test('canvas stays on the single live compositor during playback and pause', async ({ page, request }) => {
+  const before = await (await request.get('/api/projects')).json();
+  const beforeIds = new Set(before.map((project) => project.id));
+  let projectId;
+  await page.route('**/api/projects/*/preview-frame?**', async (route) => {
+    await route.abort('failed');
+  });
+
+  await page.goto('/');
+  try {
+    await page.locator('.primary-button.large').click();
+    await expect(page.locator('.editor-shell')).toBeVisible();
+    await page.locator('.tool-rail button').filter({ hasText: /Elements|Öğeler/ }).click();
+    await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
+    await expect(page.locator('.timeline-clip')).toHaveCount(1);
+
+    await expect(page.locator('.output-preview-toggle')).toHaveCount(0);
+    await expect(page.locator('.output-preview-frame')).toHaveCount(0);
+    await expect(page.locator('.canvas-frame .preview-media')).toBeVisible();
+    await page.getByRole('button', { name: /^(Play|Oynat)$/ }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole('button', { name: /^(Pause|Duraklat)$/ }).click();
+    await expect(page.locator('.canvas-frame .preview-media')).toBeVisible();
+
+    await page.getByRole('button', { name: /Export|Dışa aktar/ }).click();
+    await page.getByLabel(/Project and output frame rate|Proje ve çıktı kare hızı/).selectOption('60');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.preview-time-fps')).toHaveText('60 FPS');
+    await expect(page.getByLabel(/Project frame rate|Proje kare hızı/)).toHaveValue('60');
+
+    const projects = await (await request.get('/api/projects')).json();
+    projectId = projects.find((project) => !beforeIds.has(project.id))?.id;
+  } finally {
+    if (projectId) {
+      const deleted = await request.delete(`/api/projects/${projectId}`);
+      if (deleted.ok()) {
+        const trashId = (await deleted.json()).trashId;
+        if (trashId) await request.delete(`/api/trash/${trashId}`);
+      }
+    }
+  }
+});
+
 test('dashboard quick cards and advertised editor shortcuts execute their labeled actions', async ({ page, request }) => {
   const beforeResponse = await request.get('/api/projects');
   const beforeIds = new Set(beforeResponse.ok() ? (await beforeResponse.json()).map((project) => project.id) : []);

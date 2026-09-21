@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { clamp, DEFAULT_SHORTCUT_SETTINGS, enforceLockedTrackInvariants, mergeProjectThreeWay, type Job, type Project, type Settings, type ShortcutSettings, type WorkspaceLayout } from '@cutloc/shared';
+import { clamp, DEFAULT_SHORTCUT_SETTINGS, enforceLockedTrackInvariants, mergeProjectThreeWay, ProjectSchema, type Job, type Project, type Settings, type ShortcutSettings, type WorkspaceLayout } from '@cutloc/shared';
 import type { TranslationKey } from '../i18n';
 
 export type Theme = 'dark' | 'gray' | 'light';
@@ -14,6 +14,29 @@ export type StockMediaItem = { id: string; name: string; description: string; ca
 export type SaveState = 'saved' | 'saving' | 'error' | 'offline';
 type ExportUiStatus = Job['status'] | 'reconnecting' | 'preflight' | 'saving';
 export type ExportStatus = { jobId?: string; status?: ExportUiStatus; progress: number; message?: string; downloadUrl?: string; fileName?: string; error?: string };
+export type LocalProjectDraft = { version: 1; project: Project; baseProject: Project; savedRevision: number; updatedAt: string };
+
+const LOCAL_DRAFT_PREFIX = 'cutloc-project-draft:';
+
+export function readLocalProjectDraft(projectId: string): LocalProjectDraft | null {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_DRAFT_PREFIX + projectId);
+    if (!raw) return null;
+    const candidate = JSON.parse(raw) as Partial<LocalProjectDraft>;
+    if (candidate.version !== 1 || !candidate.project || !candidate.baseProject || typeof candidate.savedRevision !== 'number' || !Number.isInteger(candidate.savedRevision) || typeof candidate.updatedAt !== 'string') throw new Error('Invalid local draft');
+    const project = ProjectSchema.parse(candidate.project);
+    const baseProject = ProjectSchema.parse(candidate.baseProject);
+    if (project.id !== projectId || baseProject.id !== projectId) throw new Error('Draft project mismatch');
+    return { version: 1, project, baseProject, savedRevision: candidate.savedRevision, updatedAt: candidate.updatedAt };
+  } catch {
+    try { window.localStorage.removeItem(LOCAL_DRAFT_PREFIX + projectId); } catch { /* storage unavailable */ }
+    return null;
+  }
+}
+
+export function clearLocalProjectDraft(projectId: string) {
+  try { window.localStorage.removeItem(LOCAL_DRAFT_PREFIX + projectId); } catch { /* storage unavailable */ }
+}
 
 export const DEFAULT_SHORTCUTS: ShortcutSettings = DEFAULT_SHORTCUT_SETTINGS;
 
@@ -89,6 +112,7 @@ type EditorState = {
   setZoom: (zoom: number) => void;
   mutateProject: (recipe: (draft: Project) => void, options?: HistoryMutationOptions) => void;
   applyServerProject: (project: Project) => void;
+  restoreLocalDraft: (project: Project, serverProject: Project) => void;
   acknowledgeSaved: (project: Project, snapshot: Project) => void;
   undo: () => void;
   redo: () => void;
@@ -235,6 +259,19 @@ export const useEditor = create<EditorState>((set) => ({
       saveState: 'saved',
     };
   }),
+  restoreLocalDraft: (project, serverProject) => set({
+    project: { ...project, revision: serverProject.revision },
+    localRevision: serverProject.revision + 1,
+    savedRevision: serverProject.revision,
+    lastSavedAt: serverProject.updatedAt,
+    lastSavedProject: serverProject,
+    saveState: typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'saving',
+    history: { past: [], future: [] },
+    historyGroup: null,
+    selectedClipId: null,
+    selectedClipIds: [],
+    selectedTrackId: null,
+  }),
   acknowledgeSaved: (project, snapshot) => set((state) => {
     const isLatestLocalSnapshot = state.project === snapshot;
     return {
@@ -250,3 +287,42 @@ export const useEditor = create<EditorState>((set) => ({
   }),
   setNotice: (notice) => set({ notice }),
 }));
+
+let pendingLocalDraft: LocalProjectDraft | null = null;
+let localDraftTimer: number | null = null;
+
+function flushLocalProjectDraft() {
+  if (!pendingLocalDraft) return;
+  const draft = pendingLocalDraft;
+  pendingLocalDraft = null;
+  try { window.localStorage.setItem(LOCAL_DRAFT_PREFIX + draft.project.id, JSON.stringify(draft)); } catch { /* storage quota or privacy mode */ }
+}
+
+useEditor.subscribe((state) => {
+  const project = state.project;
+  if (!project) return;
+  if (state.localRevision === state.savedRevision) {
+    pendingLocalDraft = null;
+    if (localDraftTimer !== null) window.clearTimeout(localDraftTimer);
+    localDraftTimer = null;
+    clearLocalProjectDraft(project.id);
+    return;
+  }
+  pendingLocalDraft = {
+    version: 1,
+    project,
+    baseProject: state.lastSavedProject ?? project,
+    savedRevision: state.savedRevision,
+    updatedAt: new Date().toISOString(),
+  };
+  if (localDraftTimer !== null) window.clearTimeout(localDraftTimer);
+  localDraftTimer = window.setTimeout(() => {
+    localDraftTimer = null;
+    flushLocalProjectDraft();
+  }, 150);
+});
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushLocalProjectDraft);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushLocalProjectDraft(); });
+}
