@@ -10,6 +10,8 @@ import {
   enforceLockedTrackInvariants,
   cloneClipWithFreshIds,
   cloneKeyframesWithFreshIds,
+  EXPORT_FRAME_RATES,
+  EXPORT_RESOLUTION_PROFILES,
   exportDimensions,
   ExportOptionsSchema,
   ExportRangeSchema,
@@ -24,6 +26,7 @@ import {
   projectDuration,
   playbackTime,
   quantizeFrameTime,
+  recommendedVideoBitrateKbps,
   rippleDeleteClip,
   rippleDeleteAcrossTimeline,
   retimeClipMotion,
@@ -153,12 +156,17 @@ test('normalizes professional export profiles', () => {
 });
 
 test('maps export resolution to exact even output dimensions', () => {
+  assert.deepEqual(EXPORT_RESOLUTION_PROFILES.map(({ label }) => label), ['720p HD', '1080p Full HD', '1440p QHD', '2160p UHD']);
+  assert.deepEqual(EXPORT_FRAME_RATES, [23.976, 24, 25, 29.97, 30, 50, 59.94, 60]);
   assert.deepEqual(exportDimensions('16:9', '720p'), { width: 1280, height: 720 });
   assert.deepEqual(exportDimensions('16:9', '1080p'), { width: 1920, height: 1080 });
   assert.deepEqual(exportDimensions('16:9', '2K'), { width: 2560, height: 1440 });
   assert.deepEqual(exportDimensions('16:9', '4K'), { width: 3840, height: 2160 });
   assert.deepEqual(exportDimensions('9:16', '4K'), { width: 2160, height: 3840 });
   assert.deepEqual(exportDimensions('source', '1080p', { width: 1080, height: 1350 }), { width: 1080, height: 1350 });
+  assert.equal(recommendedVideoBitrateKbps('1080p', 30, 'standard'), 8000);
+  assert.equal(recommendedVideoBitrateKbps('1080p', 60, 'standard'), 12000);
+  assert.equal(recommendedVideoBitrateKbps('4K', 30, 'high'), 47250);
 });
 
 test('rejects an inverted In-Out range', () => {

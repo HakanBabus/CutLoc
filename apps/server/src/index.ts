@@ -25,10 +25,12 @@ import {
   exportDimensions,
   enforceLockedTrackInvariants,
   ExportFpsSchema,
+  EXPORT_FRAME_RATES,
   projectDuration,
   ProjectSchema,
   ExportOptionsSchema,
   ExportResolutionSchema,
+  recommendedVideoBitrateKbps,
   JobSchema,
   SettingsSchema,
   sliceClipForRange,
@@ -740,7 +742,7 @@ async function browserRenderedFrame(projectId: string, width: number, height: nu
 async function browserRenderedExport(project: Project, options: ExportOptions, outputPath: string, job: Job) {
   const ffmpeg = binaryPath('ffmpeg');
   if (!ffmpeg) throw new Error(message('ffmpegMissingDetailed'));
-  const { width, height } = outputDimensions(project, project.canvas.aspect, options.resolution);
+  const { width, height } = outputDimensions(project, options.resolution);
   const rangeStart = options.range?.start ?? 0;
   const rangeEnd = options.range?.end ?? project.duration;
   const duration = Math.max(1 / options.fps, rangeEnd - rangeStart);
@@ -751,26 +753,23 @@ async function browserRenderedExport(project: Project, options: ExportOptions, o
   const audioInputs = audioRender.args.slice(0, filterIndex);
   const audioGraph = audioRender.args[filterIndex + 1];
   const imageInputIndex = audioInputs.filter((value) => value === '-i').length;
-  const quality = options.quality === 'draft'
-    ? { preset: 'veryfast', crf: 28 }
-    : options.quality === 'high'
-      ? { preset: 'slow', crf: 18 }
-      : { preset: 'medium', crf: 23 };
+  const quality = videoEncodingProfile(options);
   const encodeArgs = [
     ...audioInputs,
     '-f', 'image2pipe', '-framerate', ffmpegNumber(options.fps), '-vcodec', 'png', '-i', 'pipe:0',
     '-filter_complex', audioGraph,
     '-map', `${imageInputIndex}:v`, '-map', '[aout]', '-t', ffmpegNumber(duration), '-r', ffmpegNumber(options.fps), '-fps_mode', 'cfr',
     '-c:v', 'libx264', '-preset', quality.preset,
-    ...(options.rateMode === 'bitrate' && options.videoBitrateKbps ? ['-b:v', `${options.videoBitrateKbps}k`] : ['-crf', String(options.crf ?? quality.crf)]),
+    ...(options.rateMode === 'bitrate' && options.videoBitrateKbps ? ['-b:v', `${options.videoBitrateKbps}k`] : ['-crf', String(quality.crf)]),
     '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', `${options.audioBitrateKbps}k`, '-movflags', '+faststart', outputPath,
   ];
   const browser = await launchRenderBrowser();
-  const concurrency = width * height > 1920 * 1080 ? 2 : Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2)));
+  const concurrency = Math.min(frameCount, width * height > 1920 * 1080 ? 2 : Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2))));
   const pages: Page[] = [];
   const sessions: CDPSession[] = [];
   let child: ReturnType<typeof spawn> | undefined;
   try {
+    updateJob(job.id, { status: 'running', phase: 'preparing', progress: 0.02, message: message('exportRendererPreparing') });
     pages.push(...await Promise.all(Array.from({ length: concurrency }, () => prepareRenderPage(browser, project.id, width, height))));
     sessions.push(...await Promise.all(pages.map((page) => page.context().newCDPSession(page))));
     child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...encodeArgs], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
@@ -803,9 +802,11 @@ async function browserRenderedExport(project: Project, options: ExportOptions, o
         return captureRenderPage(pages[offset], sessions[offset]);
       }));
       for (const frame of frames) await writeFrame(frame);
-      updateJob(job.id, { status: 'running', phase: 'rendering', progress: Math.min(0.96, (start + frames.length) / frameCount * 0.96) });
+      const renderedFrames = start + frames.length;
+      updateJob(job.id, { status: 'running', phase: 'rendering', progress: Math.min(0.96, 0.04 + renderedFrames / frameCount * 0.92), message: message('exportFramesRunning', { current: renderedFrames, total: frameCount }) });
     }
     encoderInput.end();
+    updateJob(job.id, { status: 'running', phase: 'encoding', progress: 0.98, message: message('exportEncoding') });
     await completion;
     const stat = await fsp.stat(outputPath);
     if (stat.size <= 0) throw new Error(message('ffmpegEmpty'));
@@ -1092,11 +1093,9 @@ function numberOr(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-const supportedExportFps = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60] as const;
-
 function nearestExportFps(value: unknown, fallback = 30) {
   const requested = numberOr(value, fallback);
-  return supportedExportFps.reduce((best, candidate) => Math.abs(candidate - requested) < Math.abs(best - requested) ? candidate : best, supportedExportFps[0]);
+  return EXPORT_FRAME_RATES.reduce((best, candidate) => Math.abs(candidate - requested) < Math.abs(best - requested) ? candidate : best, EXPORT_FRAME_RATES[0]);
 }
 
 function defaultAspect(project: Project) {
@@ -1110,7 +1109,7 @@ function normalizeExportOptions(project: Project, request: ExportRequest = {}): 
   return ExportOptionsSchema.parse({
     ...request,
     format,
-    aspect: request.aspect ?? defaultAspect(project),
+    aspect: defaultAspect(project),
     resolution: request.resolution ?? '1080p',
     fps: request.fps ?? nearestExportFps(project.canvas.fps, 30),
     quality: request.quality ?? 'standard',
@@ -1118,8 +1117,15 @@ function normalizeExportOptions(project: Project, request: ExportRequest = {}): 
   });
 }
 
-function outputDimensions(project: Project, aspect: ExportOptions['aspect'], resolution: ExportOptions['resolution']) {
-  return exportDimensions(aspect, resolution, { width: project.canvas.width, height: project.canvas.height });
+function outputDimensions(project: Project, resolution: ExportOptions['resolution']) {
+  return exportDimensions(project.canvas.aspect, resolution, { width: project.canvas.width, height: project.canvas.height });
+}
+
+function videoEncodingProfile(options: ExportOptions) {
+  if (options.quality === 'draft') return { preset: 'ultrafast', crf: 28 };
+  if (options.quality === 'high') return { preset: 'medium', crf: 18 };
+  if (options.quality === 'custom') return { preset: 'medium', crf: options.crf ?? 23 };
+  return { preset: 'veryfast', crf: 23 };
 }
 
 function safeExportName(project: Project, requested: string | undefined, extension: string) {
@@ -1325,7 +1331,7 @@ function exportClipDuration(clip: TimelineClip, projectDuration: number) {
  */
 function compileComposition(project: Project, request: ExportRequest, output: string) {
   const body = normalizeExportOptions(project, request);
-  const { width: outWidth, height: outHeight } = outputDimensions(project, body.aspect, body.resolution);
+  const { width: outWidth, height: outHeight } = outputDimensions(project, body.resolution);
   // Clip transforms are stored in project-canvas pixels. Export presets may
   // render that canvas at a different resolution, so positional and text
   // metrics must be mapped into output pixels before FFmpeg evaluates them.
@@ -1668,11 +1674,7 @@ function compileComposition(project: Project, request: ExportRequest, output: st
     if (outputFormat === 'wav') args.push('-c:a', 'pcm_s16le');
     else args.push('-c:a', 'libmp3lame', '-b:a', `${body.audioBitrateKbps}k`);
   } else {
-    const quality = body.quality === 'draft'
-      ? { preset: 'veryfast', crf: 28 }
-      : body.quality === 'high'
-        ? { preset: 'slow', crf: 18 }
-        : { preset: 'medium', crf: 23 };
+    const quality = videoEncodingProfile(body);
     args.push('-map', '[vout]', '-map', '[aout]', '-t', ffmpegNumber(projectDuration), '-r', ffmpegNumber(fps), '-fps_mode', 'cfr', '-c:v', 'libx264', '-preset', quality.preset);
     if (body.rateMode === 'bitrate' && body.videoBitrateKbps) args.push('-b:v', `${body.videoBitrateKbps}k`);
     else args.push('-crf', String(body.crf ?? quality.crf));
@@ -1682,12 +1684,12 @@ function compileComposition(project: Project, request: ExportRequest, output: st
   return { args, duration: projectDuration, audioOnly, outputFormat };
 }
 
-function estimateExportBytes(options: ExportOptions, duration: number) {
+function estimateExportBytes(options: ExportOptions, duration: number, dimensions?: { width: number; height: number }) {
   if (options.format === 'wav') return Math.ceil(duration * 48000 * 2 * 2);
   if (options.format === 'mp3') return Math.ceil(duration * options.audioBitrateKbps * 1000 / 8);
   const videoKbps = options.rateMode === 'bitrate' && options.videoBitrateKbps
     ? options.videoBitrateKbps
-    : options.quality === 'high' ? 12000 : options.quality === 'draft' ? 3500 : 7000;
+    : recommendedVideoBitrateKbps(options.resolution, options.fps, options.quality, dimensions);
   return Math.ceil(duration * (videoKbps + options.audioBitrateKbps) * 1000 / 8);
 }
 
@@ -1701,7 +1703,7 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
     const preflightExtension = browserVideo || options.format === 'wav' ? 'wav' : 'mp3';
     const preflightOutput = path.join(exportDir, `.preflight-${crypto.randomUUID()}.${preflightExtension}`);
     const render = compileComposition(project, browserVideo ? { ...options, format: 'wav', audioOnly: true } : options, preflightOutput);
-    const estimatedBytes = estimateExportBytes(options, render.duration);
+    const estimatedBytes = estimateExportBytes(options, render.duration, outputDimensions(project, options.resolution));
     try {
       const stat = fs.statfsSync(exportDir);
       const freeBytes = Number(stat.bavail) * Number(stat.bsize);
@@ -1710,7 +1712,7 @@ async function exportPreflight(project: Project, options: ExportOptions, exportD
     } catch {
       warnings.push({ code: 'DISK_SPACE_UNKNOWN', message: message('preflightDiskUnknown') });
     }
-    if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { fps: options.fps }) });
+    if (options.fps !== nearestExportFps(project.canvas.fps, project.canvas.fps)) warnings.push({ code: 'FPS_CONVERT', message: message('preflightFpsConvert', { source: project.canvas.fps, fps: options.fps }) });
     if (options.resolution === '4K') warnings.push({ code: 'LARGE_OUTPUT', message: message('preflightLargeOutput') });
     if (ffmpeg && errors.length === 0) {
       try {
@@ -2687,7 +2689,7 @@ async function registerRoutes(app: FastifyInstance) {
       abortPreviewRequest = () => previewAbortController?.abort();
       request.raw.once('aborted', abortPreviewRequest);
       await serverTestHooks.beforePreviewRender?.(project.id);
-      const { width, height } = outputDimensions(project, project.canvas.aspect, resolution);
+      const { width, height } = outputDimensions(project, resolution);
       const bytes = await browserRenderedFrame(project.id, width, height, frameTime, previewAbortController.signal);
       const replaced = previewFrameCache.get(cacheKey);
       if (replaced) previewFrameCacheBytes -= replaced.length;

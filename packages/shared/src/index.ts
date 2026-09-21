@@ -874,7 +874,7 @@ export const SettingsSchema = z.object({
     format: z.enum(['mp4', 'mp3', 'wav']).default('mp4'),
     aspect: CanvasAspectSchema.default('16:9'),
     resolution: z.enum(['720p', '1080p', '2K', '4K']).default('1080p'),
-    fps: z.number().positive().default(30),
+    fps: z.union([z.literal(23.976), z.literal(24), z.literal(25), z.literal(29.97), z.literal(30), z.literal(50), z.literal(59.94), z.literal(60)]).default(30),
     quality: z.enum(['draft', 'standard', 'high', 'custom']).default('standard'),
     audioBitrateKbps: z.union([z.literal(128), z.literal(192), z.literal(256)]).default(256),
   }),
@@ -899,6 +899,17 @@ export type ExportFormat = z.infer<typeof ExportFormatSchema>;
 export const ExportResolutionSchema = z.enum(['720p', '1080p', '2K', '4K']);
 export type ExportResolution = z.infer<typeof ExportResolutionSchema>;
 
+export const EXPORT_RESOLUTION_PROFILES: ReadonlyArray<{
+  value: ExportResolution;
+  pixels: number;
+  label: string;
+}> = [
+  { value: '720p', pixels: 720, label: '720p HD' },
+  { value: '1080p', pixels: 1080, label: '1080p Full HD' },
+  { value: '2K', pixels: 1440, label: '1440p QHD' },
+  { value: '4K', pixels: 2160, label: '2160p UHD' },
+];
+
 const exportAspectRatios: Record<CanvasAspect, number> = {
   '16:9': 16 / 9,
   '9:16': 9 / 16,
@@ -920,18 +931,40 @@ export function exportDimensions(
 ) {
   const sourceRatio = source && source.width > 0 && source.height > 0 ? source.width / source.height : exportAspectRatios['16:9'];
   const ratio = aspect === 'source' ? sourceRatio : exportAspectRatios[aspect];
-  const shortEdge = resolution === '720p' ? 720 : resolution === '2K' ? 1440 : resolution === '4K' ? 2160 : 1080;
+  const shortEdge = EXPORT_RESOLUTION_PROFILES.find((profile) => profile.value === resolution)?.pixels ?? 1080;
   const rawWidth = ratio >= 1 ? Math.round(shortEdge * ratio) : shortEdge;
   const rawHeight = ratio >= 1 ? shortEdge : Math.round(shortEdge / ratio);
   const even = (value: number) => Math.max(2, value % 2 === 0 ? value : value + 1);
   return { width: even(rawWidth), height: even(rawHeight) };
 }
 
+export const EXPORT_FRAME_RATES = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60] as const;
 export const ExportFpsSchema = z.union([z.literal(23.976), z.literal(24), z.literal(25), z.literal(29.97), z.literal(30), z.literal(50), z.literal(59.94), z.literal(60)]);
 export type ExportFps = z.infer<typeof ExportFpsSchema>;
 
 export const ExportQualitySchema = z.enum(['draft', 'standard', 'high', 'custom']);
 export type ExportQuality = z.infer<typeof ExportQualitySchema>;
+
+export function recommendedVideoBitrateKbps(
+  resolution: ExportResolution,
+  fps: ExportFps,
+  quality: ExportQuality,
+  dimensions?: { width: number; height: number },
+) {
+  const baseByResolution: Record<ExportResolution, number> = {
+    '720p': 5000,
+    '1080p': 8000,
+    '2K': 16000,
+    '4K': 35000,
+  };
+  const shortEdge = EXPORT_RESOLUTION_PROFILES.find((profile) => profile.value === resolution)?.pixels ?? 1080;
+  const baselinePixels = shortEdge * shortEdge * (16 / 9);
+  const actualPixels = dimensions ? dimensions.width * dimensions.height : baselinePixels;
+  const pixelFactor = clamp(actualPixels / baselinePixels, 0.65, 1.6);
+  const fpsFactor = clamp(fps / 30, 0.8, 1.5);
+  const qualityFactor = quality === 'draft' ? 0.7 : quality === 'high' ? 1.35 : 1;
+  return Math.round(baseByResolution[resolution] * pixelFactor * fpsFactor * qualityFactor / 250) * 250;
+}
 
 export const ExportRangeSchema = z.object({
   start: z.number().finite().nonnegative(),

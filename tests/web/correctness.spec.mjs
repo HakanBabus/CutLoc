@@ -25,10 +25,12 @@ test('canvas stays on the single live compositor during playback and pause', asy
     await expect(page.locator('.canvas-frame .preview-media')).toBeVisible();
 
     await page.getByRole('button', { name: /Export|Dışa aktar/ }).click();
-    await page.getByLabel(/Project and output frame rate|Proje ve çıktı kare hızı/).selectOption('60');
+    await expect(page.getByLabel(/Output resolution|Çıktı çözünürlüğü/).locator('option[value="2K"]')).toHaveText(/1440p QHD · 2560 × 1440/);
+    await page.getByLabel(/Output frame rate|Çıktı kare hızı/).selectOption('60');
+    await expect(page.locator('.export-warning')).toContainText(/30 FPS.*60 FPS/);
     await page.keyboard.press('Escape');
-    await expect(page.locator('.preview-time-fps')).toHaveText('60 FPS');
-    await expect(page.getByLabel(/Project frame rate|Proje kare hızı/)).toHaveValue('60');
+    await expect(page.locator('.preview-time-fps')).toHaveText('30 FPS');
+    await expect(page.getByLabel(/Project frame rate|Proje kare hızı/)).toHaveValue('30');
 
     const projects = await (await request.get('/api/projects')).json();
     projectId = projects.find((project) => !beforeIds.has(project.id))?.id;

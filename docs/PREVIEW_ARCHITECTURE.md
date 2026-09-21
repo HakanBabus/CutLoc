@@ -32,8 +32,10 @@ ProjectSchema -> evaluateFrameRenderPlan()
    decoding; CSS/SVG layers retain GPU composition and interactive hit targets.
 5. Export opens a chrome-free renderer route at the requested output size,
    seeks to each quantized frame, and captures the same `.canvas-frame` tree.
-6. A small page pool renders frames in parallel and sends ordered lossless PNG
-   frames to FFmpeg. FFmpeg processes audio and performs encoding/muxing.
+6. A small page pool starts in parallel, uses Chromium's optimized lossless
+   capture path, and sends ordered PNG frames to FFmpeg. Pool size adapts to
+   frame count and output pixel load. FFmpeg processes audio and performs
+   encoding/muxing.
 7. The preview-frame API uses the same renderer route and revision cache.
 
 WebCodecs was deliberately not made the primary decoder. It would require a

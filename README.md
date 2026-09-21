@@ -86,7 +86,7 @@ Every successful command above is a single compact JSON value on `stdout`; failu
 | **Timeline** | Arrange video, overlay, audio, text, and subtitle tracks with frame-aware playhead positioning, markers, snapping, trim, split, move, duplicate, ripple-delete, undo/redo, and track lock/hide/mute controls. |
 | **Canvas and Inspector** | Select visible objects from the canvas, choose aspect and fit modes, and zoom or pan the preview; the same compositor supplies exported video frames. Then edit layout, crop, speed, audio, filters, masks, fades, transitions, keyframes, and text styling. |
 | **Motion and building blocks** | Use text presets and add built-in backgrounds or shapes from the Elements panel. In the selected clip's Animation tab, enable a motion property once, move the playhead, and change its value; CutLoc creates later keyframes automatically. |
-| **Export** | Run local export preflight and render MP4 video or MP3/WAV audio with selectable aspect, resolution, FPS, quality, audio bitrate, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
+| **Export** | Run local export preflight and render MP4 video or MP3/WAV audio. MP4 keeps the project canvas aspect and exposes exact 720p/1080p/1440p/2160p dimensions, an independent output FPS, clearly labeled speed/quality profiles, Mbps controls, and timeline range. Current export is creative re-encoding, not lossless/remux cutting. |
 | **Recovery and safety** | Autosave, revision checks, backups, 30-day recoverable trash, project access leases, export preflight, and partial-output cleanup keep local failures visible and recoverable where supported. |
 
 ## Editor workflow
@@ -372,7 +372,7 @@ GitHub CI runs the equivalent sequence on Linux and Windows: locked install, pre
 - Keep the server on `127.0.0.1` or another loopback address. Do not expose it through a LAN binding, tunnel, reverse proxy, or public interface.
 - CutLoc is local-first, but it is not a full process sandbox. Treat media from unknown sources carefully because FFmpeg processes complex native formats.
 - The local CLI does not start a hosted AI provider or send project data to an external provider by itself. Do not commit API keys or personal media.
-- Export is local and re-encoded. Preview/export parity can vary with codecs, filters, motion, and other effects.
+- Export is local and re-encoded. Preview and MP4 frames use the same Chromium compositor; local browser codec decoding remains platform-dependent.
 - Keep independent backups of important projects and media. For vulnerability reports, see the [security policy](SECURITY.md).
 
 ## Documentation map

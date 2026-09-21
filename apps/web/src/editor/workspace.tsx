@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { clamp, cloneClipWithFreshIds, exportDimensions, formatTime, projectDuration, splitClipAt, type Asset, type ExportOptions, type ExportPreflight, type Job, type Project, type Settings, type WorkspaceLayout } from '@cutloc/shared';
+import { clamp, cloneClipWithFreshIds, EXPORT_FRAME_RATES, EXPORT_RESOLUTION_PROFILES, exportDimensions, formatTime, projectDuration, recommendedVideoBitrateKbps, splitClipAt, type Asset, type ExportOptions, type ExportPreflight, type Job, type Project, type Settings, type WorkspaceLayout } from '@cutloc/shared';
 import { useI18n, type TranslationKey } from '../i18n';
 import { CommandPalette, type CommandAction } from '../components/command-palette';
 import { ThemeSwitcher } from '../components/theme-switcher';
@@ -603,7 +603,6 @@ export function Editor({ onBack }: { onBack: () => void }) {
 
 function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, status, onStart, onCancel, onAddFirstAsset, onClose }: { project: Project; settings: Settings | null; rangeStart: number | null; rangeEnd: number | null; exporting: boolean; status: ExportStatus; onStart: (options: ExportOptions) => Promise<ExportPreflight>; onCancel: () => Promise<void>; onAddFirstAsset: () => boolean; onClose: () => void }) {
   const { t } = useI18n();
-  const mutateProject = useEditor((state) => state.mutateProject);
   const dialogRef = useRef<HTMLElement>(null);
   const defaults = settings?.defaultExport;
   // Export always follows the project canvas.  Aspect changes belong to the
@@ -612,13 +611,13 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const aspect: ExportOptions['aspect'] = project.canvas.aspect ?? '16:9';
   const [format, setFormat] = useState<ExportOptions['format']>(defaults?.format ?? 'mp4');
   const [resolution, setResolution] = useState<ExportOptions['resolution']>(defaults?.resolution ?? '1080p');
-  const supportedFps: ExportOptions['fps'][] = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
-  const projectFps = supportedFps.includes(project.canvas.fps as ExportOptions['fps']) ? project.canvas.fps as ExportOptions['fps'] : 30;
-  const [fps, setFps] = useState<ExportOptions['fps']>(projectFps);
+  const projectFps = EXPORT_FRAME_RATES.includes(project.canvas.fps as ExportOptions['fps']) ? project.canvas.fps as ExportOptions['fps'] : 30;
+  const defaultOutputFps = EXPORT_FRAME_RATES.includes(defaults?.fps as ExportOptions['fps']) ? defaults!.fps as ExportOptions['fps'] : projectFps;
+  const [fps, setFps] = useState<ExportOptions['fps']>(defaultOutputFps);
   const [quality, setQuality] = useState<ExportOptions['quality']>(defaults?.quality ?? 'standard');
   const [rateMode, setRateMode] = useState<ExportOptions['rateMode']>('crf');
   const [crf, setCrf] = useState(23);
-  const [videoBitrateKbps, setVideoBitrateKbps] = useState(7000);
+  const [videoBitrateMbps, setVideoBitrateMbps] = useState(8);
   const [audioBitrateKbps, setAudioBitrateKbps] = useState<128 | 192 | 256>(defaults?.audioBitrateKbps ?? 256);
   const [scope, setScope] = useState<'all' | 'range'>('all');
   const [fileName, setFileName] = useState(`${project.name}-export`);
@@ -663,6 +662,8 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
     height: project.canvas.height,
   });
   const outputHint = `${outputSize.width} × ${outputSize.height}`;
+  const resolutionLabel = EXPORT_RESOLUTION_PROFILES.find((profile) => profile.value === resolution)?.label ?? resolution;
+  const recommendedBitrateMbps = recommendedVideoBitrateKbps(resolution, fps, quality, outputSize) / 1000;
   const options = (): ExportOptions => ({
     format,
     aspect,
@@ -671,7 +672,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
     quality,
     rateMode,
     crf: quality === 'custom' && rateMode === 'crf' ? crf : undefined,
-    videoBitrateKbps: quality === 'custom' && rateMode === 'bitrate' ? videoBitrateKbps : undefined,
+    videoBitrateKbps: quality === 'custom' && rateMode === 'bitrate' ? Math.round(clamp(videoBitrateMbps, 0.5, 50) * 1000) : undefined,
     audioBitrateKbps,
     range: scope === 'range' && rangeStart !== null && rangeEnd !== null && rangeEnd > rangeStart ? { start: rangeStart, end: rangeEnd } : undefined,
     fileName,
@@ -723,7 +724,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
                 <small>
                   {isVideo
                     ? t('export.output', {
-                        resolution: resolution === '2K' ? '1440p' : resolution,
+                        resolution: resolutionLabel,
                         size: outputHint,
                       })
                     : t('export.audioOnlyOutput')}
@@ -743,10 +744,10 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
                 <label>
                   <span>{t('export.resolution')}</span>
                   <select aria-label={t('export.outputResolution')} value={resolution} onChange={(event) => setResolution(event.target.value as ExportOptions['resolution'])} disabled={exporting}>
-                    <option value="720p">720p · HD</option>
-                    <option value="1080p">1080p · Full HD</option>
-                    <option value="2K">1440p · 2K</option>
-                    <option value="4K">2160p · 4K UHD</option>
+                    {EXPORT_RESOLUTION_PROFILES.map((profile) => {
+                      const size = exportDimensions(aspect, profile.value, { width: project.canvas.width, height: project.canvas.height });
+                      return <option key={profile.value} value={profile.value}>{profile.label} · {size.width} × {size.height}</option>;
+                    })}
                   </select>
                 </label>
               ) : (
@@ -760,13 +761,10 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
               {isVideo && (
                 <label>
                   <span>{t('export.projectFrameRate')}</span>
-                  <select value={fps} onChange={(event) => {
-                    const next = Number(event.target.value) as ExportOptions['fps'];
-                    setFps(next);
-                    mutateProject((draft) => { draft.canvas.fps = next; });
-                  }} disabled={exporting}>
-                    {supportedFps.map((value) => <option key={value} value={value}>{value} FPS</option>)}
+                  <select value={fps} onChange={(event) => setFps(Number(event.target.value) as ExportOptions['fps'])} disabled={exporting}>
+                    {EXPORT_FRAME_RATES.map((value) => <option key={value} value={value}>{value} FPS{value === projectFps ? ` · ${t('export.timelineMatch')}` : ''}</option>)}
                   </select>
+                  <small>{t('export.timelineFps', { fps: projectFps })}</small>
                 </label>
               )}
               {usesCompressedAudio && (
@@ -813,7 +811,8 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
                     ) : (
                       <label>
                         <span>{t('export.videoBitrate')}</span>
-                        <input type="number" min={500} max={50000} step={500} value={videoBitrateKbps} onChange={(event) => setVideoBitrateKbps(Number(event.target.value))} />
+                        <input type="number" min={0.5} max={50} step={0.5} value={videoBitrateMbps} onChange={(event) => setVideoBitrateMbps(Number(event.target.value))} />
+                        <small>{t('export.recommendedBitrate', { bitrate: recommendedBitrateMbps })}</small>
                       </label>
                     )}
                   </div>
@@ -846,6 +845,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
                 <b>{t(`export.quality.${quality}` as TranslationKey)}</b>
               </div>
             )}
+            {isVideo && fps !== projectFps && <div className="export-warning">⚠ {t('export.fpsConversion', { source: projectFps, output: fps })}</div>}
             <div className="summary-row">
               <span>Codec</span>
               <b>{isVideo ? 'H.264 / AAC' : format === 'mp3' ? 'MP3' : 'PCM'}</b>
@@ -1101,10 +1101,7 @@ export function SettingsModal({ settings, onClose }: { settings: Settings | null
                 })
               }
             >
-              <option value="720p">720p</option>
-              <option value="1080p">1080p</option>
-              <option value="2K">1440p</option>
-              <option value="4K">4K UHD</option>
+              {EXPORT_RESOLUTION_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label}</option>)}
             </select>
           </label>
           <label>
@@ -1121,7 +1118,7 @@ export function SettingsModal({ settings, onClose }: { settings: Settings | null
                 })
               }
             >
-              {[23.976, 24, 25, 29.97, 30, 50, 59.94, 60].map((fps) => (
+              {EXPORT_FRAME_RATES.map((fps) => (
                 <option key={fps} value={fps}>
                   {fps} FPS
                 </option>

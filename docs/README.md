@@ -178,7 +178,7 @@ CutLoc checks the extension, declared MIME type, and probed content. Relinking a
 
 CutLoc performs a creative render and re-encodes output; it is not a lossless remux cutter.
 
-Preview-frame capture, export preflight, and final export share one composition compiler. Preview-frame responses are quantized to the requested FPS and cached by project revision, frame, resolution, and FPS; changing the project revision cannot reuse a stale output frame.
+Preview-frame capture and final MP4 export use the same Chromium composition tree. Preview-frame responses are quantized to the requested FPS and cached by project revision, frame, resolution, and FPS; changing the project revision cannot reuse a stale output frame.
 
 | Format | Video | Audio | Notes |
 | --- | --- | --- | --- |
@@ -186,7 +186,7 @@ Preview-frame capture, export preflight, and final export share one composition 
 | MP3 | — | `libmp3lame` | 128, 192, or 256 kbps; new exports default to 256 kbps |
 | WAV | — | 16-bit PCM | Local uncompressed audio |
 
-MP4 exports support 720p, 1080p, 2K/1440p, and 4K; 24, 25, 30, 50, and 60 FPS; draft, standard, high, and custom rate controls. Resolution follows the project aspect ratio and is rounded to valid even dimensions.
+MP4 exports support 720p HD, 1080p Full HD, 1440p QHD, and 2160p UHD profiles; 23.976, 24, 25, 29.97, 30, 50, 59.94, and 60 FPS; and draft, standard, high, and custom rate controls. Each resolution option shows its exact pixel dimensions for the current project aspect. Output FPS is independent from timeline FPS and conversion is reported before export. Custom bitrate uses Mbps in the UI and kbps only in the API contract.
 
 Before starting an export, preflight validates the project revision, timeline, source files, FFmpeg availability and text-rendering capability, settings, range, and estimated disk requirement. CutLoc prefers the bundled FFmpeg binary but can select a local full build when the bundled platform binary lacks `drawtext`. Invalid In/Out ranges do not silently fall back to the full timeline.
 

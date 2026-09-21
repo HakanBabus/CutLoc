@@ -86,7 +86,7 @@ Yukarıdaki her başarılı komut `stdout` üzerinde tek ve kompakt bir JSON de�
 | **Zaman çizelgesi** | Kare duyarlı oynatma kafası, işaretçiler, hizalama, kırpma, bölme, taşıma, çoğaltma, boşluğu kapatarak silme, geri al/yinele ve kanal kilitleme/gizleme/sessize alma kontrolleriyle video, kaplama, ses, metin ve altyazı kanalları. |
 | **Tuval ve Denetçi** | Tuvalde görünen nesneleri seçme, en-boy ve sığdırma modları ve önizleme yakınlaştırma/kaydırma; aynı kompozitör dışa aktarılan video karelerini de üretir. Ardından yerleşim, kırpma, hız, ses, filtre, maske, fade, geçiş, anahtar kare ve metin biçimlendirme. |
 | **Hareket ve yapı taşları** | Metin hazır ayarları ile Öğeler panelinden yerleşik arka plan ve şekiller. Animasyon sekmesinde bir özelliği bir kez etkinleştirin, oynatma kafasını taşıyıp değeri değiştirin; CutLoc sonraki anahtar kareleri otomatik oluşturur. |
-| **Dışa aktarma** | Yerel ön kontrol; seçilebilir en-boy, çözünürlük, FPS, kalite, ses bit hızı ve zaman aralığıyla MP4 video veya MP3/WAV ses render'ı. Mevcut çıktı yaratıcı yeniden kodlamadır; kayıpsız/remux kesme değildir. |
+| **Dışa aktarma** | Yerel ön kontrol ile MP4 video veya MP3/WAV ses render'ı. MP4 proje tuvali oranını korur; kesin 720p/1080p/1440p/2160p boyutları, timeline'dan bağımsız çıktı FPS'i, açık hız/kalite profilleri, Mbps kontrolü ve zaman aralığı sunar. Mevcut çıktı yaratıcı yeniden kodlamadır; kayıpsız/remux kesme değildir. |
 | **Kurtarma ve güvenlik** | Otomatik kayıt, revizyon kontrolleri, yedekler, 30 gün kurtarılabilir çöp, proje erişim kilitleri, dışa aktarma ön kontrolü ve kısmi çıktı temizliği. |
 
 ## Editör iş akışı
@@ -371,7 +371,7 @@ GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma a
 - Sunucuyu `127.0.0.1` veya başka bir loopback adresinde tutun. LAN bağlantısı, tünel, ters proxy veya herkese açık arayüzle dışarı açmayın.
 - CutLoc yerel önceliklidir ancak tam bir süreç sandbox'ı değildir. FFmpeg karmaşık yerel biçimleri işlediği için bilinmeyen kaynaklardan gelen medyayı dikkatli kullanın.
 - Yerel CLI kendi başına barındırılan bir yapay zekâ sağlayıcısı başlatmaz veya proje verisini dış sağlayıcıya göndermez. API anahtarlarını ve kişisel medyayı commit'e eklemeyin.
-- Dışa aktarma yerel ve yeniden kodlamalıdır. Önizleme/çıktı uyumu codec, filtre, hareket ve diğer efektlere göre değişebilir.
+- Dışa aktarma yerel ve yeniden kodlamalıdır. Önizleme ile MP4 kareleri aynı Chromium kompozitörünü kullanır; yerel tarayıcı codec çözümü platforma bağlı kalır.
 - Önemli proje ve medyaların bağımsız yedeklerini tutun. Güvenlik açığı bildirimleri için [güvenlik politikasına](SECURITY.md) bakın.
 
 ## Belge haritası

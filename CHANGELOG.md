@@ -14,6 +14,9 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 
 ### Changed
 
+- Export renderer pages now start in parallel and use Chromium's optimized lossless frame capture path; draft and standard H.264 profiles favor faster presets while preserving their quality targets.
+- Export resolution labels now use unambiguous 720p HD, 1080p Full HD, 1440p QHD, and 2160p UHD names with exact pixel dimensions. Output FPS no longer changes the project timeline FPS, and custom video bitrate is entered in Mbps with a profile-aware recommendation.
+- Export progress now distinguishes compositor startup, rendered frame count, and final encoding/muxing.
 - Windows projects, settings, proxies, backups, and exports now default to `%LOCALAPPDATA%\CutLoc\data` instead of the source checkout.
 - Live preview now consumes the shared frame-quantized render plan used by the export contract for layer order, source time, transforms, transitions, crop/fit geometry, adjustment filters, and audio gain. Duplicate animation math was removed from the React compositor, fractional FPS is available in the canvas, and playback publishes at most one UI update per authored frame.
 - `agent guide` documents repo-independent discovery and automatic startup.

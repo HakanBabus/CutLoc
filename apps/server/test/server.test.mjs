@@ -149,7 +149,7 @@ test('health endpoint reports a local server without leaking the absolute data p
 test('translation catalogs localize server messages and interpolation values', () => {
   assert.equal(serverT('tr', 'projectNotFound'), 'Proje bulunamadı');
   assert.equal(serverT('en', 'projectNotFound'), 'Project not found');
-  assert.equal(serverT('en', 'preflightFpsConvert', { fps: 60 }), 'The project will be resampled to 60 FPS.');
+  assert.equal(serverT('en', 'preflightFpsConvert', { source: 30, fps: 60 }), 'The timeline is 30 FPS and the output will be 60 FPS; frames will be converted on the timeline clock.');
 });
 
 test('active UI and route implementations keep Turkish copy in translation catalogs', async () => {
@@ -1145,7 +1145,7 @@ test('export scales canvas-space clip positions with the requested output resolu
   project.duration = 0.2;
   assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
 
-  const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', aspect: '16:9', resolution: '720p', quality: 'draft', range: { start: 0, end: 0.2 }, fileName: 'transform-parity.mp4' });
+  const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', aspect: '9:16', resolution: '720p', quality: 'draft', range: { start: 0, end: 0.2 }, fileName: 'transform-parity.mp4' });
   assert.equal(response.statusCode, 202);
   const job = await waitForJob(response.json().job.id, 30000);
   assert.equal(job.status, 'completed', job.error ?? 'transform parity export failed');
