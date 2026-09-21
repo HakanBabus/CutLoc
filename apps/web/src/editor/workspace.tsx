@@ -623,11 +623,15 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
   const [fileName, setFileName] = useState(`${project.name}-export`);
   const [error, setError] = useState('');
   const [preflight, setPreflight] = useState<ExportPreflight | null>(null);
+  const [configureAfterComplete, setConfigureAfterComplete] = useState(false);
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     return () => previousFocus?.focus();
   }, []);
+  useEffect(() => {
+    setConfigureAfterComplete(false);
+  }, [status.jobId]);
   const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape' && !exporting) {
       event.preventDefault();
@@ -652,6 +656,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
     }
   };
   const done = status.status === 'completed';
+  const showSuccess = done && !configureAfterComplete && Boolean(status.downloadUrl);
   const isVideo = format === 'mp4';
   const usesCompressedAudio = format !== 'wav';
   const statusLabel = status.status === 'queued' ? t('export.status.queued') : status.status === 'running' ? t('export.status.running') : status.status === 'reconnecting' ? t('export.status.reconnecting') : status.status === 'completed' ? t('export.status.completed') : status.status === 'failed' ? t('export.status.failed') : status.status === 'cancelled' ? t('export.status.cancelled') : status.status === 'saving' ? t('export.status.saving') : status.status === 'preflight' ? t('export.status.preflight') : t('export.preparing');
@@ -696,7 +701,7 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
         if (event.target === event.currentTarget && !exporting) onClose();
       }}
     >
-      <section ref={dialogRef} className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title" tabIndex={-1} onKeyDown={handleDialogKeyDown}>
+      <section ref={dialogRef} className={`export-modal ${showSuccess ? 'export-modal-complete' : ''}`} role="dialog" aria-modal="true" aria-labelledby="export-title" tabIndex={-1} onKeyDown={handleDialogKeyDown}>
         <div className="modal-head">
           <div>
             <p className="eyebrow">{t('export.studio')}</p>
@@ -712,6 +717,37 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
             ×
           </button>
         </div>
+        {showSuccess && (
+          <div className="export-success-view" role="status" aria-live="polite">
+            <div className="export-success-orbit" aria-hidden="true">
+              <span className="export-success-ring export-success-ring-a" />
+              <span className="export-success-ring export-success-ring-b" />
+              <span className="export-success-check">✓</span>
+            </div>
+            <span className="export-success-badge">{t('export.successBadge')}</span>
+            <h3>{t('export.successTitle')}</h3>
+            <p>{t('export.successCopy')}</p>
+            <div className="export-success-file">
+              <span className="export-success-file-icon">{format.toUpperCase()}</span>
+              <div>
+                <small>{t('export.savedAs')}</small>
+                <strong title={status.fileName}>{status.fileName}</strong>
+                <span>{isVideo ? `${outputHint} · ${fps} FPS · H.264 / AAC` : format === 'mp3' ? `${audioBitrateKbps} kbps · MP3` : '48 kHz · PCM WAV'}</span>
+              </div>
+            </div>
+            <div className="export-success-actions">
+              <a className="primary-button" href={status.downloadUrl} download={status.fileName}>
+                <Glyph>↓</Glyph> {t('export.downloadNow')}
+              </a>
+              <button className="secondary-button" onClick={() => void submit()}>
+                {t('export.reExport')}
+              </button>
+              <button className="export-success-adjust" onClick={() => setConfigureAfterComplete(true)}>
+                {t('export.adjustSettings')}
+              </button>
+            </div>
+          </div>
+        )}
         <div className="export-layout">
           <div className="export-form">
             <div className="export-section">

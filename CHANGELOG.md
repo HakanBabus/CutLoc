@@ -14,6 +14,9 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 
 ### Changed
 
+- Text shadows now scale with the same canvas factor as text and strokes, keeping preview and exported typography visually proportional.
+- Completed exports now open a dedicated result screen with file details, a primary download action, repeat export, and a path back to the export settings.
+- Windows media discovery and probing helpers now run without flashing console windows during import or export preparation.
 - Export renderer pages now start in parallel and use Chromium's optimized lossless frame capture path; draft and standard H.264 profiles favor faster presets while preserving their quality targets.
 - Export resolution labels now use unambiguous 720p HD, 1080p Full HD, 1440p QHD, and 2160p UHD names with exact pixel dimensions. Output FPS no longer changes the project timeline FPS, and custom video bitrate is entered in Mbps with a profile-aware recommendation.
 - Export progress now distinguishes compositor startup, rendered frame count, and final encoding/muxing.

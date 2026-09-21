@@ -165,6 +165,13 @@ test('active UI and route implementations keep Turkish copy in translation catal
   assert.doesNotMatch(serverSource, /[ÇĞİÖŞÜçğıöşü]/u);
 });
 
+test('Windows media helper processes never create visible console windows', async () => {
+  const serverSource = await fsp.readFile(path.join(repoRoot, 'apps', 'server', 'src', 'index.ts'), 'utf8');
+  assert.match(serverSource, /spawnSync\(process\.platform === 'win32' \? 'where\.exe' : 'which',[^\n]+windowsHide: true/);
+  assert.match(serverSource, /spawnSync\(binary, \['-hide_banner', '-filters'\],[^\n]+windowsHide: true/);
+  assert.match(serverSource, /spawn\(ffprobe, \['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file\], \{ windowsHide: true \}\)/);
+});
+
 test('project CRUD and revision conflicts work in an isolated data directory', async () => {
   const createdResponse = await jsonRequest('POST', '/api/projects', { name: 'Test proje' });
   assert.equal(createdResponse.statusCode, 201);

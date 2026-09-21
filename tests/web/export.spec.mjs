@@ -62,8 +62,12 @@ test('export polling watchdog catches completion when SSE emits no job event', a
     await expect(exportModal.locator('.export-format-note').getByText(/PCM/)).toBeVisible();
     await exportModal.locator('select').first().selectOption('mp4');
     await page.locator('.export-start-button').click();
-    await expect(page.locator('.export-complete')).toBeVisible({ timeout: 6_000 });
+    const success = page.locator('.export-success-view');
+    await expect(success).toBeVisible({ timeout: 6_000 });
+    await expect(success).toContainText(/Export complete|Dışa aktarma tamamlandı/);
+    await expect(success.getByRole('link', { name: /Download file|Dosyayı indir/ })).toHaveAttribute('href', '/api/jobs/job_watchdog/download');
     expect(jobReads).toBeGreaterThanOrEqual(2);
+    await success.getByRole('button', { name: /Change settings|Ayarları değiştir/ }).click();
     await expect(page.locator('.export-start-button')).toBeEnabled();
   } finally {
     if (projectId) {

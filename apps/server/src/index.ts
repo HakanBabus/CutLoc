@@ -433,7 +433,7 @@ const binaryPathCache = new Map<'ffmpeg' | 'ffprobe', string | null>();
 const ffmpegFilterCache = new Map<string, boolean>();
 
 function systemBinaryPath(name: 'ffmpeg' | 'ffprobe') {
-  const result = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', [name], { encoding: 'utf8' });
+  const result = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', [name], { encoding: 'utf8', windowsHide: true });
   return result.status === 0 ? result.stdout.trim().split(/\r?\n/)[0] || null : null;
 }
 
@@ -442,7 +442,7 @@ function ffmpegHasFilter(binary: string | null, filter: string) {
   const cacheKey = `${binary}\0${filter}`;
   const cached = ffmpegFilterCache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const result = spawnSync(binary, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const result = spawnSync(binary, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
   const available = result.status === 0 && new RegExp(`^\\s*[.A-Z]+\\s+${filter}\\s`, 'm').test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
   ffmpegFilterCache.set(cacheKey, available);
   return available;
@@ -472,7 +472,7 @@ async function probeMedia(file: string) {
   const ffprobe = binaryPath('ffprobe');
   if (!ffprobe) return {};
   return await new Promise<Record<string, unknown>>((resolve) => {
-    const child = spawn(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file]);
+    const child = spawn(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file], { windowsHide: true });
     let out = '';
     const maxProbeOutputBytes = 4 * 1024 * 1024;
     const timeout = setTimeout(() => child.kill(), Math.min(maxFfmpegRuntimeMs, 5 * 60 * 1000));

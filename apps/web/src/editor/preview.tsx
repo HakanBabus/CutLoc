@@ -784,7 +784,9 @@ export function PreviewArea({ project, settings }: { project: Project; settings:
                         background: style.background,
                         clipPath: transitionClipPath(visual.wipe),
                         WebkitTextStroke: `${style.strokeWidth * canvasScale}px ${style.stroke}`,
-                        textShadow: style.shadow ? '0 2px 8px #000' : 'none',
+                        textShadow: style.shadow
+                          ? `0 ${2 * canvasScale}px ${8 * canvasScale}px rgba(0, 0, 0, .92)`
+                          : 'none',
                         textAlign: style.align,
                         whiteSpace: 'pre',
                       }}
