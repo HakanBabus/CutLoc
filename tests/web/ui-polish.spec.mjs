@@ -76,6 +76,7 @@ test('new text clips start without fades or transitions', async ({ page, request
     await expect(fixtureCard).toBeVisible();
     await fixtureCard.getByRole('button').first().click();
     await expect(page.locator('.editor-shell')).toBeVisible();
+    await expect(page.locator('.editor-brand-logo')).toHaveAttribute('src', '/favicon.svg');
 
     await page.locator('.tool-rail button').filter({ hasText: /Text|Metin/ }).click();
     await page.locator('.text-primary-action').click();
@@ -154,6 +155,20 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await page.keyboard.press('Enter');
     await expect(timelineClip).toHaveAttribute('aria-pressed', 'true');
     await page.getByRole('button', { name: /Light theme|Beyaz tema/i }).click();
+    const previewZoomPalette = await page.locator('.app-shell').evaluate((shell) => {
+      const zoom = shell.querySelector('.preview-inline-zoom');
+      const button = zoom?.querySelector('button');
+      const output = zoom?.querySelector('output');
+      return {
+        shellText: getComputedStyle(shell).color,
+        panelBackground: zoom ? getComputedStyle(zoom).backgroundColor : '',
+        buttonText: button ? getComputedStyle(button).color : '',
+        outputText: output ? getComputedStyle(output).color : '',
+      };
+    });
+    expect(previewZoomPalette.buttonText).toBe(previewZoomPalette.shellText);
+    expect(previewZoomPalette.outputText).toBe(previewZoomPalette.shellText);
+    expect(previewZoomPalette.panelBackground).not.toBe('rgba(13, 20, 24, 0.72)');
     const workspaceGeometry = await page.locator('.editor-body').evaluate((workspace) => {
       const timeline = workspace.querySelector('.timeline-pro');
       const inspector = workspace.querySelector('.inspector-pro');

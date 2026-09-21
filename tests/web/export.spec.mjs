@@ -52,6 +52,7 @@ test('export polling watchdog catches completion when SSE emits no job event', a
     await page.locator('.export-button').click();
     const exportModal = page.locator('.export-modal');
     await expect(exportModal).toBeFocused();
+    await expect(exportModal.locator('.export-launch-card')).toContainText(/Prepare your video|Videonu yayına hazırla/i);
     await page.keyboard.press('Shift+Tab');
     await expect(exportModal.locator(':focus')).toHaveCount(1);
     await exportModal.locator('select').first().selectOption('mp3');
@@ -65,6 +66,14 @@ test('export polling watchdog catches completion when SSE emits no job event', a
     const success = page.locator('.export-success-view');
     await expect(success).toBeVisible({ timeout: 6_000 });
     await expect(success).toContainText(/Export complete|Dışa aktarma tamamlandı/);
+    const successPalette = await success.evaluate((view) => {
+      const modal = view.closest('.export-modal');
+      return {
+        heading: getComputedStyle(view.querySelector('h3')).color,
+        surface: modal ? getComputedStyle(modal).backgroundColor : '',
+      };
+    });
+    expect(successPalette.heading).not.toBe(successPalette.surface);
     await expect(success.getByRole('link', { name: /Download file|Dosyayı indir/ })).toHaveAttribute('href', '/api/jobs/job_watchdog/download');
     expect(jobReads).toBeGreaterThanOrEqual(2);
     await success.getByRole('button', { name: /Change settings|Ayarları değiştir/ }).click();

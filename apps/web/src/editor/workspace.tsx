@@ -750,6 +750,14 @@ function ExportModal({ project, settings, rangeStart, rangeEnd, exporting, statu
         )}
         <div className="export-layout">
           <div className="export-form">
+            <div className="export-launch-card">
+              <span className="export-launch-icon" aria-hidden="true">↗</span>
+              <div>
+                <strong>{isVideo ? t('export.launchVideoTitle') : t('export.launchAudioTitle')}</strong>
+                <small>{isVideo ? t('export.launchVideoCopy') : t('export.launchAudioCopy')}</small>
+              </div>
+              <span className="export-local-pill">{t('export.localBadge')}</span>
+            </div>
             <div className="export-section">
               <span className="export-label">{t('export.canvas')}</span>
               <div className="export-canvas-readonly export-canvas-profile">
@@ -971,7 +979,7 @@ function EditorTopbar({ project, onBack, backPending, onExport, exporting, onSet
           &#8249;
         </button>
         <div className="editor-brand">
-          <div className="mini-mark">CL</div>
+          <img className="editor-brand-logo" src="/favicon.svg" alt="" />
           <span>CUTLOC</span>
         </div>
         <div className="topbar-divider" />

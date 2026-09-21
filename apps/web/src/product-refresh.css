@@ -8380,3 +8380,229 @@ body {
   height: 16px;
   margin: 0;
 }
+
+/* Export and preview controls inherit the active workspace palette. Keep this
+   at the end so legacy dark-only declarations cannot win the cascade. */
+.app-shell[data-theme] .editor-brand-logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 7px;
+}
+
+.app-shell[data-theme] .preview-inline-zoom {
+  border-color: var(--theme-line);
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .preview-inline-zoom button {
+  border-color: var(--theme-line-strong, var(--theme-line));
+  color: var(--theme-text);
+  background: var(--theme-panel);
+}
+
+.app-shell[data-theme] .preview-inline-zoom button:hover {
+  border-color: var(--theme-accent-line);
+  color: var(--theme-on-accent, #fff);
+  background: var(--theme-accent);
+}
+
+.app-shell[data-theme] .preview-inline-zoom output {
+  color: var(--theme-text);
+}
+
+.app-shell[data-theme] .export-backdrop {
+  background: color-mix(in srgb, var(--theme-bg) 72%, transparent);
+}
+
+.app-shell[data-theme] .export-modal,
+.app-shell[data-theme] .export-modal-complete {
+  color: var(--theme-text);
+  border-color: var(--theme-line);
+  background: var(--theme-panel);
+  box-shadow: 0 26px 80px color-mix(in srgb, var(--theme-bg) 62%, transparent);
+}
+
+.app-shell[data-theme] .export-modal > :is(.modal-head, .modal-actions) {
+  border-color: var(--theme-line);
+}
+
+.app-shell[data-theme] .export-modal > .modal-head :is(h2, small),
+.app-shell[data-theme] .export-modal > .modal-actions > span {
+  color: var(--theme-text);
+}
+
+.app-shell[data-theme] .export-modal > .modal-head small,
+.app-shell[data-theme] .export-modal > .modal-actions > span {
+  color: var(--theme-muted);
+}
+
+.app-shell[data-theme] .export-launch-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid var(--theme-accent-line);
+  border-radius: var(--radius-surface);
+  color: var(--theme-text);
+  background: linear-gradient(135deg, var(--theme-selection), var(--theme-panel-raised));
+}
+
+.app-shell[data-theme] .export-launch-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--theme-on-accent, #fff);
+  background: var(--theme-accent);
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.app-shell[data-theme] .export-launch-card strong,
+.app-shell[data-theme] .export-launch-card small {
+  display: block;
+}
+
+.app-shell[data-theme] .export-launch-card strong {
+  color: var(--theme-text);
+  font-size: 13px;
+}
+
+.app-shell[data-theme] .export-launch-card small {
+  margin-top: 4px;
+  color: var(--theme-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.app-shell[data-theme] .export-local-pill {
+  padding: 5px 8px;
+  border: 1px solid var(--theme-accent-line);
+  border-radius: 999px;
+  color: var(--theme-accent);
+  background: var(--theme-panel);
+  font: 700 8px 'DM Mono', monospace;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme] :is(.export-label, .export-grid-row label > span, .export-file-name > span, .advanced-quality label > span) {
+  color: var(--theme-muted);
+}
+
+.app-shell[data-theme] :is(.export-grid-row select, .export-file-name input, .advanced-quality input, .advanced-quality select) {
+  border-color: var(--theme-line-strong, var(--theme-line));
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] :is(.export-profile-grid button, .quality-tabs button, .scope-toggle button) {
+  border-color: var(--theme-line);
+  color: var(--theme-muted);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] :is(.export-profile-grid button, .quality-tabs button, .scope-toggle button).active {
+  border-color: var(--theme-accent-line);
+  color: var(--theme-accent);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .advanced-quality,
+.app-shell[data-theme] .export-canvas-readonly,
+.app-shell[data-theme] .export-format-note {
+  border-color: var(--theme-line);
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .export-summary {
+  border-color: var(--theme-line);
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+}
+
+.app-shell[data-theme] .export-summary > strong,
+.app-shell[data-theme] .summary-row b,
+.app-shell[data-theme] .progress-head strong,
+.app-shell[data-theme] .progress-head b,
+.app-shell[data-theme] .export-complete strong {
+  color: var(--theme-text);
+}
+
+.app-shell[data-theme] .export-summary > p,
+.app-shell[data-theme] .summary-row,
+.app-shell[data-theme] .progress-head {
+  color: var(--theme-muted);
+}
+
+.app-shell[data-theme] .summary-row,
+.app-shell[data-theme] .export-complete {
+  border-color: var(--theme-line);
+}
+
+.app-shell[data-theme] .summary-icon,
+.app-shell[data-theme] .export-success-check {
+  color: var(--theme-on-accent, #fff);
+  background: var(--theme-accent);
+}
+
+.app-shell[data-theme] .progress-track {
+  background: var(--theme-control-track);
+}
+
+.app-shell[data-theme] .progress-track i {
+  background: linear-gradient(90deg, var(--theme-accent), color-mix(in srgb, var(--theme-accent) 60%, #63bbed));
+}
+
+.app-shell[data-theme] .export-complete span {
+  color: var(--theme-accent);
+}
+
+.app-shell[data-theme] .export-modal-complete {
+  background: radial-gradient(circle at 50% 35%, var(--theme-selection), transparent 19rem), var(--theme-panel);
+}
+
+.app-shell[data-theme] .export-success-view h3,
+.app-shell[data-theme] .export-success-file strong {
+  color: var(--theme-text);
+}
+
+.app-shell[data-theme] .export-success-view > p,
+.app-shell[data-theme] .export-success-file small,
+.app-shell[data-theme] .export-success-file > div > span,
+.app-shell[data-theme] .export-success-adjust {
+  color: var(--theme-muted);
+}
+
+.app-shell[data-theme] .export-success-badge {
+  border-color: var(--theme-accent-line);
+  color: var(--theme-accent);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .export-success-file {
+  border-color: var(--theme-line);
+  color: var(--theme-text);
+  background: var(--theme-panel-raised);
+  box-shadow: 0 14px 38px var(--theme-shadow);
+}
+
+.app-shell[data-theme] .export-success-file-icon {
+  color: var(--theme-accent);
+  background: var(--theme-selection);
+}
+
+.app-shell[data-theme] .export-success-ring-a { border-color: var(--theme-accent-line); }
+.app-shell[data-theme] .export-success-ring-b { border-color: var(--theme-line-strong, var(--theme-line)); }
+.app-shell[data-theme] .export-success-adjust:hover { color: var(--theme-text); }
+
+@media (max-width: 700px) {
+  .app-shell[data-theme] .export-launch-card { grid-template-columns: 38px minmax(0, 1fr); }
+  .app-shell[data-theme] .export-launch-icon { width: 38px; height: 38px; }
+  .app-shell[data-theme] .export-local-pill { grid-column: 2; justify-self: start; }
+}
