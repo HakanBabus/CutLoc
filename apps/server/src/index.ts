@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type CDPSession, type Page } from 'playwright';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
@@ -703,6 +703,17 @@ async function prepareRenderPage(browser: Browser, projectId: string, width: num
   return page;
 }
 
+async function captureRenderPage(page: Page, session?: CDPSession) {
+  if (!session) return page.screenshot({ type: 'png' });
+  const result = await session.send('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: true,
+    captureBeyondViewport: false,
+    optimizeForSpeed: true,
+  });
+  return Buffer.from(result.data, 'base64');
+}
+
 async function browserRenderedFrame(projectId: string, width: number, height: number, time: number, signal?: AbortSignal) {
   const browser = await launchRenderBrowser();
   const abort = () => { void browser.close().catch(() => undefined); };
@@ -717,7 +728,8 @@ async function browserRenderedFrame(projectId: string, width: number, height: nu
       await renderer.seek(seekTime);
     }, time);
     if (signal?.aborted) throw new Error(message('cancelled'));
-    return await page.locator('.canvas-frame').screenshot({ type: 'png', animations: 'disabled' });
+    const session = await page.context().newCDPSession(page);
+    return await captureRenderPage(page, session);
   } finally {
     signal?.removeEventListener('abort', abort);
     await page?.close().catch(() => undefined);
@@ -756,9 +768,11 @@ async function browserRenderedExport(project: Project, options: ExportOptions, o
   const browser = await launchRenderBrowser();
   const concurrency = width * height > 1920 * 1080 ? 2 : Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2)));
   const pages: Page[] = [];
+  const sessions: CDPSession[] = [];
   let child: ReturnType<typeof spawn> | undefined;
   try {
-    for (let index = 0; index < concurrency; index += 1) pages.push(await prepareRenderPage(browser, project.id, width, height));
+    pages.push(...await Promise.all(Array.from({ length: concurrency }, () => prepareRenderPage(browser, project.id, width, height))));
+    sessions.push(...await Promise.all(pages.map((page) => page.context().newCDPSession(page))));
     child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', ...encodeArgs], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
     if (!child.stdin || !child.stderr) throw new Error('FFmpeg pipe creation failed');
     const encoderInput = child.stdin;
@@ -786,7 +800,7 @@ async function browserRenderedExport(project: Project, options: ExportOptions, o
           if (!renderer) throw new Error('Browser compositor is not ready');
           await renderer.seek(seekTime);
         }, time);
-        return pages[offset].locator('.canvas-frame').screenshot({ type: 'png', animations: 'disabled' });
+        return captureRenderPage(pages[offset], sessions[offset]);
       }));
       for (const frame of frames) await writeFrame(frame);
       updateJob(job.id, { status: 'running', phase: 'rendering', progress: Math.min(0.96, (start + frames.length) / frameCount * 0.96) });

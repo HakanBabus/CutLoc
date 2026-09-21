@@ -96,6 +96,7 @@ button:disabled { opacity: .55; cursor: wait; }
 [data-cutloc-render='true'] .editor-body>*:not(.preview-area),[data-cutloc-render='true'] .editor-statusbar,[data-cutloc-render='true'] .export-toast,[data-cutloc-render='true'] .route-transition{display:none!important}
 [data-cutloc-render='true'] .canvas-frame{border:0!important;border-radius:0!important;box-shadow:none!important;max-width:none!important;max-height:none!important}
 [data-cutloc-render='true'] .canvas-frame::after{display:none!important}
+[data-cutloc-render='true'] *,[data-cutloc-render='true'] *::before,[data-cutloc-render='true'] *::after{animation:none!important;transition:none!important;caret-color:transparent!important}
 .preview-media.preview-layer { object-position:center; }
 .preview-text.preview-layer { height:auto; min-height:0; width:90%; pointer-events:none; }
 .playhead { pointer-events:auto; cursor:ew-resize; }
