@@ -680,14 +680,27 @@ async function stageGeneratedFiles(files: Array<{ tempPath: string; finalPath: s
 }
 
 async function launchRenderBrowser(): Promise<Browser> {
+  const launchErrors: unknown[] = [];
+  // Playwright's Windows-only chrome-headless-shell binary is a console
+  // application. Even though it is headless, Windows attaches a conhost (and
+  // may briefly surface Windows Terminal) when export starts. Edge/Chrome are
+  // GUI-subsystem binaries, so prefer those channels on Windows while keeping
+  // the exact same Chromium compositor and Playwright protocol.
+  if (process.platform === 'win32') {
+    for (const channel of ['msedge', 'chrome'] as const) {
+      try {
+        return await chromium.launch({ headless: true, channel });
+      } catch (error) {
+        launchErrors.push(error);
+      }
+    }
+  }
   try {
     return await chromium.launch({ headless: true });
-  } catch (bundledError) {
-    try {
-      return await chromium.launch({ headless: true, channel: 'chrome' });
-    } catch {
-      throw new Error(`Chromium renderer could not start: ${bundledError instanceof Error ? bundledError.message : String(bundledError)}`);
-    }
+  } catch (error) {
+    launchErrors.push(error);
+    const details = launchErrors.map((item) => item instanceof Error ? item.message : String(item)).join(' | ');
+    throw new Error(`Chromium renderer could not start: ${details}`);
   }
 }
 

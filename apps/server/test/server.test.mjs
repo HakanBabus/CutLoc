@@ -170,6 +170,7 @@ test('Windows media helper processes never create visible console windows', asyn
   assert.match(serverSource, /spawnSync\(process\.platform === 'win32' \? 'where\.exe' : 'which',[^\n]+windowsHide: true/);
   assert.match(serverSource, /spawnSync\(binary, \['-hide_banner', '-filters'\],[^\n]+windowsHide: true/);
   assert.match(serverSource, /spawn\(ffprobe, \['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file\], \{ windowsHide: true \}\)/);
+  assert.match(serverSource, /process\.platform === 'win32'[\s\S]+\['msedge', 'chrome'\][\s\S]+chromium\.launch\(\{ headless: true, channel \}\)/);
 });
 
 test('project CRUD and revision conflicts work in an isolated data directory', async () => {
