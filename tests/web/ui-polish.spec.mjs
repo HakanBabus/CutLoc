@@ -148,6 +148,20 @@ test('theme palettes and animation controls stay coherent across the workspace',
     await page.getByRole('button', { name: /White surface|Beyaz yüzey/ }).click();
     await expect(page.locator('.timeline-clip')).toHaveCount(1);
     const timelineClip = page.locator('.timeline-clip');
+    const trackHeaderLayout = await page.locator('.track-label').first().evaluate((label) => {
+      const actions = label.querySelector('.track-actions');
+      const volume = label.querySelector('.track-volume-control');
+      const menu = label.querySelector('.track-menu-button');
+      const labelRect = label.getBoundingClientRect();
+      const actionsRect = actions?.getBoundingClientRect();
+      const volumeRect = volume?.getBoundingClientRect();
+      const menuRect = menu?.getBoundingClientRect();
+      return {
+        actionsInside: Boolean(actionsRect && actionsRect.left >= labelRect.left && actionsRect.right <= labelRect.right),
+        controlsSeparated: Boolean(volumeRect && menuRect && volumeRect.right <= menuRect.left),
+      };
+    });
+    expect(trackHeaderLayout).toEqual({ actionsInside: true, controlsSeparated: true });
     await expect(timelineClip).toHaveAttribute('role', 'button');
     await page.locator('.timeline-tool').first().click();
     await expect(timelineClip).toHaveAttribute('aria-pressed', 'false');
