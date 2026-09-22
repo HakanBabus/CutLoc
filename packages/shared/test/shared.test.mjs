@@ -532,6 +532,19 @@ test('trimClip uses the same range primitive for a variable-speed pointer bounda
   assert.ok(Math.abs(clip.sourceDuration - (sourceTimeAt(snapshot.speedCurve, snapshot.speed, 8) - sourceTimeAt(snapshot.speedCurve, snapshot.speed, 2))) < 0.000001);
 });
 
+test('splitClipAt rejects sub-frame fragments and invalid times without changing the project', () => {
+  const project = projectWithClips();
+  const clip = project.tracks[0].clips[0];
+  const frame = 1 / project.canvas.fps;
+  const before = structuredClone(project);
+  for (const at of [frame / 2, clip.duration - frame / 2, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(splitClipAt(project, clip.id, at, () => 'unexpected-clip'), false);
+    assert.deepEqual(project, before);
+  }
+  assert.equal(splitClipAt(project, clip.id, frame, () => 'one-frame-clip'), true);
+  assert.ok(Math.abs(project.tracks[0].clips[0].duration - frame) < 0.000001);
+});
+
 test('trimClip can extend a still image beyond its initial five-second duration', () => {
   const project = projectWithClips();
   const clip = project.tracks[0].clips[0];

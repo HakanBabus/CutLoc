@@ -1230,7 +1230,7 @@ export function splitClipAt(project: Project, clipId: string, at: number, create
   if (!track || index < 0 || track.locked) return false;
   const clip = track.clips[index];
   const frame = 1 / Math.max(1, project.canvas.fps);
-  if (at <= clip.start + frame / 2 || at >= clip.start + clip.duration - frame / 2) return false;
+  if (!Number.isFinite(at) || at - clip.start < frame - 0.000001 || clip.start + clip.duration - at < frame - 0.000001) return false;
   const firstDuration = at - clip.start;
   const originalDuration = clip.duration;
   const first = sliceClipForRange(clip, 0, firstDuration);
