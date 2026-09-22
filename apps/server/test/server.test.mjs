@@ -628,6 +628,27 @@ test('API errors follow the saved interface language', async () => {
   }
 });
 
+test('media byte ranges clamp an oversized end and reject malformed requests', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Media range fixture' })).json();
+  const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const url = `/api/projects/${created.id}/media/${added.json().asset.id}`;
+  const full = await app.inject({ method: 'GET', url });
+  const size = full.rawPayload.length;
+  const oversized = await app.inject({ method: 'GET', url, headers: { range: 'bytes=5-999999999' } });
+  assert.equal(oversized.statusCode, 206);
+  assert.equal(oversized.headers['content-range'], `bytes 5-${size - 1}/${size}`);
+  assert.deepEqual(oversized.rawPayload, full.rawPayload.subarray(5));
+  const suffix = await app.inject({ method: 'GET', url, headers: { range: 'bytes=-5' } });
+  assert.equal(suffix.statusCode, 206);
+  assert.deepEqual(suffix.rawPayload, full.rawPayload.subarray(-5));
+  for (const range of ['bytes=-', 'bytes=0-1,4-5', 'garbage bytes=0-1']) {
+    const invalid = await app.inject({ method: 'GET', url, headers: { range } });
+    assert.equal(invalid.statusCode, 416);
+    assert.equal(invalid.headers['content-range'], `bytes */${size}`);
+  }
+});
+
 test('stock media is enumerated, copied into a project, and served without path leakage', async () => {
   const catalogResponse = await app.inject({ method: 'GET', url: '/api/stock' });
   assert.equal(catalogResponse.statusCode, 200);

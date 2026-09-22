@@ -2543,13 +2543,15 @@ async function registerRoutes(app: FastifyInstance) {
           : asset.mimeType || 'application/octet-stream';
     reply.header('Accept-Ranges', 'bytes').header('Content-Type', contentType);
     if (!range) return reply.header('Content-Length', stat.size).send(fs.createReadStream(file));
-    const match = /bytes=(\d*)-(\d*)/.exec(range);
-    if (!match) return reply.header('Content-Length', stat.size).send(fs.createReadStream(file));
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (!match || (!match[1] && !match[2])) {
+      return reply.code(416).header('Content-Range', `bytes */${stat.size}`).send();
+    }
     const requestedStart = match[1] ? Number(match[1]) : undefined;
     const requestedEnd = match[2] ? Number(match[2]) : undefined;
     const start = requestedStart ?? Math.max(stat.size - (requestedEnd ?? 0), 0);
-    const end = requestedStart === undefined ? stat.size - 1 : requestedEnd ?? stat.size - 1;
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= stat.size || end >= stat.size) {
+    const end = requestedStart === undefined ? stat.size - 1 : Math.min(requestedEnd ?? stat.size - 1, stat.size - 1);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= stat.size) {
       return reply.code(416).header('Content-Range', `bytes */${stat.size}`).send();
     }
     reply.code(206).header('Content-Range', `bytes ${start}-${end}/${stat.size}`).header('Content-Length', end - start + 1);
