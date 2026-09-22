@@ -274,6 +274,7 @@ type ServerTestHooks = {
   beforeDerivedWrite?: (projectId: string) => void | Promise<void>;
   beforeRelinkMove?: (sourcePath: string, targetPath: string) => void | Promise<void>;
   beforePreviewRender?: (projectId: string) => void | Promise<void>;
+  beforeExportPublish?: (projectId: string) => void | Promise<void>;
 };
 
 // These hooks are intentionally narrow and are only used by deterministic
@@ -301,8 +302,19 @@ async function saveProject(project: Project) {
   const file = projectFile(project.id);
   if (fs.existsSync(file)) {
     await ensureDir(path.join(dir, 'backups'));
-    const backup = path.join(dir, 'backups', `project-${Date.now()}.json`);
-    await fsp.copyFile(file, backup);
+    let backupTimestamp = Date.now();
+    // Multiple saves can complete in one millisecond. Never overwrite an
+    // earlier recovery point just because its timestamp is the same.
+    for (;;) {
+      const backup = path.join(dir, 'backups', `project-${backupTimestamp}.json`);
+      try {
+        await fsp.copyFile(file, backup, fs.constants.COPYFILE_EXCL);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        backupTimestamp += 1;
+      }
+    }
     const backups = (await fsp.readdir(path.join(dir, 'backups'))).sort();
     for (const old of backups.slice(0, -5)) await fsp.rm(path.join(dir, 'backups', old), { force: true });
   }
@@ -2605,7 +2617,13 @@ async function registerRoutes(app: FastifyInstance) {
                 await browserRenderedExport(project, options, temporaryOutput, jobInfo);
               }
               assertProjectActive(project.id);
+              await serverTestHooks.beforeExportPublish?.(project.id);
+              if (jobs.get(jobInfo.id)?.status === 'cancelled') throw new Error(message('cancelled'));
               await publishGeneratedFile(temporaryOutput, output);
+              if (jobs.get(jobInfo.id)?.status === 'cancelled') {
+                await fsp.rm(output, { force: true });
+                throw new Error(message('cancelled'));
+              }
               jobProgressDuration.delete(jobInfo.id);
               updateJob(jobInfo.id, { absoluteOutputPath: output, relativeOutputPath: path.relative(projectPath(project.id), output), fileName: reservedFileName, format: options.format, phase: 'complete' });
               updateJob(jobInfo.id, { status: 'completed', progress: 1, outputPath: path.relative(rootDir, output), message: message('exportCompleted') });
@@ -2756,8 +2774,13 @@ async function ensureProjectFolders(projectId: string) {
 }
 
 async function copyProjectFolder(fromId: string, toId: string) {
+  // A duplicate starts its own revision and recovery history. Copy media and
+  // derived files, never the source project's JSON, backups, or exports.
   await ensureDir(projectPath(toId));
-  await fsp.cp(projectPath(fromId), projectPath(toId), { recursive: true });
+  for (const folder of ['media', 'proxies', 'thumbnails', 'waveforms']) {
+    const source = safeJoin(projectPath(fromId), folder);
+    if (fs.existsSync(source)) await fsp.cp(source, safeJoin(projectPath(toId), folder), { recursive: true });
+  }
   await ensureProjectFolders(toId);
 }
 

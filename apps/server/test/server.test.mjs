@@ -26,6 +26,7 @@ after(async () => {
   serverTestHooks.beforeDerivedWrite = undefined;
   serverTestHooks.beforeRelinkMove = undefined;
   serverTestHooks.beforePreviewRender = undefined;
+  serverTestHooks.beforeExportPublish = undefined;
   await app.close();
   await fsp.rm(dataDir, { recursive: true, force: true });
 });
@@ -270,6 +271,88 @@ test('unknown projects return a safe not-found response', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/projects/project_does_not_exist' });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error, serverT('en', 'projectNotFound'));
+});
+
+test('rapid saves retain distinct project backups when timestamps collide', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Backup collision fixture' })).json();
+  const realNow = Date.now;
+  try {
+    Date.now = () => 1_800_000_000_000;
+    const first = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'First edit', revision: 0 });
+    assert.equal(first.statusCode, 200);
+    const second = await jsonRequest('PATCH', `/api/projects/${created.id}`, { name: 'Second edit', revision: 1 });
+    assert.equal(second.statusCode, 200);
+  } finally {
+    Date.now = realNow;
+  }
+  const backupDir = path.join(dataDir, 'projects', created.id, 'backups');
+  const names = (await fsp.readdir(backupDir)).sort();
+  assert.equal(names.length, 2);
+  const snapshots = await Promise.all(names.map(async (name) => JSON.parse(await fsp.readFile(path.join(backupDir, name), 'utf8'))));
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.name), ['Backup collision fixture', 'First edit']);
+});
+
+test('duplicated projects copy media without inheriting backups or exports', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Duplicate fixture' })).json();
+  const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const asset = added.json().asset;
+  const originalBackups = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}/backups` })).json();
+  assert.equal(originalBackups.length > 0, true);
+  const originalExport = path.join(dataDir, 'projects', created.id, 'exports', 'old-output.mp4');
+  await fsp.writeFile(originalExport, 'old output');
+
+  const response = await app.inject({ method: 'POST', url: `/api/projects/${created.id}/duplicate` });
+  assert.equal(response.statusCode, 201);
+  const duplicate = response.json();
+  assert.notEqual(duplicate.id, created.id);
+  assert.equal(duplicate.revision, 0);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${duplicate.id}/backups` })).json().length, 0);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${duplicate.id}/media/${asset.id}` })).statusCode, 200);
+  await assert.rejects(fsp.stat(path.join(dataDir, 'projects', duplicate.id, 'exports', 'old-output.mp4')), { code: 'ENOENT' });
+  const edited = await jsonRequest('PATCH', `/api/projects/${duplicate.id}`, { name: 'Duplicate edited', revision: 0 });
+  assert.equal(edited.statusCode, 200);
+  const backups = (await app.inject({ method: 'GET', url: `/api/projects/${duplicate.id}/backups` })).json();
+  assert.equal(backups.length, 1);
+  const restored = await jsonRequest('POST', `/api/projects/${duplicate.id}/restore`, { fileName: backups[0].fileName });
+  assert.equal(restored.statusCode, 200);
+  assert.equal(restored.json().id, duplicate.id);
+});
+
+test('cancelling after encoding does not publish or complete an export', async () => {
+  const created = (await jsonRequest('POST', '/api/projects', { name: 'Late cancel fixture' })).json();
+  const added = await jsonRequest('POST', `/api/projects/${created.id}/stock`, { stockId: 'white' });
+  assert.equal(added.statusCode, 201);
+  const project = added.json().project;
+  project.tracks[0].clips.push({
+    id: 'late-cancel-clip', assetId: added.json().asset.id, type: 'image', name: 'White',
+    start: 0, duration: 0.2, sourceStart: 0, sourceDuration: 0.2, speed: 1,
+  });
+  project.duration = 0.2;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, project)).statusCode, 200);
+  let releasePublish;
+  let enteredPublish;
+  const publishEntered = new Promise((resolve) => { enteredPublish = resolve; });
+  const publishReleased = new Promise((resolve) => { releasePublish = resolve; });
+  serverTestHooks.beforeExportPublish = async (projectId) => {
+    if (projectId !== created.id) return;
+    enteredPublish();
+    await publishReleased;
+  };
+  try {
+    const response = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'wav', fileName: 'cancel-late.wav' });
+    assert.equal(response.statusCode, 202);
+    const jobId = response.json().job.id;
+    await publishEntered;
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/jobs/${jobId}` })).statusCode, 200);
+    releasePublish();
+    const job = await waitForJob(jobId);
+    assert.equal(job.status, 'cancelled');
+    await assert.rejects(fsp.stat(exportFilePath(created.id, 'cancel-late.wav')), { code: 'ENOENT' });
+  } finally {
+    releasePublish?.();
+    serverTestHooks.beforeExportPublish = undefined;
+  }
 });
 
 test('server rejects locked-track mutations until the track is explicitly unlocked', async () => {
