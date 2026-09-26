@@ -94,7 +94,7 @@ node apps/cli/dist/index.js --compact agent inspect <project-id>
 6. Preserve `schemaVersion`, `id`, and `revision`; edit only intended project fields.
 7. Apply through `cutloc projects apply <id> --file project.json`.
 8. If the server returns `409`, fetch the new revision and reconcile instead of overwriting it.
-9. Run `cutloc export preflight` before starting a render.
+9. Run `cutloc export verify` before starting a render and inspect its audio and text analysis.
 10. Poll `cutloc jobs get` until the job reaches a terminal state, then download it.
 
 ```powershell
@@ -132,12 +132,19 @@ Commands accepting JSON support exactly one of:
 - `--data <json>`
 - `--stdin`
 
-Examples:
+PowerShell 7 examples (the JSON is one native-process argument):
 
 ```powershell
 cutloc settings set --file settings.json
-cutloc export preflight <project-id> --data '{"format":"mp4","resolution":"1080p","fps":30,"quality":"standard"}'
-Get-Content project.json -Raw | cutloc projects apply <project-id> --stdin
+$exportJson = @{ format = 'mp4'; resolution = '1080p'; fps = 30; quality = 'standard' } | ConvertTo-Json -Compress
+cutloc export preflight PROJECT_ID --data $exportJson
+Get-Content -LiteralPath .\project.json -Raw -Encoding UTF8 | cutloc projects apply PROJECT_ID --stdin
+```
+
+For Windows PowerShell 5.1, use the stop-parsing token for an inline JSON literal. Replace `PROJECT_ID` before running it; PowerShell does not expand variables after `--%`:
+
+```powershell
+cutloc --% export preflight PROJECT_ID --data "{\"format\":\"mp4\",\"resolution\":\"1080p\",\"fps\":30,\"quality\":\"standard\"}"
 ```
 
 ## Command reference
@@ -156,7 +163,7 @@ projects bundle <id> --out <file>
 projects import <file>
 ```
 
-`projects create` accepts `--preset shorts`, or explicit `--aspect`, `--fps`, and `--background` values. `projects edit` applies revision-aware atomic operations including `setName`, `setCanvas`, `addTrack`, `removeTrack`, `addClip`, `updateClip`, `removeClip`, `addMarker`, and `removeMarker`. Use `--dry-run` before mutation. `projects apply` remains available for complete-document replacement. `projects delete` is recoverable through trash until that trash entry is permanently deleted.
+`projects create` accepts `--preset shorts`, or explicit `--aspect`, `--fps`, and `--background` values. `projects edit` applies revision-aware atomic operations including `setName`, `setCanvas`, `addTrack`, `removeTrack`, `addClip`, `updateClip`, `removeClip`, `addMarker`, and `removeMarker`. An `updateClip` patch can merge a nested object (`{"textStyle":{"fontSize":48}}`) or update a field path (`{"textStyle.fontSize":48}`); other style fields are preserved. Use `--dry-run` before mutation. `projects apply` remains available for complete-document replacement. `projects delete` is recoverable through trash until that trash entry is permanently deleted.
 
 ### Keyframes
 
@@ -181,7 +188,7 @@ Values use canvas pixels for `x`/`y`, degrees for `rotation`, a multiplier for `
 
 ```text
 media add <project-id> <file> [--wait] [--include-project]
-media add-many <project-id> <files...> [--wait] [--include-project]
+media add-many <project-id> <files...> [--dry-run] [--wait] [--include-project]
 media remove <project-id> <asset-id>
 media relink <project-id> <asset-id> <file>
 media rebuild <project-id> <asset-id>
@@ -189,7 +196,7 @@ media health <project-id>
 media stock <project-id> <stock-id>
 ```
 
-Use these commands for binary uploads and relinks. The default upload response is compact. `--wait` waits for the derived-media job and returns `finalRevision`; `--include-project` opts into the complete project payload. Do not put binary data through the generic `api` command.
+Use these commands for binary uploads and relinks. `add-many --dry-run` checks that every path names a readable regular file before uploading. Normal `add-many` also checks all paths first, waits for each derived-media job, reports each file, and removes assets created by that invocation if a later upload or job fails. Its `rolledBack` result records whether every removal succeeded; inspect the project before retrying if it is false. `media add --wait` waits for its derived-media job and returns `finalRevision`; `--include-project` opts into the complete project payload. Do not put binary data through the generic `api` command.
 
 ### Recovery
 
@@ -206,8 +213,9 @@ Backup restore, project deletion, media removal, and permanent trash deletion ch
 ### Export and jobs
 
 ```text
-export preflight <project-id> [--file <options.json> | --data <json>]
-export start <project-id> [--file <options.json> | --data <json>]
+export preflight <project-id> [--file <options.json> | --data <json>] [--start-frame <n> --end-frame <n>]
+export verify <project-id> [--file <options.json> | --data <json>] [--start-frame <n> --end-frame <n>]
+export start <project-id> [--file <options.json> | --data <json>] [--start-frame <n> --end-frame <n>]
 jobs list
 jobs get <job-id>
 jobs wait <job-id> [--timeout <seconds>] [--interval <seconds>]
@@ -242,6 +250,10 @@ For a selected range, add:
 ```
 
 `export start` returns an asynchronous job. Prefer `jobs wait` for one terminal JSON result or `jobs watch` for JSONL progress events. Only `queued` or `running` jobs can be cancelled; cancelling a terminal job returns `409`. Download only a completed job. UTF-8 output names are preserved through the download header.
+
+`export verify` runs server preflight and adds `analysis` entries for silent audio intervals, audio excluded from rendering, text that may overflow its frame, and text outside a 5% canvas safe area. Text estimates are conservative; inspect a preview frame for exact typography. `--start-frame` and `--end-frame` use the selected output FPS, with the end frame excluded. To render adjacent sections, use `[0, 450)` and `[450, 900)` for a 30 FPS, 30 second project. Frame flags cannot be combined with a JSON `range`. Use identical export settings for every section before concatenating.
+
+On timeout, `jobs wait` prints the last job JSON with `timedOut: true` and exits with code 2. `jobs watch` emits a final `timeout` event with the same job data.
 
 ### Preview frame
 

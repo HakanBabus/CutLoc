@@ -111,6 +111,18 @@ function wavPeak(bytes) {
   return peak;
 }
 
+function wavPeakBetween(bytes, fromSeconds, toSeconds) {
+  const dataOffset = bytes.indexOf(Buffer.from('data'));
+  const sampleStart = dataOffset + 8;
+  const bytesPerFrame = bytes.readUInt16LE(32);
+  const sampleRate = bytes.readUInt32LE(24);
+  const from = sampleStart + Math.floor(fromSeconds * sampleRate) * bytesPerFrame;
+  const to = Math.min(bytes.length, sampleStart + Math.floor(toSeconds * sampleRate) * bytesPerFrame);
+  let peak = 0;
+  for (let offset = from; offset + 1 < to; offset += 2) peak = Math.max(peak, Math.abs(bytes.readInt16LE(offset)));
+  return peak;
+}
+
 function brightPixelBounds(filePath, time, width, height) {
   const result = spawnSync(ffmpegPath, ['-v', 'error', '-ss', String(time), '-i', filePath, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], { maxBuffer: 8 * 1024 * 1024 });
   assert.equal(result.status, 0, result.stderr?.toString() || 'frame extraction failed');
@@ -1355,6 +1367,16 @@ test('multiline text shorthands render as separate lines in browser-composited e
   const dimensions = probeVideoDimensions(outputPath);
   const bounds = brightPixelBounds(outputPath, 0.2, dimensions.width, dimensions.height);
   assert.equal(bounds.height > 70, true, `expected two rendered lines, received ${JSON.stringify(bounds)}`);
+  const lateProject = (await app.inject({ method: 'GET', url: `/api/projects/${created.id}` })).json();
+  lateProject.tracks[0].clips[0].start = 25;
+  lateProject.duration = 25.4;
+  assert.equal((await jsonRequest('PATCH', `/api/projects/${created.id}`, lateProject)).statusCode, 200);
+  const lateExport = await jsonRequest('POST', `/api/projects/${created.id}/export`, { format: 'mp4', quality: 'draft', resolution: '720p', range: { start: 25.1, end: 25.3 }, fileName: 'late-text-section.mp4' });
+  assert.equal(lateExport.statusCode, 202);
+  const lateJob = await waitForJob(lateExport.json().job.id, 30000);
+  assert.equal(lateJob.status, 'completed', lateJob.error ?? 'late text section export failed');
+  const lateBounds = brightPixelBounds(exportFilePath(created.id, lateJob.fileName), 0.05, dimensions.width, dimensions.height);
+  assert.equal(lateBounds.height > 70, true, `expected text in the late section, received ${JSON.stringify(lateBounds)}`);
   const deletedResponse = await app.inject({ method: 'DELETE', url: `/api/projects/${created.id}` });
   await app.inject({ method: 'DELETE', url: `/api/trash/${deletedResponse.json().trashId}` });
 });
@@ -1445,7 +1467,7 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
     fadeIn: 0.05,
     fadeOut: 0.05,
     speedCurve: [{ time: 0, speed: 0.8, easing: 'ease-in' }, { time: asset.duration, speed: 1.2, easing: 'ease-out' }],
-    keyframes: [{ id: 'audio-volume-start', property: 'volume', time: 0, value: 0.7, easing: 'linear' }, { id: 'audio-volume-end', property: 'volume', time: asset.duration, value: 1, easing: 'ease-out' }],
+    keyframes: [{ id: 'audio-volume-start', property: 'volume', time: 0, value: 0, easing: 'linear' }, { id: 'audio-volume-end', property: 'volume', time: asset.duration, value: 1, easing: 'linear' }],
   });
   project.duration = asset.duration;
   const saveResponse = await jsonRequest('PATCH', '/api/projects/' + created.id, project);
@@ -1478,6 +1500,7 @@ test('a small WAV fixture imports, creates a waveform job, and exports MP3', asy
   assert.equal(wavHeader.readUInt16LE(34), 16);
   assert.equal(wavPeak(wavHeader) > 0, true);
   assert.equal(wavPeak(wavHeader) <= Math.ceil(32767 * 0.95), true);
+  assert.equal(wavPeakBetween(wavHeader, 0.25, 0.3) > wavPeakBetween(wavHeader, 0.05, 0.1) * 2, true, 'volume automation should change the exported PCM amplitude');
   const latest = (await app.inject({ method: 'GET', url: '/api/projects/' + created.id })).json();
   latest.tracks[0].hidden = true;
   assert.equal((await jsonRequest('PATCH', '/api/projects/' + created.id, latest)).statusCode, 200);

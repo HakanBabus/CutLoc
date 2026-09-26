@@ -23,7 +23,7 @@ import {
   runtimePaths,
   type RuntimeInstance,
 } from '@cutloc/runtime';
-import { ProjectSchema, type Clip, type Keyframe, type KeyframeProperty, type Project, type ProjectAccessLease, type Track } from '@cutloc/shared';
+import { ProjectSchema, evaluateClipFrame, normalizeTextLineBreaks, resolveTextFrameGeometry, type Clip, type Keyframe, type KeyframeProperty, type Project, type ProjectAccessLease, type Track } from '@cutloc/shared';
 
 type JsonObject = Record<string, unknown>;
 type LeaseHandle = { lease: ProjectAccessLease; token: string };
@@ -60,7 +60,7 @@ Keyframes:
 
 Media and recovery:
   media add <project-id> <file> [--wait] [--include-project]
-  media add-many <project-id> <files...> [--wait] [--include-project]
+  media add-many <project-id> <files...> [--dry-run] [--wait] [--include-project]
   media remove <project-id> <asset-id>
   media relink <project-id> <asset-id> <file> | rebuild <project-id> <asset-id>
   media health <project-id> | stock <project-id> <stock-id>
@@ -68,7 +68,7 @@ Media and recovery:
   trash list | restore <trash-id> | delete <trash-id>
 
 Export and settings:
-  export preflight|start <project-id> [--file <options.json> | --data <json>]
+  export preflight|verify|start <project-id> [--file <options.json> | --data <json>] [--start-frame <n> --end-frame <n>]
   jobs list | get <job-id> | wait <job-id> [--timeout <seconds>] [--interval <seconds>]
   jobs watch <job-id> [--timeout <seconds>] [--interval <seconds>]
   jobs cancel <job-id> | download <job-id> --out <file>
@@ -105,7 +105,7 @@ const agentGuide = {
     'Run projects get <id> --out <file> immediately before editing.',
     'Prefer projects edit <id> --file <plan> --dry-run for atomic timeline changes.',
     'Use projects apply only for complete-document replacement; on a revision conflict, fetch again and reconcile.',
-    'Run export preflight <id> before export start <id>.',
+    'Run export verify <id> and inspect audio/text analysis before export start <id>.',
     'Use session <id> for several related API operations that need one exclusive lease.',
   ],
   safetyRules: [
@@ -147,9 +147,9 @@ const agentGuide = {
     discovery: ['agent guide', 'agent inspect [project-id] [--full] [--limit <n>] [--cursor <n>] [--no-guide]', 'projects list', 'projects get <id>', 'media health <project-id>', 'backups list <project-id>', 'jobs list', 'settings get'],
     projects: ['projects create [name] [--preset shorts]', 'projects edit <id> (--file <plan> | --stdin | --data <json>) [--dry-run]', 'projects apply <id> (--file <json> | --stdin | --data <json>)', 'projects duplicate <id>', 'projects bundle <id> --out <file>', 'projects import <file>', 'projects delete <id>'],
     keyframes: ['keyframes list <project-id> <clip-id> [--property <name>]', 'keyframes set <project-id> <clip-id> <property> --time <seconds> --value <number> [--easing <name>]', 'keyframes remove <project-id> <clip-id> <keyframe-id>', 'keyframes clear <project-id> <clip-id> [--property <name>]'],
-    media: ['media add <project-id> <file> [--wait]', 'media add-many <project-id> <files...> [--wait]', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
+    media: ['media add <project-id> <file> [--wait]', 'media add-many <project-id> <files...> [--dry-run] [--wait]', 'media relink <project-id> <asset-id> <file>', 'media rebuild <project-id> <asset-id>', 'media stock <project-id> <stock-id>', 'media remove <project-id> <asset-id>'],
     recovery: ['backups restore <project-id> <file-name>', 'trash list', 'trash restore <trash-id>', 'trash delete <trash-id>'],
-    export: ['export preflight <project-id> [--file <options.json>]', 'export start <project-id> [--file <options.json>]', 'jobs wait <job-id>', 'jobs watch <job-id>', 'jobs cancel <job-id>', 'jobs download <job-id> --out <file>'],
+    export: ['export preflight <project-id> [--file <options.json>]', 'export verify <project-id> [--file <options.json>]', 'export start <project-id> [--file <options.json>]', 'jobs wait <job-id>', 'jobs watch <job-id>', 'jobs cancel <job-id>', 'jobs download <job-id> --out <file>'],
     advanced: ['preview frame <project-id> --time <seconds> --out <png>', 'session <project-id>', 'api <method> <api-path> [--file <json> | --data <json> | --out <file>]', 'settings set (--file <json> | --stdin | --data <json>)'],
   },
   examples: [
@@ -742,7 +742,7 @@ async function waitForJob(jobId: string, timeoutSeconds: number, intervalSeconds
     if (signature !== previousSignature) onUpdate?.(job);
     previousSignature = signature;
     if (terminalJobStatuses.has(job.status)) return job;
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for job ${jobId} after ${timeoutSeconds} seconds.`);
+    if (Date.now() >= deadline) throw Object.assign(new Error(`Timed out waiting for job ${jobId} after ${timeoutSeconds} seconds.`), { job });
     await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
   }
 }
@@ -779,7 +779,7 @@ type EditOperation =
   | { op: 'addTrack'; track: Track }
   | { op: 'removeTrack'; trackId: string }
   | { op: 'addClip'; trackId: string; clip: Clip }
-  | { op: 'updateClip'; trackId: string; clipId: string; patch: Partial<Clip> }
+  | { op: 'updateClip'; trackId: string; clipId: string; patch: Record<string, unknown> }
   | { op: 'removeClip'; trackId: string; clipId: string }
   | { op: 'addMarker'; marker: Project['markers'][number] }
   | { op: 'removeMarker'; markerId: string };
@@ -818,7 +818,21 @@ function applyEditPlan(current: Project, input: unknown) {
       if (!track) throw new Error(`Track not found for ${operationPath}: ${trackId}`);
       const clip = track.clips.find((item) => item.id === clipId);
       if (!clip) throw new Error(`Clip not found for ${operationPath}: ${trackId}/${clipId}`);
-      Object.assign(clip, operation.patch, { id: clip.id });
+      for (const [key, value] of Object.entries(operation.patch)) {
+        const parts = key.split('.');
+        if (parts.some((part) => !part || part === '__proto__' || part === 'prototype' || part === 'constructor') || parts[0] === 'id') throw new Error(`Invalid patch path: ${key}`);
+        let target: Record<string, unknown> = clip as unknown as Record<string, unknown>;
+        for (const part of parts.slice(0, -1)) {
+          const next = target[part];
+          if (!next || typeof next !== 'object' || Array.isArray(next)) throw new Error(`Patch path does not exist: ${key}`);
+          target = next as Record<string, unknown>;
+        }
+        const leaf = parts.at(-1)!;
+        const previous = target[leaf];
+        target[leaf] = parts.length === 1 && previous && typeof previous === 'object' && !Array.isArray(previous) && value && typeof value === 'object' && !Array.isArray(value)
+          ? { ...previous, ...value as Record<string, unknown> }
+          : value;
+      }
     } else if (operation.op === 'removeClip') {
       const trackId = requireArg(operation.trackId, `${operationPath}.trackId`);
       const clipId = requireArg(operation.clipId, `${operationPath}.clipId`);
@@ -851,6 +865,64 @@ function projectSummary(project: Project) {
     trackCount: project.tracks.length,
     clipCount: project.tracks.reduce((total, track) => total + track.clips.length, 0),
   };
+}
+
+function inspectExportTimeline(project: Project, range: { start: number; end: number }) {
+  const warnings: Array<{ code: string; clipId: string; trackId: string; start: number; end: number; message: string }> = [];
+  const assets = new Map(project.assets.map((asset) => [asset.id, asset]));
+  const marginX = project.canvas.width * 0.05;
+  const marginY = project.canvas.height * 0.05;
+  for (const track of project.tracks) for (const clip of track.clips) {
+    const start = Math.max(range.start, clip.start);
+    const end = Math.min(range.end, clip.start + clip.duration);
+    const warn = (code: string, message: string, from = start, to = end) => warnings.push({ code, clipId: clip.id, trackId: track.id, start: from, end: to, message });
+    if (end <= start) {
+      if (clip.type === 'audio') warn('AUDIO_OUTSIDE_RANGE', 'Audio clip does not overlap the selected export range.', clip.start, clip.start + clip.duration);
+      continue;
+    }
+    const asset = clip.assetId ? assets.get(clip.assetId) : undefined;
+    if (clip.type === 'audio' || clip.type === 'video') {
+      if (!asset || !asset.hasAudio || track.muted || track.volume === 0) {
+        warn('AUDIO_NOT_RENDERED', !asset ? 'Media asset is missing.' : !asset.hasAudio ? 'Media has no audio stream.' : 'Track is muted or has zero volume.');
+      } else {
+        let silentStart: number | null = null;
+        const samples = Math.max(1, Math.ceil((end - start) * 20));
+        for (let index = 0; index <= samples; index++) {
+          const time = index === samples ? end : start + index * (end - start) / samples;
+          const volume = evaluateClipFrame(clip, Math.min(time, clip.start + clip.duration - 0.000001)).volume * track.volume;
+          if (volume <= 0.001 && silentStart === null) silentStart = time;
+          if ((volume > 0.001 || index === samples) && silentStart !== null) {
+            if (time - silentStart >= 0.15) warn('AUDIO_SILENT_INTERVAL', 'Effective clip volume is near zero.', silentStart, time);
+            silentStart = null;
+          }
+        }
+      }
+    }
+    if (!clip.textStyle) continue;
+    if (track.hidden) {
+      warn('TEXT_NOT_RENDERED', 'Text track is hidden.');
+      continue;
+    }
+    const style = clip.textStyle;
+    const geometry = resolveTextFrameGeometry(style, project.canvas.width, project.canvas.height);
+    const longest = Math.max(...normalizeTextLineBreaks(style.text).split('\n').map((line) => line.length));
+    const estimatedTextWidth = longest * style.fontSize * 0.58 + Math.max(0, longest - 1) * style.letterSpacing + style.padding * 2;
+    if (estimatedTextWidth > geometry.width - style.padding * 2) warn('TEXT_OVERFLOW', 'Text may overflow its fixed frame.');
+    const sampleTimes = [start, (start + end) / 2, Math.max(start, end - 1 / project.canvas.fps), ...clip.keyframes.filter((point) => ['x', 'y', 'scale', 'rotation'].includes(point.property)).map((point) => clip.start + point.time).filter((time) => time >= start && time < end)];
+    for (const time of sampleTimes) {
+      const frame = evaluateClipFrame(clip, time);
+      const radians = frame.rotation * Math.PI / 180;
+      const halfWidth = Math.abs(Math.cos(radians)) * geometry.width * frame.scale / 2 + Math.abs(Math.sin(radians)) * geometry.height * frame.scale / 2;
+      const halfHeight = Math.abs(Math.sin(radians)) * geometry.width * frame.scale / 2 + Math.abs(Math.cos(radians)) * geometry.height * frame.scale / 2;
+      const centerX = project.canvas.width / 2 + frame.x;
+      const centerY = project.canvas.height / 2 + frame.y;
+      if (centerX - halfWidth < marginX || centerX + halfWidth > project.canvas.width - marginX || centerY - halfHeight < marginY || centerY + halfHeight > project.canvas.height - marginY) {
+        warn('TEXT_SAFE_AREA', 'Text extends outside the 5% canvas safe area.', time, time);
+        break;
+      }
+    }
+  }
+  return warnings;
 }
 
 const keyframeProperties = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume'] as const;
@@ -1231,19 +1303,74 @@ async function main() {
       return print(await mediaMutationResult(projectId, result, wait, includeProject));
     }
     if (action === 'add-many') {
-      const wait = takeBooleanFlag(args, '--wait');
+      takeBooleanFlag(args, '--wait');
+      const dryRun = takeBooleanFlag(args, '--dry-run');
       const includeProject = takeBooleanFlag(args, '--include-project');
       const files = [...args];
       args.length = 0;
       if (!files.length) throw new Error('media add-many requires at least one media file.');
-      const results = [];
-      // When --wait is selected, complete each derived-media job before the
-      // next upload. This avoids bursting past the server's bounded job queue.
-      for (const file of files) {
-        const uploaded = await withProjectAccess(projectId, (token) => upload(`/api/projects/${encodeURIComponent(projectId)}/media`, file, token)) as MediaMutation;
-        results.push(await mediaMutationResult(projectId, uploaded, wait, includeProject));
+      const supportedExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.oga', '.flac', '.opus', '.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
+      const seenPaths = new Set<string>();
+      const inspected = await Promise.all(files.map(async (file) => {
+        const absolute = path.resolve(file);
+        try {
+          const normalized = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+          if (seenPaths.has(normalized)) throw new Error('Duplicate file path in this batch');
+          seenPaths.add(normalized);
+          if (!supportedExtensions.has(path.extname(absolute).toLowerCase())) throw new Error('Unsupported media extension');
+          const stat = await fsp.stat(absolute);
+          if (!stat.isFile()) throw new Error('Not a regular file');
+          await fsp.access(absolute, fs.constants.R_OK);
+          return { file, absolute, ok: true, size: stat.size };
+        } catch (error) {
+          return { file, absolute, ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }));
+      if (dryRun || inspected.some((item) => !item.ok)) {
+        print({ ok: inspected.every((item) => item.ok), dryRun, files: inspected });
+        if (inspected.some((item) => !item.ok)) process.exitCode = 1;
+        return;
+      }
+      const results: Array<{ file: string; ok: boolean; asset?: MediaMutation['asset']; job?: JobView; error?: string; [key: string]: unknown }> = [];
+      const uploadedIds: string[] = [];
+      const uploadedJobs: string[] = [];
+      return await withProjectAccess(projectId, async (token) => {
+      // Complete each derived-media job before the next upload so a failed job
+      // can trigger rollback while this invocation still holds project access.
+      for (const item of inspected) {
+        try {
+          const uploaded = await upload(`/api/projects/${encodeURIComponent(projectId)}/media`, item.absolute, token) as MediaMutation;
+          if (uploaded.asset?.id) uploadedIds.push(uploaded.asset.id);
+          if (uploaded.job?.id) uploadedJobs.push(uploaded.job.id);
+          const result = await mediaMutationResult(projectId, uploaded, true, includeProject);
+          if (!result.stable) throw new Error(`Derived media job ${result.job?.id ?? ''} ended with ${result.job?.status ?? 'unknown'} status.`);
+          results.push({ file: item.file, ...result });
+        } catch (error) {
+          results.push({ file: item.file, ok: false, error: error instanceof Error ? error.message : String(error) });
+          const rollback = [];
+          for (const jobId of uploadedJobs.reverse()) {
+            try {
+              const job = await jsonRequest(`/api/jobs/${encodeURIComponent(jobId)}`) as JobView;
+              if (!terminalJobStatuses.has(job.status)) await jsonRequest(`/api/jobs/${encodeURIComponent(jobId)}`, 'DELETE', undefined, token);
+            } catch (rollbackError) {
+              rollback.push({ jobId, ok: false, error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) });
+            }
+          }
+          for (const assetId of uploadedIds.reverse()) {
+            try {
+              await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(assetId)}`, 'DELETE', undefined, token);
+              rollback.push({ assetId, ok: true });
+            } catch (rollbackError) {
+              rollback.push({ assetId, ok: false, error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) });
+            }
+          }
+          print({ ok: false, count: results.length, results, rollback, rolledBack: rollback.every((entry) => entry.ok) });
+          process.exitCode = 1;
+          return;
+        }
       }
       return print({ ok: true, count: results.length, results });
+      });
     }
     if (action === 'remove') { const assetId = requireArg(args.shift(), 'asset ID'); ensureNoArgs(args); return print(await withProjectAccess(projectId, (token) => jsonRequest(`/api/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(assetId)}`, 'DELETE', undefined, token))); }
     if (action === 'relink') { const assetId = requireArg(args.shift(), 'asset ID'); const file = requireArg(args.shift(), 'replacement media file'); ensureNoArgs(args); return print(await withProjectAccess(projectId, (token) => upload(`/api/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(assetId)}/relink`, file, token))); }
@@ -1259,11 +1386,29 @@ async function main() {
 
   if (group === 'export') {
     const projectId = requireArg(args.shift(), 'project ID');
+    const startFrameRaw = takeFlag(args, '--start-frame');
+    const endFrameRaw = takeFlag(args, '--end-frame');
     const body = await readJsonInput(args, true) as JsonObject;
     ensureNoArgs(args);
-    if (action !== 'preflight' && action !== 'start') throw new Error('export action must be preflight or start.');
-    const suffix = action === 'preflight' ? '/export/preflight' : '/export';
-    return print(await withProjectAccess(projectId, (token) => jsonRequest(`/api/projects/${encodeURIComponent(projectId)}${suffix}`, 'POST', body, token)));
+    if (action !== 'preflight' && action !== 'verify' && action !== 'start') throw new Error('export action must be preflight, verify, or start.');
+    return await withProjectAccess(projectId, async (token) => {
+    let project: Project | undefined;
+    if (action === 'verify' || startFrameRaw !== undefined || endFrameRaw !== undefined) project = await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}`) as Project;
+    if (startFrameRaw !== undefined || endFrameRaw !== undefined) {
+      if (startFrameRaw === undefined || endFrameRaw === undefined || body.range !== undefined) throw new Error('Use both frame flags and omit range from JSON.');
+      const startFrame = Number(startFrameRaw);
+      const endFrame = Number(endFrameRaw);
+      const fps = Number(body.fps ?? project!.canvas.fps);
+      if (!Number.isInteger(startFrame) || !Number.isInteger(endFrame) || startFrame < 0 || endFrame <= startFrame || !Number.isFinite(fps) || fps <= 0 || endFrame / fps > project!.duration + 0.000001) throw new Error('Frame range must be valid, end-exclusive, and inside the project at the selected FPS.');
+      body.range = { start: startFrame / fps, end: endFrame / fps };
+    }
+    const suffix = action === 'start' ? '/export' : '/export/preflight';
+    const preflight = await jsonRequest(`/api/projects/${encodeURIComponent(projectId)}${suffix}`, 'POST', body, token);
+    if (action !== 'verify') return print(preflight);
+    const range = body.range as { start: number; end: number } | undefined;
+    const analysis = inspectExportTimeline(project!, range ?? { start: 0, end: project!.duration });
+    return print({ ...preflight as JsonObject, analysis, range: range ?? { start: 0, end: project!.duration } });
+    });
   }
 
   if (group === 'jobs') {
@@ -1275,8 +1420,16 @@ async function main() {
       const timeout = positiveNumber(takeFlag(args, '--timeout'), '--timeout', 300);
       const interval = positiveNumber(takeFlag(args, '--interval'), '--interval', 1);
       ensureNoArgs(args);
-      const job = await waitForJob(jobIdValue, timeout, interval, action === 'watch' ? (value) => print({ event: 'job', job: value }) : undefined);
-      return print(action === 'watch' ? { event: 'terminal', job } : job);
+      try {
+        const job = await waitForJob(jobIdValue, timeout, interval, action === 'watch' ? (value) => print({ event: 'job', job: value }) : undefined);
+        return print(action === 'watch' ? { event: 'terminal', job } : job);
+      } catch (error) {
+        const detail = error as { job?: JobView };
+        if (!detail.job) throw error;
+        print(action === 'watch' ? { event: 'timeout', job: detail.job } : { ...detail.job, timedOut: true });
+        process.exitCode = 2;
+        return;
+      }
     }
     if (action === 'cancel') {
       ensureNoArgs(args);

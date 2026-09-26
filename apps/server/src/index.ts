@@ -771,7 +771,8 @@ async function browserRenderedExport(project: Project, options: ExportOptions, o
   const rangeStart = options.range?.start ?? 0;
   const rangeEnd = options.range?.end ?? project.duration;
   const duration = Math.max(1 / options.fps, rangeEnd - rangeStart);
-  const frameCount = Math.max(1, Math.ceil(duration * options.fps));
+  const requestedFrames = duration * options.fps;
+  const frameCount = Math.max(1, Math.abs(requestedFrames - Math.round(requestedFrames)) < 0.000001 ? Math.round(requestedFrames) : Math.ceil(requestedFrames));
   const audioRender = compileComposition(project, { ...options, aspect: project.canvas.aspect, format: 'wav', audioOnly: true }, `${outputPath}.audio.wav`);
   const filterIndex = audioRender.args.indexOf('-filter_complex');
   if (filterIndex < 0) throw new Error('Audio graph is missing');
@@ -1674,7 +1675,7 @@ function compileComposition(project: Project, request: ExportRequest, output: st
       const filters: string[] = [];
       const clipVolume = Math.max(0, Math.min(2, numberOr(clip.volume, 1)));
       const volumeExpression = `(${keyframeExpression(clip, 'volume', clipVolume)})*${ffmpegNumber(clamp(trackVolume, 0, 2))}`;
-      if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}`);
+      if (volumeExpression !== '1') filters.push(`volume=${ffmpegExpression(volumeExpression)}:eval=frame`);
       const fadeIn = clamp(numberOr(clip.fadeIn, 0), 0, duration);
       const fadeOut = clamp(numberOr(clip.fadeOut, 0), 0, duration);
       if (fadeIn > 0) filters.push(`afade=t=in:st=0:d=${ffmpegNumber(fadeIn)}`);

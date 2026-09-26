@@ -14,6 +14,7 @@ let baseUrl;
 let mockActiveJobs = 0;
 let mockActivePreviews = 0;
 let mockLegacyActivity = false;
+let mockUploadFailure = false;
 
 const project = {
   schemaVersion: 1,
@@ -42,6 +43,7 @@ const motionProject = {
       filters: { brightness: 0, contrast: 0, saturation: 0, blur: 0, grayscale: 0 },
       transitionIn: { type: 'none', duration: 0 }, transitionOut: { type: 'none', duration: 0 }, volume: 1, adjustment: false,
       keyframes: [{ id: 'key-start', property: 'x', time: 0, value: -400, easing: 'ease-out' }],
+      textStyle: { text: 'Moving title', fontSize: 64, color: '#ffffff' },
     }],
   }],
 };
@@ -69,6 +71,13 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && request.url === '/api/projects') return json(200, { ...project, id: 'created', name: body?.name ?? 'Untitled' });
   if (request.method === 'GET' && request.url === '/api/projects/p1') return json(200, project);
   if (request.method === 'GET' && request.url === '/api/projects/motion') return json(200, motionProject);
+  if (request.method === 'GET' && request.url === '/api/projects/verify') return json(200, {
+    ...motionProject, id: 'verify', duration: 30,
+    tracks: [{ ...motionProject.tracks[0], clips: [{ ...motionProject.tracks[0].clips[0], duration: 30, textStyle: { text: 'A'.repeat(100), fontSize: 64, letterSpacing: 0, padding: 4, lineHeight: 1.2 } }] }],
+  });
+  if (request.method === 'POST' && request.url === '/api/projects/verify/export/preflight') return json(200, { ok: true, errors: [], warnings: [], estimatedBytes: 1000 });
+  if (request.method === 'POST' && request.url === '/api/projects/verify/access') return json(200, { lease: { projectId: 'verify' }, token: 'test-token' });
+  if (request.method === 'DELETE' && request.url === '/api/projects/verify/access') return json(200, { ok: true });
   if (request.method === 'PATCH' && request.url === '/api/projects/p1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ...project, ...body, revision: 1 });
   if (request.method === 'PATCH' && request.url === '/api/projects/motion' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ...motionProject, ...body, revision: 1 });
   if (request.method === 'GET' && request.url === '/api/projects/p1/bundle') {
@@ -78,12 +87,14 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/api/jobs/j1') return json(200, { id: 'j1', projectId: 'p1', kind: 'export', status: 'running' });
   if (request.method === 'GET' && request.url === '/api/jobs/j2') return json(200, { id: 'j2', projectId: 'p1', kind: 'export', status: 'completed', progress: 1, phase: 'complete' });
   if (request.method === 'POST' && request.url === '/api/projects/p1/media' && request.headers['x-cutloc-access-token'] === 'test-token') {
+    if (mockUploadFailure && rawBody.includes('second.png')) return json(415, { error: 'Invalid media bytes' });
     return json(201, {
       asset: { id: 'a1', name: 'image.png', type: 'image', mimeType: 'image/png', path: 'media/a1.png', size: 4, duration: 0, width: 1, height: 1, hasAudio: false, createdAt: '2026-08-23T10:00:00.000Z' },
       project: { ...project, revision: 1, assets: [{ id: 'a1', name: 'image.png', type: 'image', mimeType: 'image/png', path: 'media/a1.png', size: 4, duration: 0, width: 1, height: 1, hasAudio: false, createdAt: '2026-08-23T10:00:00.000Z' }] },
       job: { id: 'j2', projectId: 'p1', kind: 'proxy', status: 'queued', progress: 0, createdAt: '2026-08-23T10:00:00.000Z', updatedAt: '2026-08-23T10:00:00.000Z' },
     });
   }
+  if (request.method === 'DELETE' && request.url === '/api/projects/p1/media/a1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, project);
   if (request.method === 'DELETE' && request.url === '/api/jobs/j1' && request.headers['x-cutloc-access-token'] === 'test-token') return json(200, { ok: true });
   if (request.method === 'GET' && request.url === '/api/jobs/j1/download') {
     response.writeHead(200, { 'content-type': 'video/mp4' });
@@ -635,6 +646,17 @@ test('projects edit rejects missing remove targets instead of silently succeedin
   }
 });
 
+test('projects edit merges nested clip style and accepts field paths', async () => {
+  for (const patch of [{ textStyle: { fontSize: 48 } }, { 'textStyle.fontSize': 48 }]) {
+    const plan = { baseRevision: 0, operations: [{ op: 'updateClip', trackId: 'track-motion', clipId: 'clip-motion', patch }] };
+    const result = await runCli(['projects', 'edit', 'motion', '--data', JSON.stringify(plan), '--dry-run', '--include-project']);
+    assert.equal(result.code, 0, result.stderr);
+    const clip = JSON.parse(result.stdout).project.tracks[0].clips[0];
+    assert.equal(clip.textStyle.fontSize, 48);
+    assert.equal(clip.textStyle.color, '#ffffff');
+  }
+});
+
 test('media add has a compact default response and can wait for a stable derived revision', async () => {
   const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-media-'));
   try {
@@ -689,6 +711,62 @@ test('media add-many waits for each derived job before starting the next upload'
   }
 });
 
+test('media add-many reports every invalid path before any upload', async () => {
+  requests.length = 0;
+  const result = await runCli(['media', 'add-many', 'p1', 'missing-one.mp4', 'missing-two.wav', '--dry-run']);
+  assert.equal(result.code, 1);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.files.length, 2);
+  assert.equal(body.files.every((entry) => !entry.ok && entry.file), true);
+  assert.equal(requests.some((entry) => entry.url === '/api/projects/p1/media'), false);
+});
+
+test('media add-many dry-run rejects the same file twice', async () => {
+  const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-duplicate-'));
+  try {
+    const file = path.join(outputDir, 'same.mp4');
+    await fsp.writeFile(file, Buffer.from([0, 0, 0, 0]));
+    const result = await runCli(['media', 'add-many', 'p1', file, file, '--dry-run']);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stdout).files[1].error, /duplicate/i);
+  } finally {
+    await fsp.rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('media add-many reports the failed file and rolls back earlier uploads', async () => {
+  const outputDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cutloc-cli-rollback-'));
+  try {
+    const first = path.join(outputDir, 'first.png');
+    const second = path.join(outputDir, 'second.png');
+    await Promise.all([fsp.writeFile(first, Buffer.from([137, 80, 78, 71])), fsp.writeFile(second, Buffer.from([137, 80, 78, 71]))]);
+    mockUploadFailure = true;
+    requests.length = 0;
+    const result = await runCli(['media', 'add-many', 'p1', first, second]);
+    assert.equal(result.code, 1);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.results[1].file, second);
+    assert.equal(body.rolledBack, true);
+    assert.equal(requests.some((entry) => entry.method === 'DELETE' && entry.url === '/api/projects/p1/media/a1'), true);
+  } finally {
+    mockUploadFailure = false;
+    await fsp.rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('export verify reports text overflow and maps adjacent frame ranges exactly', async () => {
+  requests.length = 0;
+  const first = await runCli(['export', 'verify', 'verify', '--start-frame', '0', '--end-frame', '450']);
+  assert.equal(first.code, 0, first.stderr);
+  const body = JSON.parse(first.stdout);
+  assert.deepEqual(body.range, { start: 0, end: 15 });
+  assert.equal(body.analysis.some((entry) => entry.code === 'TEXT_OVERFLOW'), true);
+  const second = await runCli(['export', 'preflight', 'verify', '--start-frame', '450', '--end-frame', '900']);
+  assert.equal(second.code, 0, second.stderr);
+  const calls = requests.filter((entry) => entry.url === '/api/projects/verify/export/preflight');
+  assert.deepEqual(calls.map((entry) => entry.body.range), [{ start: 0, end: 15 }, { start: 15, end: 30 }]);
+});
+
 test('jobs wait returns terminal JSON and jobs watch emits JSONL progress', async () => {
   const waited = await runCli(['jobs', 'wait', 'j2', '--timeout', '1', '--interval', '0.01']);
   assert.equal(waited.code, 0, waited.stderr);
@@ -699,6 +777,14 @@ test('jobs wait returns terminal JSON and jobs watch emits JSONL progress', asyn
   const lines = watched.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.equal(lines[0].event, 'job');
   assert.equal(lines.at(-1).event, 'terminal');
+});
+
+test('jobs wait timeout retains last known job JSON', async () => {
+  const result = await runCli(['jobs', 'wait', 'j1', '--timeout', '0.01', '--interval', '0.01']);
+  assert.equal(result.code, 2);
+  assert.equal(result.stderr, '');
+  assert.equal(JSON.parse(result.stdout).timedOut, true);
+  assert.equal(JSON.parse(result.stdout).status, 'running');
 });
 
 test('preview frame writes a binary PNG without leaking it to stdout', async () => {
