@@ -62,7 +62,7 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
   };
-  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.1.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, ...(mockLegacyActivity ? {} : { activePreviews: mockActivePreviews }), busy: mockActiveJobs > 0 || mockActivePreviews > 0 });
+  if (request.method === 'GET' && request.url === '/api/health') return json(200, { ok: true, product: 'CutLoc', version: '1.2.0', apiVersion: 2, ffmpeg: true, ffprobe: true, textRendering: true, activeJobs: mockActiveJobs, activeLeases: 0, ...(mockLegacyActivity ? {} : { activePreviews: mockActivePreviews }), busy: mockActiveJobs > 0 || mockActivePreviews > 0 });
   if (request.method === 'GET' && request.url === '/api/settings') return json(200, { language: 'en', proxyQuality: 'balanced' });
   if (request.method === 'GET' && request.url === '/api/projects') return json(200, [project]);
   if (request.method === 'GET' && request.url === '/api/jobs') return json(200, mockLegacyActivity ? [] : [{ id: 'j1', projectId: 'p1', status: 'running' }]);
@@ -213,7 +213,7 @@ test('status is read-only while live commands auto-start one shared server and o
     assert.equal(running.code, 0, running.stderr);
     const runningStatus = JSON.parse(running.stdout);
     assert.equal(runningStatus.running, true);
-    assert.equal(runningStatus.version, '1.1.0');
+    assert.equal(runningStatus.version, '1.2.0');
     assert.equal(runningStatus.apiVersion, 2);
     assert.match(runningStatus.apiUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
     assert.equal(runningStatus.dataDir, dataDir);
@@ -393,7 +393,7 @@ test('stopped status and doctor honor the registered checkout DATA_DIR from .env
     await fsp.writeFile(path.join(appRoot, '.env'), `DATA_DIR=${configuredData.replaceAll('\\', '\\\\')}\n`, 'utf8');
     await fsp.writeFile(path.join(home, 'install.json'), JSON.stringify({
       product: 'CutLoc',
-      version: '1.1.0',
+      version: '1.2.0',
       appRoot,
       nodePath: process.execPath,
       cliEntry,
@@ -448,7 +448,7 @@ test('a live command replaces a managed server from an older product version', a
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), []);
     const status = JSON.parse((await runRawCli(['--compact', 'status', '--json'], '', environment)).stdout);
-    assert.equal(status.version, '1.1.0');
+    assert.equal(status.version, '1.2.0');
     assert.notEqual(status.pid, legacy.pid);
     managedPid = status.pid;
     const stopped = await runRawCli(['--compact', 'stop'], '', environment);

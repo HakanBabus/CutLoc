@@ -1,6 +1,6 @@
 # CutLoc product and development guide
 
-This document describes the public behavior of **CutLoc 1.1.0**: how the local application is structured, what the editor supports, where it stores data, how its shared runtime is discovered, and how to verify a change.
+This document describes the public behavior of **CutLoc 1.2.0**: how the local application is structured, what the editor supports, where it stores data, how its shared runtime is discovered, and how to verify a change.
 
 For terminal automation and AI-agent workflows, see the [CLI and AI-agent guide](CLI.md).
 
@@ -12,13 +12,13 @@ CutLoc does not provide hosted storage, remote rendering, real-time collaboratio
 
 The server binds to a loopback address by default. Do not expose it through a public interface, tunnel, or reverse proxy.
 
-## v1.1.0 compatibility
+## v1.2.0 compatibility
 
 - Project files remain on `schemaVersion: 1`; existing validated beta projects require no migration.
 - The supported source runtime is Node.js 24.x with npm 11.x and the committed lockfile.
 - Windows 10/11 is the primary local target. CI also verifies the build and browser suite on Linux.
 - Preview/export geometry is resolution-aware: canvas-space position, scale, animation offsets, and text metrics are mapped to the selected export dimensions.
-- CutLoc remains loopback-only and single-user. v1.1.0 does not introduce an installer, desktop shell, hosted service, public API deployment, or collaboration protocol.
+- CutLoc remains loopback-only and single-user. v1.2.0 does not introduce an installer, desktop shell, hosted service, public API deployment, or collaboration protocol.
 
 ## System overview
 

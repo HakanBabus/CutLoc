@@ -2,7 +2,9 @@
 
 All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable source release; project files continue to use `schemaVersion: 1`.
 
-## Unreleased
+## [1.2.0] - 2026-09-28
+
+This is the first tagged source release since v1.0.0. It includes the changes developed under the unreleased 1.1.0 version number.
 
 ### Added
 
@@ -47,11 +49,20 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - Runtime protocol v2 exposes active work state. Automatic upgrades and stop/restart no longer interrupt media jobs, while closing an active editor session requires an explicit `--force`.
 - Active preview renders are protected from stop/restart, and browser progress streams are closed cleanly so an open editor cannot leave shutdown hanging.
 - User setup writes the command shim atomically and recognizes equivalent expanded or environment-variable-based PATH entries, preventing partial commands and duplicate registration.
+- CLI export checks now report adjacent frame ranges precisely, while batch media imports validate files before uploading and roll back earlier uploads on failure.
+- Project deletion and export publication preserve their lifecycle boundaries under concurrent work; timeline splitting rejects fragments shorter than one frame, and media byte-range requests are validated strictly.
+- CI installs Chromium before server export tests that use the browser compositor.
+- CLI doctor now selects a local FFmpeg build with text-rendering support when the bundled build lacks `drawtext`, matching the server's export path.
 
 ### Known limitations
 
-- V1.1 remains a source distribution and still requires Node.js 24.x, npm 11.x, and an initial checkout/install/setup step.
+- v1.2.0 remains a source distribution and still requires Node.js 24.x, npm 11.x, and an initial checkout/install/setup step.
 - There is no EXE, installer, desktop shell, or automatic updater.
+- Hardware video encoding, hosted collaboration, and lossless cutting are not included.
+
+### Upgrade notes
+
+- Existing `schemaVersion: 1` projects need no migration. Run `npm.cmd ci`, `npm.cmd run build`, and `npm.cmd run setup:user` from the updated checkout to register the 1.2.0 runtime.
 
 ## [1.0.0] - 2026-09-16
 
@@ -91,4 +102,5 @@ All notable CutLoc changes are recorded here. CutLoc v1.0.0 is the first stable 
 - Preview and MP4 export now use the same Chromium visual compositor; FFmpeg is limited to audio processing and final encoding/muxing for this path.
 - Hardware encoding, collaboration, automatic transcription, installer packaging, and lossless cutting are not included.
 
+[1.2.0]: https://github.com/HakanBabus/CutLoc/releases/tag/v1.2.0
 [1.0.0]: https://github.com/HakanBabus/CutLoc/releases/tag/v1.0.0

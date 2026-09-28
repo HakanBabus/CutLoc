@@ -1,11 +1,11 @@
-# CutLoc v1.1.0 release checklist
+# CutLoc v1.2.0 release checklist
 
-This checklist defines the v1.1.0 source-release gate. Publishing remains a separate, explicit action after the candidate commit passes both local and GitHub checks.
+This checklist defines the v1.2.0 source-release gate. Publishing remains a separate, explicit action after the candidate commit passes both local and GitHub checks.
 
-## v1.1.0 release contract
+## v1.2.0 release contract
 
-- Release tag: `v1.1.0`
-- Package versions: `1.1.0` in the root and every workspace
+- Release tag: `v1.2.0`
+- Package versions: `1.2.0` in the root and every workspace
 - Project compatibility: `schemaVersion: 1`; no project migration is required
 - Runtime baseline: Node.js 24.x and npm 11.x
 - Distribution: GitHub source archives; no installer, EXE, or prebuilt desktop binary is included
@@ -51,7 +51,7 @@ After the user authorizes publication:
 
 1. Commit the reviewed product fixes separately from version/documentation changes.
 2. Push the candidate commit to `main` and wait for CutLoc CI and CodeQL on that exact SHA.
-3. Create and push an annotated `v1.1.0` tag at the verified candidate commit.
+3. Create and push an annotated `v1.2.0` tag at the verified candidate commit.
 4. Create the GitHub Release from that tag, using the matching changelog entry as the release notes.
 5. Read back the remote tag and release URL to confirm publication.
 

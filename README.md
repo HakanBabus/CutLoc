@@ -8,14 +8,14 @@
   <p><strong>A local-first video editor for creative work.</strong></p>
 
   [![Stable](https://img.shields.io/badge/status-stable-35c48d)](#project-status)
-  [![Version](https://img.shields.io/badge/version-1.1.0-7c8cff)](#project-status)
+  [![Version](https://img.shields.io/badge/version-1.2.0-7c8cff)](#project-status)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
 > [!IMPORTANT]
-> **CutLoc v1.1.0 keeps the source distribution while removing repeat setup from daily use.** After one user setup, `cutloc` works from any directory, starts the shared local server when needed, and stores runtime data outside the checkout.
+> **CutLoc v1.2.0 keeps the source distribution while removing repeat setup from daily use.** After one user setup, `cutloc` works from any directory, starts the shared local server when needed, and stores runtime data outside the checkout.
 
 CutLoc is a single-user video editor that runs on your own computer. It combines a media library, multi-track timeline, live canvas, clip **Inspector**, project recovery, and local FFmpeg export in one browser-based workspace.
 
@@ -32,7 +32,7 @@ The project remains intentionally focused: it is a practical local editing envir
 - [Feature map](#feature-map)
 - [Editor workflow](#editor-workflow)
 - [Project status](#project-status)
-- [v1.1.0](#v110)
+- [v1.2.0](#v120)
 - [Technology](#technology)
 - [Quick start](#quick-start)
 - [CLI and automation](#cli-and-automation)
@@ -115,9 +115,9 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 ## Project status
 
-**Current development version: `1.1.0`.** It preserves the v1 project format while adding a user-level command, shared runtime discovery, and automatic local-server startup.
+**Current source release: `1.2.0`.** It preserves the v1 project format while adding a user-level command, shared runtime discovery, and automatic local-server startup.
 
-| Area | Status in v1.1.0 |
+| Area | Status in v1.2.0 |
 | --- | --- |
 | Dashboard, project metadata, and project storage | Available locally; cards report the current project-folder size |
 | Video, audio, and image import | Available; codec support depends on the installed FFmpeg build |
@@ -133,9 +133,9 @@ Use the transport controls and frame-aware playhead to review the edit. Autosave
 
 The exact import/export boundaries and development contracts are maintained as internal engineering notes; they are intentionally not reproduced in this public README.
 
-## v1.1.0
+## v1.2.0
 
-CutLoc v1.1.0 builds on the first stable source release:
+CutLoc v1.2.0 builds on the first stable source release:
 
 - Preview and MP4 export use one frame-quantized Chromium compositor for source time, transforms, transitions, crop/fit geometry, layer order, adjustment filters, and text. FFmpeg processes audio and encodes/muxes those compositor frames.
 - The Light, Gray, and Dark themes share coherent editor surfaces; compact Speed and Animation controls remain fully keyboard-accessible.
@@ -385,7 +385,7 @@ GitHub CI runs the equivalent sequence on Linux and Windows: locked install, pre
 
 ## Contributing
 
-CutLoc v1.1.0 is the current source-distribution development line. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
+CutLoc v1.2.0 is the current source release. Bug reports, focused fixes, interface feedback, documentation improvements, and small test-backed changes are welcome.
 
 Keep changes reviewable by working on a feature branch and opening a pull request:
 

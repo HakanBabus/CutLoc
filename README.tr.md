@@ -8,14 +8,14 @@
   <p><strong>Yaratıcı çalışmalar için yerel öncelikli bir video editörü.</strong></p>
 
   [![Kararlı](https://img.shields.io/badge/durum-kararlı-35c48d)](#proje-durumu)
-  [![Sürüm](https://img.shields.io/badge/sürüm-1.1.0-7c8cff)](#proje-durumu)
+  [![Sürüm](https://img.shields.io/badge/sürüm-1.2.0-7c8cff)](#proje-durumu)
   [![CutLoc CI](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml/badge.svg)](https://github.com/HakanBabus/cutloc/actions/workflows/ci.yml)
   [![CodeQL](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HakanBabus/CutLoc/actions/workflows/github-code-scanning/codeql)
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 </div>
 
 > [!IMPORTANT]
-> **CutLoc v1.1.0 kaynak dağıtımını korurken günlük kullanımdaki tekrar kurulumu kaldırır.** Tek seferlik kullanıcı kurulumundan sonra `cutloc` her klasörden çalışır, gerektiğinde ortak yerel sunucuyu başlatır ve çalışma verilerini checkout dışında tutar.
+> **CutLoc v1.2.0 kaynak dağıtımını korurken günlük kullanımdaki tekrar kurulumu kaldırır.** Tek seferlik kullanıcı kurulumundan sonra `cutloc` her klasörden çalışır, gerektiğinde ortak yerel sunucuyu başlatır ve çalışma verilerini checkout dışında tutar.
 
 CutLoc, kendi bilgisayarınızda çalışan tek kullanıcılı bir video editörüdür. Medya kitaplığı, çok kanallı zaman çizelgesi, canlı tuval, klip **Denetçisi**, proje kurtarma ve yerel FFmpeg dışa aktarma özelliklerini tarayıcı tabanlı tek çalışma alanında birleştirir.
 
@@ -32,7 +32,7 @@ Proje bilinçli olarak belirli bir alana odaklanır: barındırılan bir prodük
 - [Özellik haritası](#özellik-haritası)
 - [Editör iş akışı](#editör-iş-akışı)
 - [Proje durumu](#proje-durumu)
-- [v1.1.0](#v110)
+- [v1.2.0](#v120)
 - [Teknolojiler](#teknolojiler)
 - [Hızlı başlangıç](#hızlı-başlangıç)
 - [CLI ve otomasyon](#cli-ve-otomasyon)
@@ -115,9 +115,9 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 ## Proje durumu
 
-**Güncel geliştirme sürümü: `1.1.0`.** V1 proje biçimini korurken kullanıcı seviyesinde komut, ortak runtime keşfi ve otomatik yerel sunucu başlangıcı ekler.
+**Güncel kaynak sürümü: `1.2.0`.** V1 proje biçimini korurken kullanıcı seviyesinde komut, ortak runtime keşfi ve otomatik yerel sunucu başlangıcı ekler.
 
-| Alan | v1.1.0 durumu |
+| Alan | v1.2.0 durumu |
 | --- | --- |
 | Kontrol paneli, proje bilgileri ve proje depolama | Kullanılabilir; kartlar güncel proje klasörü boyutunu gösterir |
 | Video, ses ve görsel içe aktarma | Kullanılabilir; codec desteği kurulu FFmpeg yapısına bağlıdır |
@@ -133,9 +133,9 @@ Kurguyu incelemek için taşıma kontrollerini ve kare duyarlı oynatma kafasın
 
 Kesin içe/dışa aktarma sınırları ve geliştirme sözleşmeleri dahili mühendislik notlarında tutulur; bu genel README'de tekrarlanmaz.
 
-## v1.1.0
+## v1.2.0
 
-CutLoc v1.1.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
+CutLoc v1.2.0 ilk kararlı kaynak sürümün üzerine şunları ekler:
 
 - Önizleme ve MP4 dışa aktarma; kaynak zamanı, dönüşümler, geçişler, kırpma/sığdırma geometrisi, katman sırası, ayar filtreleri ve metin için kareye sabitlenmiş tek Chromium kompozitörünü kullanır. FFmpeg sesi işler ve bu kareleri kodlayıp paketler.
 - Açık, Gri ve Koyu temalar tutarlı editör yüzeyleri sunar; kompakt Hız ve Animasyon kontrolleri klavye erişimini korur.
@@ -383,7 +383,7 @@ GitHub CI eşdeğer sırayı çalıştırır: kilitli kurulum, tüm çalışma a
 
 ## Katkıda bulunma
 
-CutLoc v1.1.0 güncel kaynak-dağıtım geliştirme hattıdır. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
+CutLoc v1.2.0 güncel kaynak sürümüdür. Hata bildirimleri, odaklı düzeltmeler, arayüz geri bildirimleri, belge iyileştirmeleri ve testlerle desteklenen küçük değişiklikler memnuniyetle karşılanır.
 
 Değişiklikleri incelenebilir tutmak için bir özellik branch'i üzerinde çalışın ve pull request açın:
 

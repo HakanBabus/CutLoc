@@ -16,7 +16,7 @@ test('runtime readers reject incomplete, unsafe, and malformed persisted metadat
   const paths = await ensureRuntimeFolders(runtimePaths({ CUTLOC_HOME: home }));
   const validInstallation = {
     product: 'CutLoc',
-    version: '1.1.0',
+    version: '1.2.0',
     appRoot: path.resolve(home, 'app'),
     nodePath: process.execPath,
     cliEntry: path.resolve(home, 'app', 'apps', 'cli', 'dist', 'index.js'),
@@ -25,7 +25,7 @@ test('runtime readers reject incomplete, unsafe, and malformed persisted metadat
   };
   const validInstance = {
     product: 'CutLoc',
-    version: '1.1.0',
+    version: '1.2.0',
     apiVersion: 2,
     apiUrl: 'http://127.0.0.1:4173',
     pid: process.pid,

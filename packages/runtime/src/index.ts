@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export const CUTLOC_VERSION = '1.1.0';
+export const CUTLOC_VERSION = '1.2.0';
 export const API_PROTOCOL_VERSION = 2;
 
 export type CutLocRuntimePaths = {
