@@ -572,6 +572,15 @@ async function runtimeDoctor() {
       return null;
     }
   }
+  function systemBinary(name: 'ffmpeg' | 'ffprobe') {
+    const result = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', [name], { encoding: 'utf8' });
+    return result.status === 0 ? result.stdout.trim().split(/\r?\n/)[0] || null : null;
+  }
+  function supportsTextRendering(binary: string | null) {
+    if (!binary) return false;
+    const result = spawnSync(binary, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+    return result.status === 0 && /^\s*[.A-Z]+\s+drawtext\s/m.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+  }
   function configuredBinary(environmentName: 'FFMPEG_PATH' | 'FFPROBE_PATH', packageName: string) {
     const configured = configuredValue(environmentName, installation.appRoot);
     if (configured) {
@@ -579,17 +588,18 @@ async function runtimeDoctor() {
       return { path: fs.existsSync(resolved) ? resolved : null, detail: resolved };
     }
     const bundled = dependencyBinary(packageName);
-    return { path: bundled, detail: bundled ?? 'unavailable' };
+    const system = systemBinary(packageName === 'ffmpeg-static' ? 'ffmpeg' : 'ffprobe');
+    const selected = packageName === 'ffmpeg-static'
+      ? [bundled, system].find((binary) => supportsTextRendering(binary)) ?? bundled ?? system
+      : bundled ?? system;
+    return { path: selected, detail: selected ?? 'unavailable' };
   }
   const ffmpeg = configuredBinary('FFMPEG_PATH', 'ffmpeg-static');
   const ffprobe = configuredBinary('FFPROBE_PATH', 'ffprobe-static');
   const health = status.running ? await probeHealth() : null;
   const textRendering = health
     ? health.textRendering === true
-    : Boolean(ffmpeg.path && (() => {
-      const result = spawnSync(ffmpeg.path, ['-hide_banner', '-filters'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-      return result.status === 0 && /^\s*[.A-Z]+\s+drawtext\s/m.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
-    })());
+    : supportsTextRendering(ffmpeg.path);
   add('ffmpeg', health ? health.ffmpeg === true : Boolean(ffmpeg.path), health ? String(status.apiUrl) : ffmpeg.detail);
   add('ffprobe', health ? health.ffprobe === true : Boolean(ffprobe.path), health ? String(status.apiUrl) : ffprobe.detail);
   add('text-rendering', textRendering, health ? String(status.apiUrl) : ffmpeg.detail);
