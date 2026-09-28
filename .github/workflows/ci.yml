@@ -39,11 +39,11 @@ jobs:
       - name: Build all workspaces
         run: npm run build
 
-      - name: Run non-browser tests
-        run: npm test
-
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: Run non-browser tests
+        run: npm test
 
       - name: Run browser regression tests
         run: npm run test:web
@@ -83,11 +83,11 @@ jobs:
       - name: Build all workspaces
         run: npm.cmd run build
 
-      - name: Run non-browser tests
-        run: npm.cmd test
-
       - name: Install Playwright Chromium
         run: npx.cmd playwright install chromium
+
+      - name: Run non-browser tests
+        run: npm.cmd test
 
       - name: Run browser regression tests
         run: npm.cmd run test:web
