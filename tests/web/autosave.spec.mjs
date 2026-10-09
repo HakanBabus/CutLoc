@@ -1,5 +1,55 @@
 import { test, expect } from '@playwright/test';
 
+test('editing during a reconciled save persists the latest edit and independent remote changes', async ({ page, request }) => {
+  const name = `In-flight reconciliation ${Date.now()}`;
+  const created = await request.post('/api/projects', { data: { name } });
+  expect(created.ok()).toBeTruthy();
+  let remote = await created.json();
+  const projectId = remote.id;
+  let releaseSave;
+  const heldSave = new Promise((resolve) => { releaseSave = resolve; });
+  let responseHeld = false;
+  try {
+    await page.goto('/');
+    await page.locator('article').filter({ hasText: name }).getByRole('button').first().click();
+    await expect(page.locator('.project-name-input')).toHaveValue(name);
+    for (let index = 0; index < 6; index += 1) {
+      const updated = await request.patch(`/api/projects/${projectId}`, {
+        data: { ...remote, canvas: { ...remote.canvas, background: '#123456' } },
+      });
+      expect(updated.ok()).toBeTruthy();
+      remote = await updated.json();
+    }
+    await page.route(`**/api/projects/${projectId}`, async (route) => {
+      if (route.request().method() !== 'PATCH' || responseHeld) return route.continue();
+      const response = await route.fetch();
+      if (response.ok()) {
+        responseHeld = true;
+        await heldSave;
+      }
+      await route.fulfill({ response });
+    });
+    await page.locator('.project-name-input').fill(`${name} submitted`);
+    await expect.poll(() => responseHeld).toBeTruthy();
+    await page.locator('.project-name-input').fill(`${name} latest`);
+    releaseSave();
+    await expect(page.locator('.save-indicator')).toContainText(/Saved|Kaydedildi/i, { timeout: 15_000 });
+    const saved = await (await request.get(`/api/projects/${projectId}`)).json();
+    expect(saved.name).toBe(`${name} latest`);
+    expect(saved.canvas.background).toBe('#123456');
+    await expect(page.locator('.project-name-input')).toHaveValue(`${name} latest`);
+    await expect.poll(() => page.evaluate((id) => localStorage.getItem(`cutloc-project-draft:${id}`), projectId)).toBeNull();
+  } finally {
+    releaseSave();
+    await page.unrouteAll({ behavior: 'wait' });
+    const deleted = await request.delete(`/api/projects/${projectId}`);
+    if (deleted.ok()) {
+      const { trashId } = await deleted.json();
+      if (trashId) await request.delete(`/api/trash/${trashId}`);
+    }
+  }
+});
+
 test('immediate Back keeps the latest project edit', async ({ page, request }) => {
   const fixtureName = `Browser autosave ${Date.now()}`;
   await page.goto('/');

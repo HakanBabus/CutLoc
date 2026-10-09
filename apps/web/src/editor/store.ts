@@ -233,6 +233,7 @@ export const useEditor = create<EditorState>((set) => ({
   }),
   setSaveState: (saveState) => set({ saveState }),
   applyServerProject: (serverProject) => set((state) => {
+    if (!state.project || state.project.id !== serverProject.id || serverProject.revision < state.savedRevision) return state;
     const wasDirty = state.localRevision !== state.savedRevision;
     const project = wasDirty && state.project
       ? mergeProjectThreeWay(state.lastSavedProject ?? state.project, state.project, serverProject).project
@@ -273,16 +274,21 @@ export const useEditor = create<EditorState>((set) => ({
     selectedTrackId: null,
   }),
   acknowledgeSaved: (project, snapshot) => set((state) => {
+    if (!state.project || state.project.id !== project.id || snapshot.id !== project.id || project.revision < state.savedRevision) return state;
     const isLatestLocalSnapshot = state.project === snapshot;
+    // Rebase edits made while PATCH was in flight onto its actual result,
+    // which can also contain independent edits merged after a 409 response.
+    const merged = isLatestLocalSnapshot ? null : mergeProjectThreeWay(snapshot, state.project, project);
     return {
-      project: isLatestLocalSnapshot || !state.project
-        ? project
-        : { ...state.project, revision: project.revision, updatedAt: state.project.updatedAt },
-      localRevision: isLatestLocalSnapshot ? project.revision : Math.max(state.localRevision, project.revision),
+      project: merged?.project ?? project,
+      // A pending local edit must remain dirty even when the server revision
+      // advances beyond our local edit counter during conflict reconciliation.
+      localRevision: isLatestLocalSnapshot ? project.revision : Math.max(state.localRevision, project.revision + 1),
       savedRevision: project.revision,
       lastSavedAt: project.updatedAt,
       lastSavedProject: project,
-      saveState: isLatestLocalSnapshot ? 'saved' : 'saving',
+      saveState: merged?.conflicts.length ? 'error' : isLatestLocalSnapshot ? 'saved' : 'saving',
+      ...(merged?.conflicts.length ? { notice: 'This project has conflicting edits from another tab. Your local edits remain open; reload the project to review and recover them.' } : {}),
     };
   }),
   setNotice: (notice) => set({ notice }),
